@@ -1,65 +1,31 @@
 [
-  { "Emit": "Starting calculation..." },
+  { "Emit": "Starting countdown..." },
+  { "Push": 5.0 },
+  { "Store": "counter" },
+  { "While": {
+    "condition": [
+      { "Load": "counter" },
+      { "Push": 0.0 },
+      { "Gt": null }
+    ],
+    "body": [
+      { "Load": "counter" },
+      { "Dup": null },
+      { "Emit": "Countdown:" },
+      { "Push": 1.0 },
+      { "Sub": null },
+      { "Store": "counter" }
+    ]
+  }},
+  { "Emit": "Final count:" },
+  { "Load": "counter" },
+  { "AssertTop": 0.0 },
+  { "Emit": "Stack manipulation demo:" },
   { "Push": 1.0 },
-  { "Store": "result" },
-  { "Push": 0.0 },
-  { "Store": "iteration" },
-  {
-    "Loop": {
-      "count": 4,
-      "body": [
-        { "Load": "result" },
-        { "Push": 2.0 },
-        { "Mul": null },
-        { "Store": "result" },
-        { "Load": "iteration" },
-        { "Push": 1.0 },
-        { "Add": null },
-        { "Store": "iteration" },
-        { "Emit": "Current result:" },
-        { "DumpStack": null },
-        { "DumpMemory": null },
-        { "If": {
-          "condition": [
-            { "Load": "result" },
-            { "Push": 8.0 },
-            { "Gt": null },
-            { "Load": "result" },
-            { "Push": 16.0 },
-            { "Lt": null },
-            { "And": null }
-          ],
-          "then": [
-            { "Emit": "Both conditions true!" }
-          ],
-          "else": [
-            { "Emit": "At least one condition false" }
-          ]
-        }},
-        { "If": {
-          "condition": [
-            { "Load": "result" },
-            { "Push": 8.0 },
-            { "Gt": null },
-            { "Load": "result" },
-            { "Push": 16.0 },
-            { "Lt": null },
-            { "Or": null }
-          ],
-          "then": [
-            { "Emit": "At least one condition true!" }
-          ],
-          "else": [
-            { "Emit": "Both conditions false" }
-          ]
-        }}
-      ]
-    }
-  },
-  { "Emit": "Final result:" },
-  { "DumpStack": null },
-  { "DumpMemory": null },
-  { "Load": "result" },
-  { "AssertTop": 16.0 },
-  { "AssertMemory": { "key": "result", "expected": 16.0 } }
+  { "Push": 2.0 },
+  { "Push": 3.0 },
+  { "Dup": null },
+  { "Swap": null },
+  { "Over": null },
+  { "DumpStack": null }
 ]

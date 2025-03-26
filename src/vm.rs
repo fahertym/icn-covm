@@ -11,6 +11,7 @@ pub enum Op {
     Load(String),
     If { condition: Vec<Op>, then: Vec<Op>, else_: Option<Vec<Op>> },
     Loop { count: usize, body: Vec<Op> },
+    While { condition: Vec<Op>, body: Vec<Op> },
     Emit(String),
     Negate,
     AssertTop(f64),
@@ -24,6 +25,9 @@ pub enum Op {
     Not,
     And,
     Or,
+    Dup,
+    Swap,
+    Over,
 }
 
 #[derive(Debug)]
@@ -209,6 +213,49 @@ impl VM {
                     let b = self.stack.pop().unwrap();
                     let a = self.stack.pop().unwrap();
                     self.stack.push(if a != 0.0 || b != 0.0 { 1.0 } else { 0.0 });
+                }
+                Op::While { condition, body } => {
+                    loop {
+                        // Execute condition
+                        self.execute(condition)?;
+                        
+                        // Check result
+                        if self.stack.is_empty() {
+                            return Err("Stack underflow: condition block must leave a value");
+                        }
+                        let result = self.stack.pop().unwrap();
+                        
+                        // Break if condition is false
+                        if result == 0.0 {
+                            break;
+                        }
+                        
+                        // Execute body
+                        self.execute(body)?;
+                    }
+                }
+                Op::Dup => {
+                    if self.stack.is_empty() {
+                        return Err("Stack underflow: need a value to duplicate");
+                    }
+                    let value = self.stack.last().unwrap();
+                    self.stack.push(*value);
+                }
+                Op::Swap => {
+                    if self.stack.len() < 2 {
+                        return Err("Stack underflow: need at least 2 values to swap");
+                    }
+                    let a = self.stack.pop().unwrap();
+                    let b = self.stack.pop().unwrap();
+                    self.stack.push(a);
+                    self.stack.push(b);
+                }
+                Op::Over => {
+                    if self.stack.len() < 2 {
+                        return Err("Stack underflow: need at least 2 values for Over");
+                    }
+                    let value = self.stack[self.stack.len() - 2];
+                    self.stack.push(value);
                 }
             }
         }
@@ -813,5 +860,136 @@ mod tests {
         let ops = vec![Op::Push(42.0), Op::Or];
         
         assert_eq!(vm.execute(&ops), Err("Stack underflow: need at least 2 values for Or"));
+    }
+
+    #[test]
+    fn test_while_countdown() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Push(5.0),
+            Op::Store("counter".to_string()),
+            Op::While {
+                condition: vec![
+                    Op::Load("counter".to_string()),
+                    Op::Push(0.0),
+                    Op::Gt,
+                ],
+                body: vec![
+                    Op::Load("counter".to_string()),
+                    Op::Push(1.0),
+                    Op::Sub,
+                    Op::Store("counter".to_string()),
+                ],
+            },
+            Op::Load("counter".to_string()),
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
+        assert_eq!(vm.top(), Some(0.0));
+    }
+
+    #[test]
+    fn test_while_empty_condition() {
+        let mut vm = VM::new();
+        let ops = vec![Op::While {
+            condition: vec![],
+            body: vec![Op::Push(42.0)],
+        }];
+        
+        assert_eq!(vm.execute(&ops), Err("Stack underflow: condition block must leave a value"));
+    }
+
+    #[test]
+    fn test_while_zero_condition() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Push(0.0),
+            Op::Store("counter".to_string()),
+            Op::While {
+                condition: vec![Op::Load("counter".to_string())],
+                body: vec![Op::Push(42.0)],
+            },
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
+        assert_eq!(vm.get_memory("counter"), Some(0.0));
+    }
+
+    #[test]
+    fn test_stack_dup() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Push(42.0),
+            Op::Dup,
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
+        assert_eq!(vm.stack, vec![42.0, 42.0]);
+    }
+
+    #[test]
+    fn test_stack_dup_empty() {
+        let mut vm = VM::new();
+        let ops = vec![Op::Dup];
+        
+        assert_eq!(vm.execute(&ops), Err("Stack underflow: need a value to duplicate"));
+    }
+
+    #[test]
+    fn test_stack_swap() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Push(42.0),
+            Op::Push(24.0),
+            Op::Swap,
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
+        assert_eq!(vm.stack, vec![24.0, 42.0]);
+    }
+
+    #[test]
+    fn test_stack_swap_underflow() {
+        let mut vm = VM::new();
+        let ops = vec![Op::Push(42.0), Op::Swap];
+        
+        assert_eq!(vm.execute(&ops), Err("Stack underflow: need at least 2 values to swap"));
+    }
+
+    #[test]
+    fn test_stack_over() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Push(42.0),
+            Op::Push(24.0),
+            Op::Over,
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
+        assert_eq!(vm.stack, vec![42.0, 24.0, 42.0]);
+    }
+
+    #[test]
+    fn test_stack_over_underflow() {
+        let mut vm = VM::new();
+        let ops = vec![Op::Push(42.0), Op::Over];
+        
+        assert_eq!(vm.execute(&ops), Err("Stack underflow: need at least 2 values for Over"));
+    }
+
+    #[test]
+    fn test_stack_manipulation_chain() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Push(1.0),
+            Op::Push(2.0),
+            Op::Push(3.0),
+            Op::Dup,
+            Op::Swap,
+            Op::Over,
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
+        assert_eq!(vm.stack, vec![1.0, 2.0, 3.0, 3.0, 2.0, 1.0]);
     }
 }
