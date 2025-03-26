@@ -14,6 +14,8 @@ pub enum Op {
     Emit(String),
     Negate,
     AssertTop(f64),
+    DumpStack,
+    DumpMemory,
 }
 
 #[derive(Debug)]
@@ -118,6 +120,18 @@ impl VM {
                     let actual = self.stack.last().unwrap();
                     if (actual - expected).abs() > f64::EPSILON {
                         return Err("Assertion failed: value mismatch");
+                    }
+                }
+                Op::DumpStack => {
+                    println!("Stack contents (bottom to top):");
+                    for (i, &value) in self.stack.iter().enumerate() {
+                        println!("  [{}] {}", i, value);
+                    }
+                }
+                Op::DumpMemory => {
+                    println!("Memory contents:");
+                    for (key, &value) in self.memory.iter() {
+                        println!("  {} = {}", key, value);
                     }
                 }
             }
@@ -518,5 +532,53 @@ mod tests {
         ];
         
         assert!(vm.execute(&ops).is_ok());
+    }
+
+    #[test]
+    fn test_dump_stack() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Push(1.0),
+            Op::Push(2.0),
+            Op::Push(3.0),
+            Op::DumpStack,
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
+        assert_eq!(vm.stack, vec![1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn test_dump_memory() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Push(42.0),
+            Op::Store("x".to_string()),
+            Op::Push(24.0),
+            Op::Store("y".to_string()),
+            Op::DumpMemory,
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
+        assert_eq!(vm.get_memory("x"), Some(42.0));
+        assert_eq!(vm.get_memory("y"), Some(24.0));
+    }
+
+    #[test]
+    fn test_dump_empty_stack() {
+        let mut vm = VM::new();
+        let ops = vec![Op::DumpStack];
+        
+        assert!(vm.execute(&ops).is_ok());
+        assert!(vm.stack.is_empty());
+    }
+
+    #[test]
+    fn test_dump_empty_memory() {
+        let mut vm = VM::new();
+        let ops = vec![Op::DumpMemory];
+        
+        assert!(vm.execute(&ops).is_ok());
+        assert!(vm.memory.is_empty());
     }
 }
