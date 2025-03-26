@@ -10,9 +10,11 @@
         { "Push": 2.0 },
         "Mul",
         { "Store": "result" },
-        { "Emit": "Current result:" },
+        { "Load": "result" },
         "DumpStack",
-        "DumpMemory"
+        "DumpMemory",
+        { "AssertTop": 2.0 },
+        "Pop"
       ]
     }
   },
@@ -20,5 +22,6 @@
   "DumpStack",
   "DumpMemory",
   { "Load": "result" },
-  { "AssertTop": 16.0 }
+  { "AssertTop": 16.0 },
+  { "AssertMemory": { "key": "result", "expected": 16.0 } }
 ]
