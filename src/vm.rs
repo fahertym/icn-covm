@@ -9,6 +9,10 @@ pub enum Op {
     Div,
     Store(String),
     Load(String),
+    IfZero {
+        then: Vec<Op>,
+        else_: Vec<Op>,
+    },
 }
 
 #[derive(Debug)]
@@ -78,6 +82,17 @@ impl VM {
                         self.stack.push(value);
                     } else {
                         return Err("Key not found in memory");
+                    }
+                }
+                Op::IfZero { then, else_ } => {
+                    if self.stack.is_empty() {
+                        return Err("Stack underflow: need a value for IfZero");
+                    }
+                    let condition = self.stack.pop().unwrap();
+                    if condition == 0.0 {
+                        self.execute(then)?;
+                    } else {
+                        self.execute(else_)?;
                     }
                 }
             }
@@ -200,5 +215,69 @@ mod tests {
         assert_eq!(vm.top(), Some(15.0));
         assert_eq!(vm.get_memory("x"), Some(10.0));
         assert_eq!(vm.get_memory("y"), Some(5.0));
+    }
+
+    #[test]
+    fn test_if_zero_true() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Push(0.0),
+            Op::IfZero {
+                then: vec![Op::Push(42.0)],
+                else_: vec![Op::Push(24.0)],
+            },
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
+        assert_eq!(vm.top(), Some(42.0));
+    }
+
+    #[test]
+    fn test_if_zero_false() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Push(1.0),
+            Op::IfZero {
+                then: vec![Op::Push(42.0)],
+                else_: vec![Op::Push(24.0)],
+            },
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
+        assert_eq!(vm.top(), Some(24.0));
+    }
+
+    #[test]
+    fn test_nested_if_zero() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Push(0.0),
+            Op::IfZero {
+                then: vec![
+                    Op::Push(1.0),
+                    Op::IfZero {
+                        then: vec![Op::Push(42.0)],
+                        else_: vec![Op::Push(24.0)],
+                    },
+                ],
+                else_: vec![Op::Push(100.0)],
+            },
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
+        assert_eq!(vm.top(), Some(24.0));
+    }
+
+    #[test]
+    fn test_if_zero_empty_stack() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::IfZero {
+                then: vec![Op::Push(42.0)],
+                else_: vec![Op::Push(24.0)],
+            },
+        ];
+        
+        assert_eq!(vm.execute(&ops), Err("Stack underflow: need a value for IfZero"));
     }
 } 

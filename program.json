@@ -5,7 +5,15 @@
     {"Store": "y"},
     {"Load": "x"},
     {"Load": "y"},
-    "Add",
-    {"Push": 2.0},
-    "Mul"
+    "Sub",
+    {
+        "IfZero": {
+            "then": [
+                {"Push": 42.0}
+            ],
+            "else_": [
+                {"Push": 24.0}
+            ]
+        }
+    }
 ] 
