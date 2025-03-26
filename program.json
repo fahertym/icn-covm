@@ -1,19 +1,14 @@
 [
-    {"Push": 10.0},
-    {"Store": "x"},
-    {"Push": 5.0},
-    {"Store": "y"},
-    {"Load": "x"},
-    {"Load": "y"},
-    "Sub",
-    {
-        "IfZero": {
-            "then": [
-                {"Push": 42.0}
-            ],
-            "else_": [
-                {"Push": 24.0}
-            ]
-        }
-    }
+    {"Push": 1.0},
+    {"Store": "result"},
+    {"Loop": {
+        "count": 4,
+        "body": [
+            {"Load": "result"},
+            {"Push": 2.0},
+            "Mul",
+            {"Store": "result"}
+        ]
+    }},
+    {"Load": "result"}
 ] 

@@ -13,6 +13,10 @@ pub enum Op {
         then: Vec<Op>,
         else_: Vec<Op>,
     },
+    Loop {
+        count: usize,
+        body: Vec<Op>,
+    },
 }
 
 #[derive(Debug)]
@@ -93,6 +97,11 @@ impl VM {
                         self.execute(then)?;
                     } else {
                         self.execute(else_)?;
+                    }
+                }
+                Op::Loop { count, body } => {
+                    for _ in 0..*count {
+                        self.execute(body)?;
                     }
                 }
             }
@@ -279,5 +288,104 @@ mod tests {
         ];
         
         assert_eq!(vm.execute(&ops), Err("Stack underflow: need a value for IfZero"));
+    }
+
+    #[test]
+    fn test_loop_basic() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Push(0.0),
+            Op::Store("counter".to_string()),
+            Op::Loop {
+                count: 3,
+                body: vec![
+                    Op::Load("counter".to_string()),
+                    Op::Push(1.0),
+                    Op::Add,
+                    Op::Store("counter".to_string()),
+                ],
+            },
+            Op::Load("counter".to_string()),
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
+        assert_eq!(vm.top(), Some(3.0));
+    }
+
+    #[test]
+    fn test_loop_zero() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Push(42.0),
+            Op::Store("value".to_string()),
+            Op::Loop {
+                count: 0,
+                body: vec![
+                    Op::Push(100.0),
+                    Op::Store("value".to_string()),
+                ],
+            },
+            Op::Load("value".to_string()),
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
+        assert_eq!(vm.top(), Some(42.0));
+    }
+
+    #[test]
+    fn test_nested_loops() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Push(0.0),
+            Op::Store("outer".to_string()),
+            Op::Push(0.0),
+            Op::Store("inner".to_string()),
+            Op::Loop {
+                count: 2,
+                body: vec![
+                    Op::Load("outer".to_string()),
+                    Op::Push(1.0),
+                    Op::Add,
+                    Op::Store("outer".to_string()),
+                    Op::Loop {
+                        count: 3,
+                        body: vec![
+                            Op::Load("inner".to_string()),
+                            Op::Push(1.0),
+                            Op::Add,
+                            Op::Store("inner".to_string()),
+                        ],
+                    },
+                ],
+            },
+            Op::Load("outer".to_string()),
+            Op::Load("inner".to_string()),
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
+        assert_eq!(vm.get_memory("outer"), Some(2.0));
+        assert_eq!(vm.get_memory("inner"), Some(6.0));
+    }
+
+    #[test]
+    fn test_loop_with_arithmetic() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Push(1.0),
+            Op::Store("result".to_string()),
+            Op::Loop {
+                count: 4,
+                body: vec![
+                    Op::Load("result".to_string()),
+                    Op::Push(2.0),
+                    Op::Mul,
+                    Op::Store("result".to_string()),
+                ],
+            },
+            Op::Load("result".to_string()),
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
+        assert_eq!(vm.top(), Some(16.0)); // 1 * 2^4
     }
 } 
