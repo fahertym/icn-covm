@@ -50,3 +50,13 @@
   - JSON usage demo
 - Ask the user if they want CLI, REPL, export, or interactive features when appropriate
 - Be mindful of execution state (stack/memory) when designing new logic
+
+## 📦 Running the Program
+
+To run the program, use the following command:
+
+```bash
+cargo run
+```
+
+This will start the calculation and output the final result.
