@@ -1,4 +1,5 @@
 [
+    {"Emit": "Starting calculation..."},
     {"Push": 1.0},
     {"Store": "result"},
     {"Loop": {
@@ -7,8 +8,10 @@
             {"Load": "result"},
             {"Push": 2.0},
             "Mul",
-            {"Store": "result"}
+            {"Store": "result"},
+            {"Emit": "Doubled the result"}
         ]
     }},
-    {"Load": "result"}
-] 
+    {"Load": "result"},
+    {"Emit": "Final result:"}
+]  

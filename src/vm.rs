@@ -1,4 +1,4 @@
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Op {
@@ -9,14 +9,9 @@ pub enum Op {
     Div,
     Store(String),
     Load(String),
-    IfZero {
-        then: Vec<Op>,
-        else_: Vec<Op>,
-    },
-    Loop {
-        count: usize,
-        body: Vec<Op>,
-    },
+    IfZero { then: Vec<Op>, else_: Vec<Op> },
+    Loop { count: usize, body: Vec<Op> },
+    Emit(String),
 }
 
 #[derive(Debug)]
@@ -104,6 +99,9 @@ impl VM {
                         self.execute(body)?;
                     }
                 }
+                Op::Emit(message) => {
+                    println!("{}", message);
+                }
             }
         }
         Ok(())
@@ -121,6 +119,8 @@ impl VM {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{self, Write};
+    use std::sync::Mutex;
 
     #[test]
     fn test_basic_arithmetic() {
@@ -132,7 +132,7 @@ mod tests {
             Op::Push(2.0),
             Op::Mul,
         ];
-        
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.top(), Some(16.0));
     }
@@ -140,12 +140,8 @@ mod tests {
     #[test]
     fn test_division() {
         let mut vm = VM::new();
-        let ops = vec![
-            Op::Push(10.0),
-            Op::Push(2.0),
-            Op::Div,
-        ];
-        
+        let ops = vec![Op::Push(10.0), Op::Push(2.0), Op::Div];
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.top(), Some(5.0));
     }
@@ -153,24 +149,20 @@ mod tests {
     #[test]
     fn test_division_by_zero() {
         let mut vm = VM::new();
-        let ops = vec![
-            Op::Push(10.0),
-            Op::Push(0.0),
-            Op::Div,
-        ];
-        
+        let ops = vec![Op::Push(10.0), Op::Push(0.0), Op::Div];
+
         assert_eq!(vm.execute(&ops), Err("Division by zero"));
     }
 
     #[test]
     fn test_stack_underflow() {
         let mut vm = VM::new();
-        let ops = vec![
-            Op::Push(5.0),
-            Op::Add,
-        ];
-        
-        assert_eq!(vm.execute(&ops), Err("Stack underflow: need at least 2 values for Add"));
+        let ops = vec![Op::Push(5.0), Op::Add];
+
+        assert_eq!(
+            vm.execute(&ops),
+            Err("Stack underflow: need at least 2 values for Add")
+        );
     }
 
     #[test]
@@ -181,7 +173,7 @@ mod tests {
             Op::Store("x".to_string()),
             Op::Load("x".to_string()),
         ];
-        
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.top(), Some(42.0));
         assert_eq!(vm.get_memory("x"), Some(42.0));
@@ -190,21 +182,20 @@ mod tests {
     #[test]
     fn test_load_nonexistent() {
         let mut vm = VM::new();
-        let ops = vec![
-            Op::Load("nonexistent".to_string()),
-        ];
-        
+        let ops = vec![Op::Load("nonexistent".to_string())];
+
         assert_eq!(vm.execute(&ops), Err("Key not found in memory"));
     }
 
     #[test]
     fn test_store_empty_stack() {
         let mut vm = VM::new();
-        let ops = vec![
-            Op::Store("x".to_string()),
-        ];
-        
-        assert_eq!(vm.execute(&ops), Err("Stack underflow: need a value to store"));
+        let ops = vec![Op::Store("x".to_string())];
+
+        assert_eq!(
+            vm.execute(&ops),
+            Err("Stack underflow: need a value to store")
+        );
     }
 
     #[test]
@@ -219,7 +210,7 @@ mod tests {
             Op::Load("y".to_string()),
             Op::Add,
         ];
-        
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.top(), Some(15.0));
         assert_eq!(vm.get_memory("x"), Some(10.0));
@@ -236,7 +227,7 @@ mod tests {
                 else_: vec![Op::Push(24.0)],
             },
         ];
-        
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.top(), Some(42.0));
     }
@@ -251,7 +242,7 @@ mod tests {
                 else_: vec![Op::Push(24.0)],
             },
         ];
-        
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.top(), Some(24.0));
     }
@@ -272,7 +263,7 @@ mod tests {
                 else_: vec![Op::Push(100.0)],
             },
         ];
-        
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.top(), Some(24.0));
     }
@@ -280,14 +271,15 @@ mod tests {
     #[test]
     fn test_if_zero_empty_stack() {
         let mut vm = VM::new();
-        let ops = vec![
-            Op::IfZero {
-                then: vec![Op::Push(42.0)],
-                else_: vec![Op::Push(24.0)],
-            },
-        ];
-        
-        assert_eq!(vm.execute(&ops), Err("Stack underflow: need a value for IfZero"));
+        let ops = vec![Op::IfZero {
+            then: vec![Op::Push(42.0)],
+            else_: vec![Op::Push(24.0)],
+        }];
+
+        assert_eq!(
+            vm.execute(&ops),
+            Err("Stack underflow: need a value for IfZero")
+        );
     }
 
     #[test]
@@ -307,7 +299,7 @@ mod tests {
             },
             Op::Load("counter".to_string()),
         ];
-        
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.top(), Some(3.0));
     }
@@ -320,14 +312,11 @@ mod tests {
             Op::Store("value".to_string()),
             Op::Loop {
                 count: 0,
-                body: vec![
-                    Op::Push(100.0),
-                    Op::Store("value".to_string()),
-                ],
+                body: vec![Op::Push(100.0), Op::Store("value".to_string())],
             },
             Op::Load("value".to_string()),
         ];
-        
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.top(), Some(42.0));
     }
@@ -361,7 +350,7 @@ mod tests {
             Op::Load("outer".to_string()),
             Op::Load("inner".to_string()),
         ];
-        
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.get_memory("outer"), Some(2.0));
         assert_eq!(vm.get_memory("inner"), Some(6.0));
@@ -384,8 +373,43 @@ mod tests {
             },
             Op::Load("result".to_string()),
         ];
-        
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.top(), Some(16.0)); // 1 * 2^4
     }
-} 
+
+    #[test]
+    fn test_emit() {
+        let mut vm = VM::new();
+        let ops = vec![Op::Emit("Test message".to_string())];
+
+        assert!(vm.execute(&ops).is_ok());
+    }
+
+    #[test]
+    fn test_emit_with_arithmetic() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Push(5.0),
+            Op::Push(3.0),
+            Op::Add,
+            Op::Emit("Result:".to_string()),
+            Op::Store("result".to_string()),
+            Op::Load("result".to_string()),
+        ];
+
+        assert!(vm.execute(&ops).is_ok());
+        assert_eq!(vm.top(), Some(8.0));
+    }
+
+    #[test]
+    fn test_emit_in_loop() {
+        let mut vm = VM::new();
+        let ops = vec![Op::Loop {
+            count: 3,
+            body: vec![Op::Emit("Loop iteration".to_string())],
+        }];
+
+        assert!(vm.execute(&ops).is_ok());
+    }
+}

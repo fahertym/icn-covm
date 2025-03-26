@@ -1,5 +1,5 @@
 {
-    "$schema": "https://app.cursor.sh/schemas/v1/rules.json",
+    "$schema": "https://cursor.sh/schemas/rules.json",
     "description": "Cursor automation rules for nano-cvm Rust VM project",
     "globs": ["**/*.rs"],
     "rules": [
