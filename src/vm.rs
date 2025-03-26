@@ -1,4 +1,6 @@
-#[derive(Debug)]
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Serialize, Deserialize)]
 pub enum Op {
     Push(f64),
     Add,
@@ -11,7 +13,7 @@ pub enum Op {
 
 #[derive(Debug)]
 pub struct VM {
-    stack: Vec<f64>,
+    pub stack: Vec<f64>,
     memory: std::collections::HashMap<String, f64>,
 }
 

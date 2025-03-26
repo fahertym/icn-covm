@@ -1,0 +1,11 @@
+[
+    {"Push": 10.0},
+    {"Store": "x"},
+    {"Push": 5.0},
+    {"Store": "y"},
+    {"Load": "x"},
+    {"Load": "y"},
+    "Add",
+    {"Push": 2.0},
+    "Mul"
+] 
