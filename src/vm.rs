@@ -9,13 +9,21 @@ pub enum Op {
     Div,
     Store(String),
     Load(String),
-    IfZero { then: Vec<Op>, else_: Vec<Op> },
+    If { condition: Vec<Op>, then: Vec<Op>, else_: Option<Vec<Op>> },
     Loop { count: usize, body: Vec<Op> },
     Emit(String),
     Negate,
     AssertTop(f64),
     DumpStack,
     DumpMemory,
+    AssertMemory { key: String, expected: f64 },
+    Pop,
+    Eq,
+    Gt,
+    Lt,
+    Not,
+    And,
+    Or,
 }
 
 #[derive(Debug)]
@@ -87,15 +95,21 @@ impl VM {
                         return Err("Key not found in memory");
                     }
                 }
-                Op::IfZero { then, else_ } => {
+                Op::If { condition, then, else_ } => {
+                    // Execute condition block
+                    self.execute(condition)?;
+                    
+                    // Check result
                     if self.stack.is_empty() {
-                        return Err("Stack underflow: need a value for IfZero");
+                        return Err("Stack underflow: condition block must leave a value");
                     }
-                    let condition = self.stack.pop().unwrap();
-                    if condition == 0.0 {
+                    let result = self.stack.pop().unwrap();
+                    
+                    // Execute appropriate branch
+                    if result != 0.0 {
                         self.execute(then)?;
-                    } else {
-                        self.execute(else_)?;
+                    } else if let Some(else_block) = else_ {
+                        self.execute(&else_block)?;
                     }
                 }
                 Op::Loop { count, body } => {
@@ -133,6 +147,68 @@ impl VM {
                     for (key, &value) in self.memory.iter() {
                         println!("  {} = {}", key, value);
                     }
+                }
+                Op::AssertMemory { key, expected } => {
+                    if let Some(&value) = self.memory.get(key) {
+                        if (value - expected).abs() > f64::EPSILON {
+                            return Err("Assertion failed: memory value mismatch");
+                        }
+                    } else {
+                        return Err("Key not found in memory");
+                    }
+                }
+                Op::Pop => {
+                    if self.stack.is_empty() {
+                        return Err("Stack underflow: need a value to pop");
+                    }
+                    self.stack.pop();
+                }
+                Op::Eq => {
+                    if self.stack.len() < 2 {
+                        return Err("Stack underflow: need at least 2 values for Eq");
+                    }
+                    let b = self.stack.pop().unwrap();
+                    let a = self.stack.pop().unwrap();
+                    self.stack.push(if a == b { 1.0 } else { 0.0 });
+                }
+                Op::Gt => {
+                    if self.stack.len() < 2 {
+                        return Err("Stack underflow: need at least 2 values for Gt");
+                    }
+                    let b = self.stack.pop().unwrap();
+                    let a = self.stack.pop().unwrap();
+                    self.stack.push(if a > b { 1.0 } else { 0.0 });
+                }
+                Op::Lt => {
+                    if self.stack.len() < 2 {
+                        return Err("Stack underflow: need at least 2 values for Lt");
+                    }
+                    let b = self.stack.pop().unwrap();
+                    let a = self.stack.pop().unwrap();
+                    self.stack.push(if a < b { 1.0 } else { 0.0 });
+                }
+                Op::Not => {
+                    if self.stack.is_empty() {
+                        return Err("Stack underflow: need a value for Not");
+                    }
+                    let value = self.stack.pop().unwrap();
+                    self.stack.push(if value == 0.0 { 1.0 } else { 0.0 });
+                }
+                Op::And => {
+                    if self.stack.len() < 2 {
+                        return Err("Stack underflow: need at least 2 values for And");
+                    }
+                    let b = self.stack.pop().unwrap();
+                    let a = self.stack.pop().unwrap();
+                    self.stack.push(if a != 0.0 && b != 0.0 { 1.0 } else { 0.0 });
+                }
+                Op::Or => {
+                    if self.stack.len() < 2 {
+                        return Err("Stack underflow: need at least 2 values for Or");
+                    }
+                    let b = self.stack.pop().unwrap();
+                    let a = self.stack.pop().unwrap();
+                    self.stack.push(if a != 0.0 || b != 0.0 { 1.0 } else { 0.0 });
                 }
             }
         }
@@ -254,9 +330,10 @@ mod tests {
         let mut vm = VM::new();
         let ops = vec![
             Op::Push(0.0),
-            Op::IfZero {
+            Op::If {
+                condition: vec![Op::Push(0.0)],
                 then: vec![Op::Push(42.0)],
-                else_: vec![Op::Push(24.0)],
+                else_: None,
             },
         ];
 
@@ -269,14 +346,15 @@ mod tests {
         let mut vm = VM::new();
         let ops = vec![
             Op::Push(1.0),
-            Op::IfZero {
+            Op::If {
+                condition: vec![Op::Push(0.0)],
                 then: vec![Op::Push(42.0)],
-                else_: vec![Op::Push(24.0)],
+                else_: None,
             },
         ];
 
         assert!(vm.execute(&ops).is_ok());
-        assert_eq!(vm.top(), Some(24.0));
+        assert_eq!(vm.top(), Some(42.0));
     }
 
     #[test]
@@ -284,15 +362,17 @@ mod tests {
         let mut vm = VM::new();
         let ops = vec![
             Op::Push(0.0),
-            Op::IfZero {
-                then: vec![
+            Op::If {
+                condition: vec![
                     Op::Push(1.0),
-                    Op::IfZero {
+                    Op::If {
+                        condition: vec![Op::Push(0.0)],
                         then: vec![Op::Push(42.0)],
-                        else_: vec![Op::Push(24.0)],
+                        else_: None,
                     },
                 ],
-                else_: vec![Op::Push(100.0)],
+                then: vec![Op::Push(24.0)],
+                else_: None,
             },
         ];
 
@@ -303,14 +383,15 @@ mod tests {
     #[test]
     fn test_if_zero_empty_stack() {
         let mut vm = VM::new();
-        let ops = vec![Op::IfZero {
+        let ops = vec![Op::If {
+            condition: vec![Op::Push(0.0)],
             then: vec![Op::Push(42.0)],
-            else_: vec![Op::Push(24.0)],
+            else_: None,
         }];
 
         assert_eq!(
             vm.execute(&ops),
-            Err("Stack underflow: need a value for IfZero")
+            Err("Stack underflow: need a value for If")
         );
     }
 
@@ -580,5 +661,157 @@ mod tests {
         
         assert!(vm.execute(&ops).is_ok());
         assert!(vm.memory.is_empty());
+    }
+
+    #[test]
+    fn test_logic_not_true() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Push(42.0),
+            Op::Not,
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
+        assert_eq!(vm.top(), Some(0.0));
+    }
+
+    #[test]
+    fn test_logic_not_false() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Push(0.0),
+            Op::Not,
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
+        assert_eq!(vm.top(), Some(1.0));
+    }
+
+    #[test]
+    fn test_logic_not_empty_stack() {
+        let mut vm = VM::new();
+        let ops = vec![Op::Not];
+        
+        assert_eq!(vm.execute(&ops), Err("Stack underflow: need a value for Not"));
+    }
+
+    #[test]
+    fn test_logic_and_true_true() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Push(42.0),
+            Op::Push(24.0),
+            Op::And,
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
+        assert_eq!(vm.top(), Some(1.0));
+    }
+
+    #[test]
+    fn test_logic_and_true_false() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Push(42.0),
+            Op::Push(0.0),
+            Op::And,
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
+        assert_eq!(vm.top(), Some(0.0));
+    }
+
+    #[test]
+    fn test_logic_and_false_true() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Push(0.0),
+            Op::Push(42.0),
+            Op::And,
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
+        assert_eq!(vm.top(), Some(0.0));
+    }
+
+    #[test]
+    fn test_logic_and_false_false() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Push(0.0),
+            Op::Push(0.0),
+            Op::And,
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
+        assert_eq!(vm.top(), Some(0.0));
+    }
+
+    #[test]
+    fn test_logic_and_stack_underflow() {
+        let mut vm = VM::new();
+        let ops = vec![Op::Push(42.0), Op::And];
+        
+        assert_eq!(vm.execute(&ops), Err("Stack underflow: need at least 2 values for And"));
+    }
+
+    #[test]
+    fn test_logic_or_true_true() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Push(42.0),
+            Op::Push(24.0),
+            Op::Or,
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
+        assert_eq!(vm.top(), Some(1.0));
+    }
+
+    #[test]
+    fn test_logic_or_true_false() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Push(42.0),
+            Op::Push(0.0),
+            Op::Or,
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
+        assert_eq!(vm.top(), Some(1.0));
+    }
+
+    #[test]
+    fn test_logic_or_false_true() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Push(0.0),
+            Op::Push(42.0),
+            Op::Or,
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
+        assert_eq!(vm.top(), Some(1.0));
+    }
+
+    #[test]
+    fn test_logic_or_false_false() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Push(0.0),
+            Op::Push(0.0),
+            Op::Or,
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
+        assert_eq!(vm.top(), Some(0.0));
+    }
+
+    #[test]
+    fn test_logic_or_stack_underflow() {
+        let mut vm = VM::new();
+        let ops = vec![Op::Push(42.0), Op::Or];
+        
+        assert_eq!(vm.execute(&ops), Err("Stack underflow: need at least 2 values for Or"));
     }
 }
