@@ -1,18 +1,23 @@
 [
-    {"Emit": "Starting calculation..."},
-    {"Push": 1.0},
-    {"Store": "result"},
-    {"Loop": {
+    { "Emit": "Starting calculation..." },
+    { "Push": 1.0 },
+    { "Store": "result" },
+    {
+      "Loop": {
         "count": 4,
         "body": [
-            {"Load": "result"},
-            {"Push": 2.0},
-            "Mul",
-            {"Store": "result"},
-            {"Emit": "Doubled the result"}
+          { "Load": "result" },
+          { "Push": 2.0 },
+          "Mul",
+          { "Store": "result" },
+          { "Emit": "Doubled the result" }
         ]
-    }},
-    {"Load": "result"},
-    {"Negate"},
-    {"Emit": "Final result (negated):"}
-]  
+      }
+    },
+    { "Load": "result" },
+    { "AssertTop": 16.0 },
+    "Negate",
+    { "AssertTop": -16.0 },
+    { "Emit": "All assertions passed!" }
+  ]
+  

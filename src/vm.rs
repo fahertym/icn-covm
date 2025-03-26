@@ -13,6 +13,7 @@ pub enum Op {
     Loop { count: usize, body: Vec<Op> },
     Emit(String),
     Negate,
+    AssertTop(f64),
 }
 
 #[derive(Debug)]
@@ -109,6 +110,15 @@ impl VM {
                     }
                     let value = self.stack.pop().unwrap();
                     self.stack.push(-value);
+                }
+                Op::AssertTop(expected) => {
+                    if self.stack.is_empty() {
+                        return Err("Stack underflow: need a value to assert");
+                    }
+                    let actual = self.stack.last().unwrap();
+                    if (actual - expected).abs() > f64::EPSILON {
+                        return Err("Assertion failed: value mismatch");
+                    }
                 }
             }
         }
@@ -465,5 +475,48 @@ mod tests {
         
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.top(), Some(-8.0));
+    }
+
+    #[test]
+    fn test_assert_top_success() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Push(42.0),
+            Op::AssertTop(42.0),
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
+    }
+
+    #[test]
+    fn test_assert_top_failure() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Push(42.0),
+            Op::AssertTop(24.0),
+        ];
+        
+        assert_eq!(vm.execute(&ops), Err("Assertion failed: value mismatch"));
+    }
+
+    #[test]
+    fn test_assert_top_empty_stack() {
+        let mut vm = VM::new();
+        let ops = vec![Op::AssertTop(42.0)];
+        
+        assert_eq!(vm.execute(&ops), Err("Stack underflow: need a value to assert"));
+    }
+
+    #[test]
+    fn test_assert_top_with_arithmetic() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Push(5.0),
+            Op::Push(3.0),
+            Op::Add,
+            Op::AssertTop(8.0),
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
     }
 }
