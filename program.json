@@ -13,5 +13,6 @@
         ]
     }},
     {"Load": "result"},
-    {"Emit": "Final result:"}
+    {"Negate"},
+    {"Emit": "Final result (negated):"}
 ]  

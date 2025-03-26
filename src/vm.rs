@@ -12,6 +12,7 @@ pub enum Op {
     IfZero { then: Vec<Op>, else_: Vec<Op> },
     Loop { count: usize, body: Vec<Op> },
     Emit(String),
+    Negate,
 }
 
 #[derive(Debug)]
@@ -101,6 +102,13 @@ impl VM {
                 }
                 Op::Emit(message) => {
                     println!("{}", message);
+                }
+                Op::Negate => {
+                    if self.stack.is_empty() {
+                        return Err("Stack underflow: need a value to negate");
+                    }
+                    let value = self.stack.pop().unwrap();
+                    self.stack.push(-value);
                 }
             }
         }
@@ -411,5 +419,51 @@ mod tests {
         }];
 
         assert!(vm.execute(&ops).is_ok());
+    }
+
+    #[test]
+    fn test_negate() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Push(42.0),
+            Op::Negate,
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
+        assert_eq!(vm.top(), Some(-42.0));
+    }
+
+    #[test]
+    fn test_negate_zero() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Push(0.0),
+            Op::Negate,
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
+        assert_eq!(vm.top(), Some(0.0));
+    }
+
+    #[test]
+    fn test_negate_empty_stack() {
+        let mut vm = VM::new();
+        let ops = vec![Op::Negate];
+        
+        assert_eq!(vm.execute(&ops), Err("Stack underflow: need a value to negate"));
+    }
+
+    #[test]
+    fn test_negate_with_arithmetic() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Push(5.0),
+            Op::Push(3.0),
+            Op::Add,
+            Op::Negate,
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
+        assert_eq!(vm.top(), Some(-8.0));
     }
 }
