@@ -1,0 +1,60 @@
+{
+    "$schema": "https://app.cursor.sh/schemas/v1/rules.json",
+    "description": "Cursor automation rules for nano-cvm Rust VM project",
+    "globs": ["**/*.rs"],
+    "rules": [
+      {
+        "when": "saving",
+        "do": [
+          "run: cargo fmt",
+          "run: cargo clippy -- -D warnings"
+        ]
+      },
+      {
+        "when": "before committing",
+        "do": [
+          "run: cargo test",
+          "remind: Are all new features covered by unit tests?",
+          "remind: Is your commit message clear, descriptive, and concise?",
+          "remind: Are you on a feature branch? Avoid committing directly to main."
+        ]
+      },
+      {
+        "when": "creating new files",
+        "do": [
+          "remind: Should this file include module-level docs or comments?",
+          "remind: Should this file contain unit tests if logic is added?",
+          "remind: Is this file used in main, tests, or VM execution path?"
+        ]
+      },
+      {
+        "when": "creating a new branch",
+        "do": [
+          "remind: Use feature/ or fix/ prefix to follow branch naming conventions",
+          "remind: Are you branching off the latest main?"
+        ]
+      },
+      {
+        "when": "modifying: src/vm.rs",
+        "do": [
+          "remind: Did you write or update unit tests for this logic?",
+          "remind: Does this change affect VM state, recursion, or memory?"
+        ]
+      },
+      {
+        "when": "modifying: src/main.rs",
+        "do": [
+          "remind: Should CLI behavior or input/output handling be tested?",
+          "remind: Should user feedback be logged or emitted?"
+        ]
+      },
+      {
+        "when": "modifying: program.json",
+        "do": [
+          "remind: Is this program meant to test a new opcode or feature?",
+          "remind: Should this be added to a test suite or sample directory?"
+        ]
+      }
+    ]
+  }
+  
