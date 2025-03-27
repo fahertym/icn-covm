@@ -58,6 +58,14 @@ impl VM {
         }
     }
 
+    pub fn get_memory(&self, key: &str) -> Option<f64> {
+        self.memory.get(key).copied()
+    }
+
+    pub fn get_stack(&self) -> &[f64] {
+        &self.stack
+    }
+
     pub fn execute(&mut self, ops: &[Op]) -> Result<(), String> {
         let mut pc = 0;
         while pc < ops.len() {
@@ -259,11 +267,6 @@ impl VM {
     #[cfg(test)]
     pub fn top(&self) -> Option<f64> {
         self.stack.last().copied()
-    }
-
-    #[cfg(test)]
-    pub fn get_memory(&self, key: &str) -> Option<f64> {
-        self.memory.get(key).copied()
     }
 }
 
