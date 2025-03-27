@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum Op {
@@ -28,328 +29,239 @@ pub enum Op {
     Dup,
     Swap,
     Over,
-    Def { name: String, body: Vec<Op> },
+    Def { name: String, params: Vec<String>, body: Vec<Op> },
     Call(String),
     Return,
 }
 
 #[derive(Debug)]
 struct CallFrame {
-    ops: Vec<Op>,
-    pc: usize,
-    stack: Vec<f64>,
-    memory: std::collections::HashMap<String, f64>,
+    memory: HashMap<String, f64>,
+    return_value: Option<f64>,
 }
 
 #[derive(Debug)]
 pub struct VM {
     pub stack: Vec<f64>,
-    memory: std::collections::HashMap<String, f64>,
-    functions: std::collections::HashMap<String, Vec<Op>>,
-    call_stack: Vec<CallFrame>,
+    memory: HashMap<String, f64>,
+    functions: HashMap<String, (Vec<String>, Vec<Op>)>,
+    call_frames: Vec<CallFrame>,
 }
 
 impl VM {
     pub fn new() -> Self {
         VM {
             stack: Vec::new(),
-            memory: std::collections::HashMap::new(),
-            functions: std::collections::HashMap::new(),
-            call_stack: Vec::new(),
+            memory: HashMap::new(),
+            functions: HashMap::new(),
+            call_frames: Vec::new(),
         }
     }
 
-    pub fn execute(&mut self, ops: &[Op]) -> Result<(), &'static str> {
+    pub fn execute(&mut self, ops: &[Op]) -> Result<(), String> {
         let mut pc = 0;
-        let mut current_ops = ops;
-        let mut ops_vec = Vec::new();
-        
-        while pc < current_ops.len() {
-            let op = &current_ops[pc];
-            
+        while pc < ops.len() {
+            let op = &ops[pc];
             match op {
-                Op::Def { name, body } => {
-                    self.functions.insert(name.clone(), body.clone());
-                    pc += 1;
-                }
-                Op::Call(name) => {
-                    let body = self.functions.get(name).ok_or("Function not found")?;
-                    
-                    // Save current execution state
-                    self.call_stack.push(CallFrame {
-                        ops: current_ops.to_vec(),
-                        pc: pc + 1,
-                        stack: self.stack.clone(),
-                        memory: self.memory.clone(),
-                    });
-                    
-                    // Start executing function
-                    // Don't clear the stack - preserve function arguments
-                    self.memory.clear();
-                    ops_vec = body.clone();
-                    current_ops = &ops_vec;
-                    pc = 0;
-                }
-                Op::Return => {
-                    if let Some(frame) = self.call_stack.pop() {
-                        // Restore previous execution state
-                        self.stack = frame.stack;
-                        self.memory = frame.memory;
-                        ops_vec = frame.ops;
-                        current_ops = &ops_vec;
-                        pc = frame.pc;
-                    } else {
-                        return Err("Return called outside of function");
-                    }
-                }
                 Op::Push(value) => {
                     self.stack.push(*value);
-                    pc += 1;
-                }
-                Op::Add => {
-                    if self.stack.len() < 2 {
-                        return Err("Stack underflow: need at least 2 values for Add");
-                    }
-                    let b = self.stack.pop().unwrap();
-                    let a = self.stack.pop().unwrap();
-                    self.stack.push(a + b);
-                    pc += 1;
-                }
-                Op::Sub => {
-                    if self.stack.len() < 2 {
-                        return Err("Stack underflow: need at least 2 values for Sub");
-                    }
-                    let b = self.stack.pop().unwrap();
-                    let a = self.stack.pop().unwrap();
-                    self.stack.push(a - b);
-                    pc += 1;
-                }
-                Op::Mul => {
-                    if self.stack.len() < 2 {
-                        return Err("Stack underflow: need at least 2 values for Mul");
-                    }
-                    let b = self.stack.pop().unwrap();
-                    let a = self.stack.pop().unwrap();
-                    self.stack.push(a * b);
-                    pc += 1;
-                }
-                Op::Div => {
-                    if self.stack.len() < 2 {
-                        return Err("Stack underflow: need at least 2 values for Div");
-                    }
-                    let b = self.stack.pop().unwrap();
-                    let a = self.stack.pop().unwrap();
-                    if b == 0.0 {
-                        return Err("Division by zero");
-                    }
-                    self.stack.push(a / b);
-                    pc += 1;
-                }
-                Op::Store(key) => {
-                    if self.stack.is_empty() {
-                        return Err("Stack underflow: need a value to store");
-                    }
-                    let value = self.stack.pop().unwrap();
-                    self.memory.insert(key.clone(), value);
-                    pc += 1;
-                }
-                Op::Load(key) => {
-                    if let Some(&value) = self.memory.get(key) {
-                        self.stack.push(value);
-                    } else {
-                        return Err("Key not found in memory");
-                    }
-                    pc += 1;
-                }
-                Op::If { condition, then, else_ } => {
-                    let mut vm = VM::new();
-                    vm.stack = self.stack.clone();
-                    vm.memory = self.memory.clone();
-                    vm.execute(condition)?;
-                    if vm.stack.is_empty() {
-                        return Err("Stack underflow: condition block must leave a value");
-                    }
-                    let result = vm.stack.pop().unwrap();
-                    if result != 0.0 {
-                        vm.execute(then)?;
-                    } else if let Some(else_block) = else_ {
-                        vm.execute(&else_block)?;
-                    }
-                    self.stack = vm.stack;
-                    self.memory = vm.memory;
-                    pc += 1;
-                }
-                Op::Loop { count, body } => {
-                    for _ in 0..*count {
-                        let mut vm = VM::new();
-                        vm.stack = self.stack.clone();
-                        vm.memory = self.memory.clone();
-                        vm.execute(body)?;
-                        self.stack = vm.stack;
-                        self.memory = vm.memory;
-                    }
-                    pc += 1;
-                }
-                Op::Emit(message) => {
-                    println!("{}", message);
-                    pc += 1;
-                }
-                Op::Negate => {
-                    if self.stack.is_empty() {
-                        return Err("Stack underflow: need a value to negate");
-                    }
-                    let value = self.stack.pop().unwrap();
-                    self.stack.push(-value);
-                    pc += 1;
-                }
-                Op::AssertTop(expected) => {
-                    if self.stack.is_empty() {
-                        return Err("Stack underflow: need a value to assert");
-                    }
-                    let actual = self.stack.last().unwrap();
-                    if (actual - expected).abs() > f64::EPSILON {
-                        return Err("Assertion failed: value mismatch");
-                    }
-                    pc += 1;
-                }
-                Op::DumpStack => {
-                    println!("Stack contents (bottom to top):");
-                    for (i, &value) in self.stack.iter().enumerate() {
-                        println!("  [{}] {}", i, value);
-                    }
-                    pc += 1;
-                }
-                Op::DumpMemory => {
-                    println!("Memory contents:");
-                    for (key, &value) in self.memory.iter() {
-                        println!("  {} = {}", key, value);
-                    }
-                    pc += 1;
-                }
-                Op::AssertMemory { key, expected } => {
-                    if let Some(&value) = self.memory.get(key) {
-                        if (value - expected).abs() > f64::EPSILON {
-                            return Err("Assertion failed: memory value mismatch");
-                        }
-                    } else {
-                        return Err("Key not found in memory");
-                    }
-                    pc += 1;
                 }
                 Op::Pop => {
-                    if self.stack.is_empty() {
-                        return Err("Stack underflow: need a value to pop");
-                    }
-                    self.stack.pop();
-                    pc += 1;
-                }
-                Op::Eq => {
-                    if self.stack.len() < 2 {
-                        return Err("Stack underflow: need at least 2 values for Eq");
-                    }
-                    let b = self.stack.pop().unwrap();
-                    let a = self.stack.pop().unwrap();
-                    self.stack.push(if a == b { 1.0 } else { 0.0 });
-                    pc += 1;
-                }
-                Op::Gt => {
-                    if self.stack.len() < 2 {
-                        return Err("Stack underflow: need at least 2 values for Gt");
-                    }
-                    let b = self.stack.pop().unwrap();
-                    let a = self.stack.pop().unwrap();
-                    self.stack.push(if a > b { 1.0 } else { 0.0 });
-                    pc += 1;
-                }
-                Op::Lt => {
-                    if self.stack.len() < 2 {
-                        return Err("Stack underflow: need at least 2 values for Lt");
-                    }
-                    let b = self.stack.pop().unwrap();
-                    let a = self.stack.pop().unwrap();
-                    self.stack.push(if a < b { 1.0 } else { 0.0 });
-                    pc += 1;
-                }
-                Op::Not => {
-                    if self.stack.is_empty() {
-                        return Err("Stack underflow: need a value for Not");
-                    }
-                    let value = self.stack.pop().unwrap();
-                    self.stack.push(if value == 0.0 { 1.0 } else { 0.0 });
-                    pc += 1;
-                }
-                Op::And => {
-                    if self.stack.len() < 2 {
-                        return Err("Stack underflow: need at least 2 values for And");
-                    }
-                    let b = self.stack.pop().unwrap();
-                    let a = self.stack.pop().unwrap();
-                    self.stack.push(if a != 0.0 && b != 0.0 { 1.0 } else { 0.0 });
-                    pc += 1;
-                }
-                Op::Or => {
-                    if self.stack.len() < 2 {
-                        return Err("Stack underflow: need at least 2 values for Or");
-                    }
-                    let b = self.stack.pop().unwrap();
-                    let a = self.stack.pop().unwrap();
-                    self.stack.push(if a != 0.0 || b != 0.0 { 1.0 } else { 0.0 });
-                    pc += 1;
-                }
-                Op::While { condition, body } => {
-                    loop {
-                        let mut vm = VM::new();
-                        vm.stack = self.stack.clone();
-                        vm.memory = self.memory.clone();
-                        vm.execute(condition)?;
-                        if vm.stack.is_empty() {
-                            return Err("Stack underflow: condition block must leave a value");
-                        }
-                        let result = vm.stack.pop().unwrap();
-                        if result == 0.0 {
-                            break;
-                        }
-                        vm.execute(body)?;
-                        self.stack = vm.stack;
-                        self.memory = vm.memory;
-                    }
-                    pc += 1;
+                    self.stack.pop().ok_or_else(|| "Stack underflow".to_string())?;
                 }
                 Op::Dup => {
-                    if self.stack.is_empty() {
-                        return Err("Stack underflow: need a value to duplicate");
-                    }
-                    let value = self.stack.last().unwrap();
+                    let value = self.stack.last().ok_or_else(|| "Stack underflow".to_string())?;
                     self.stack.push(*value);
-                    pc += 1;
                 }
                 Op::Swap => {
                     if self.stack.len() < 2 {
-                        return Err("Stack underflow: need at least 2 values to swap");
+                        return Err("Stack underflow".to_string());
                     }
-                    let a = self.stack.pop().unwrap();
-                    let b = self.stack.pop().unwrap();
-                    self.stack.push(a);
-                    self.stack.push(b);
-                    pc += 1;
+                    let len = self.stack.len();
+                    self.stack.swap(len - 1, len - 2);
                 }
                 Op::Over => {
                     if self.stack.len() < 2 {
-                        return Err("Stack underflow: need at least 2 values for Over");
+                        return Err("Stack underflow".to_string());
                     }
                     let value = self.stack[self.stack.len() - 2];
                     self.stack.push(value);
-                    pc += 1;
+                }
+                Op::Emit(msg) => {
+                    println!("{}", msg);
+                }
+                Op::DumpStack => {
+                    println!("Stack: {:?}", self.stack);
+                    println!("Final stack:");
+                    for (i, value) in self.stack.iter().enumerate() {
+                        println!("  {}: {}", i, value);
+                    }
+                }
+                Op::Def { name, params, body } => {
+                    self.functions.insert(name.clone(), (params.clone(), body.clone()));
+                }
+                Op::Call(name) => {
+                    let (params, body) = self.functions.get(name).ok_or_else(|| format!("Function '{}' not found", name))?.clone();
+                    
+                    // Create new call frame with local memory
+                    let mut local_memory = HashMap::new();
+                    
+                    // Bind parameters to local memory
+                    for param in params.iter().rev() {
+                        let value = self.stack.pop().ok_or_else(|| format!("Stack underflow: missing argument for parameter '{}'", param))?;
+                        local_memory.insert(param.clone(), value);
+                    }
+                    
+                    // Save current memory in call frame
+                    self.call_frames.push(CallFrame {
+                        memory: std::mem::replace(&mut self.memory, local_memory),
+                        return_value: None,
+                    });
+                    
+                    // Execute the function body
+                    self.execute(&body)?;
+                    
+                    // Restore the previous memory context and handle return value
+                    if let Some(frame) = self.call_frames.pop() {
+                        self.memory = frame.memory;
+                        // Push the return value onto the stack if there was one
+                        if let Some(return_value) = frame.return_value {
+                            self.stack.push(return_value);
+                        }
+                    }
+                }
+                Op::Return => {
+                    // Get the return value from the stack if available
+                    let return_value = self.stack.pop();
+                    
+                    // Store the return value in the current call frame
+                    if let Some(frame) = self.call_frames.last_mut() {
+                        frame.return_value = return_value;
+                    }
+                    
+                    // Early return from function execution
+                    return Ok(());
+                }
+                Op::Load(name) => {
+                    let value = self.memory.get(name).ok_or_else(|| format!("Variable '{}' not found", name))?;
+                    self.stack.push(*value);
+                }
+                Op::Store(name) => {
+                    let value = self.stack.pop().ok_or_else(|| "Stack underflow".to_string())?;
+                    self.memory.insert(name.clone(), value);
+                }
+                Op::Add => {
+                    let b = self.stack.pop().ok_or_else(|| "Stack underflow".to_string())?;
+                    let a = self.stack.pop().ok_or_else(|| "Stack underflow".to_string())?;
+                    self.stack.push(a + b);
+                }
+                Op::Sub => {
+                    let b = self.stack.pop().ok_or_else(|| "Stack underflow".to_string())?;
+                    let a = self.stack.pop().ok_or_else(|| "Stack underflow".to_string())?;
+                    self.stack.push(a - b);
+                }
+                Op::Mul => {
+                    let b = self.stack.pop().ok_or_else(|| "Stack underflow".to_string())?;
+                    let a = self.stack.pop().ok_or_else(|| "Stack underflow".to_string())?;
+                    self.stack.push(a * b);
+                }
+                Op::Div => {
+                    let b = self.stack.pop().ok_or_else(|| "Stack underflow".to_string())?;
+                    let a = self.stack.pop().ok_or_else(|| "Stack underflow".to_string())?;
+                    if b == 0.0 {
+                        return Err("Division by zero".to_string());
+                    }
+                    self.stack.push(a / b);
+                }
+                Op::Lt => {
+                    let b = self.stack.pop().ok_or_else(|| "Stack underflow".to_string())?;
+                    let a = self.stack.pop().ok_or_else(|| "Stack underflow".to_string())?;
+                    self.stack.push(if a < b { 1.0 } else { 0.0 });
+                }
+                Op::Gt => {
+                    let b = self.stack.pop().ok_or_else(|| "Stack underflow".to_string())?;
+                    let a = self.stack.pop().ok_or_else(|| "Stack underflow".to_string())?;
+                    self.stack.push(if a > b { 1.0 } else { 0.0 });
+                }
+                Op::Eq => {
+                    let b = self.stack.pop().ok_or_else(|| "Stack underflow".to_string())?;
+                    let a = self.stack.pop().ok_or_else(|| "Stack underflow".to_string())?;
+                    self.stack.push(if a == b { 1.0 } else { 0.0 });
+                }
+                Op::If { condition, then, else_ } => {
+                    self.execute(condition)?;
+                    let cond = self.stack.pop().ok_or_else(|| "Stack underflow in if condition".to_string())?;
+                    
+                    if cond != 0.0 {
+                        self.execute(then)?;
+                    } else if let Some(else_block) = else_ {
+                        self.execute(else_block)?;
+                    }
+                }
+                Op::Loop { count, body } => {
+                    for _ in 0..*count {
+                        self.execute(body)?;
+                    }
+                }
+                Op::Negate => {
+                    let value = self.stack.pop().ok_or_else(|| "Stack underflow".to_string())?;
+                    self.stack.push(-value);
+                }
+                Op::Not => {
+                    let value = self.stack.pop().ok_or_else(|| "Stack underflow".to_string())?;
+                    self.stack.push(if value == 0.0 { 1.0 } else { 0.0 });
+                }
+                Op::And => {
+                    let b = self.stack.pop().ok_or_else(|| "Stack underflow".to_string())?;
+                    let a = self.stack.pop().ok_or_else(|| "Stack underflow".to_string())?;
+                    self.stack.push(if a != 0.0 && b != 0.0 { 1.0 } else { 0.0 });
+                }
+                Op::Or => {
+                    let b = self.stack.pop().ok_or_else(|| "Stack underflow".to_string())?;
+                    let a = self.stack.pop().ok_or_else(|| "Stack underflow".to_string())?;
+                    self.stack.push(if a != 0.0 || b != 0.0 { 1.0 } else { 0.0 });
+                }
+                Op::While { condition, body } => {
+                    loop {
+                        self.execute(condition)?;
+                        let cond = self.stack.pop().ok_or_else(|| "Stack underflow in while condition".to_string())?;
+                        if cond == 0.0 {
+                            break;
+                        }
+                        self.execute(body)?;
+                    }
+                }
+                Op::AssertTop(expected) => {
+                    let value = self.stack.last().ok_or_else(|| "Stack underflow".to_string())?;
+                    if *value != *expected {
+                        return Err(format!("Assertion failed: expected {}, got {}", expected, value));
+                    }
+                }
+                Op::DumpMemory => {
+                    println!("Memory contents:");
+                    for (key, value) in self.memory.iter() {
+                        println!("  {} = {}", key, value);
+                    }
+                }
+                Op::AssertMemory { key, expected } => {
+                    let value = self.memory.get(key).ok_or_else(|| format!("Variable '{}' not found", key))?;
+                    if *value != *expected {
+                        return Err(format!("Assertion failed: expected {} = {}, got {}", key, expected, value));
+                    }
                 }
             }
+            pc += 1;
         }
         Ok(())
     }
 
+    // These methods are used in tests
+    #[cfg(test)]
     pub fn top(&self) -> Option<f64> {
         self.stack.last().copied()
     }
 
+    #[cfg(test)]
     pub fn get_memory(&self, key: &str) -> Option<f64> {
         self.memory.get(key).copied()
     }
@@ -390,7 +302,7 @@ mod tests {
         let mut vm = VM::new();
         let ops = vec![Op::Push(10.0), Op::Push(0.0), Op::Div];
 
-        assert_eq!(vm.execute(&ops), Err("Division by zero"));
+        assert_eq!(vm.execute(&ops), Err("Division by zero".to_string()));
     }
 
     #[test]
@@ -400,7 +312,7 @@ mod tests {
 
         assert_eq!(
             vm.execute(&ops),
-            Err("Stack underflow: need at least 2 values for Add")
+            Err("Stack underflow: need at least 2 values for Add".to_string())
         );
     }
 
@@ -423,7 +335,7 @@ mod tests {
         let mut vm = VM::new();
         let ops = vec![Op::Load("nonexistent".to_string())];
 
-        assert_eq!(vm.execute(&ops), Err("Key not found in memory"));
+        assert_eq!(vm.execute(&ops), Err("Variable 'nonexistent' not found".to_string()));
     }
 
     #[test]
@@ -433,7 +345,7 @@ mod tests {
 
         assert_eq!(
             vm.execute(&ops),
-            Err("Stack underflow: need a value to store")
+            Err("Stack underflow: need a value to store".to_string())
         );
     }
 
@@ -522,7 +434,7 @@ mod tests {
 
         assert_eq!(
             vm.execute(&ops),
-            Err("Stack underflow: need a value for If")
+            Err("Stack underflow: need a value for If".to_string())
         );
     }
 
@@ -686,7 +598,7 @@ mod tests {
         let mut vm = VM::new();
         let ops = vec![Op::Negate];
         
-        assert_eq!(vm.execute(&ops), Err("Stack underflow: need a value to negate"));
+        assert_eq!(vm.execute(&ops), Err("Stack underflow: need a value to negate".to_string()));
     }
 
     #[test]
@@ -722,7 +634,7 @@ mod tests {
             Op::AssertTop(24.0),
         ];
         
-        assert_eq!(vm.execute(&ops), Err("Assertion failed: value mismatch"));
+        assert_eq!(vm.execute(&ops), Err("Assertion failed: value mismatch".to_string()));
     }
 
     #[test]
@@ -730,7 +642,7 @@ mod tests {
         let mut vm = VM::new();
         let ops = vec![Op::AssertTop(42.0)];
         
-        assert_eq!(vm.execute(&ops), Err("Stack underflow: need a value to assert"));
+        assert_eq!(vm.execute(&ops), Err("Stack underflow: need a value to assert".to_string()));
     }
 
     #[test]
@@ -823,7 +735,7 @@ mod tests {
         let mut vm = VM::new();
         let ops = vec![Op::Not];
         
-        assert_eq!(vm.execute(&ops), Err("Stack underflow: need a value for Not"));
+        assert_eq!(vm.execute(&ops), Err("Stack underflow: need a value for Not".to_string()));
     }
 
     #[test]
@@ -883,7 +795,7 @@ mod tests {
         let mut vm = VM::new();
         let ops = vec![Op::Push(42.0), Op::And];
         
-        assert_eq!(vm.execute(&ops), Err("Stack underflow: need at least 2 values for And"));
+        assert_eq!(vm.execute(&ops), Err("Stack underflow: need at least 2 values for And".to_string()));
     }
 
     #[test]
@@ -943,7 +855,7 @@ mod tests {
         let mut vm = VM::new();
         let ops = vec![Op::Push(42.0), Op::Or];
         
-        assert_eq!(vm.execute(&ops), Err("Stack underflow: need at least 2 values for Or"));
+        assert_eq!(vm.execute(&ops), Err("Stack underflow: need at least 2 values for Or".to_string()));
     }
 
     #[test]
@@ -980,7 +892,7 @@ mod tests {
             body: vec![Op::Push(42.0)],
         }];
         
-        assert_eq!(vm.execute(&ops), Err("Stack underflow: condition block must leave a value"));
+        assert_eq!(vm.execute(&ops), Err("Stack underflow: condition block must leave a value".to_string()));
     }
 
     #[test]
@@ -1016,7 +928,7 @@ mod tests {
         let mut vm = VM::new();
         let ops = vec![Op::Dup];
         
-        assert_eq!(vm.execute(&ops), Err("Stack underflow: need a value to duplicate"));
+        assert_eq!(vm.execute(&ops), Err("Stack underflow: need a value to duplicate".to_string()));
     }
 
     #[test]
@@ -1037,7 +949,7 @@ mod tests {
         let mut vm = VM::new();
         let ops = vec![Op::Push(42.0), Op::Swap];
         
-        assert_eq!(vm.execute(&ops), Err("Stack underflow: need at least 2 values to swap"));
+        assert_eq!(vm.execute(&ops), Err("Stack underflow: need at least 2 values to swap".to_string()));
     }
 
     #[test]
@@ -1058,7 +970,7 @@ mod tests {
         let mut vm = VM::new();
         let ops = vec![Op::Push(42.0), Op::Over];
         
-        assert_eq!(vm.execute(&ops), Err("Stack underflow: need at least 2 values for Over"));
+        assert_eq!(vm.execute(&ops), Err("Stack underflow: need at least 2 values for Over".to_string()));
     }
 
     #[test]
@@ -1083,6 +995,7 @@ mod tests {
         let ops = vec![
             Op::Def {
                 name: "double".to_string(),
+                params: vec![],
                 body: vec![
                     Op::Push(2.0),
                     Op::Mul,
@@ -1101,7 +1014,7 @@ mod tests {
         let mut vm = VM::new();
         let ops = vec![Op::Call("nonexistent".to_string())];
         
-        assert_eq!(vm.execute(&ops), Err("Function not found"));
+        assert_eq!(vm.execute(&ops), Err("Function 'nonexistent' not found".to_string()));
     }
 
     #[test]
@@ -1110,6 +1023,7 @@ mod tests {
         let ops = vec![
             Op::Def {
                 name: "add_one".to_string(),
+                params: vec![],
                 body: vec![
                     Op::Push(1.0),
                     Op::Add,
@@ -1130,6 +1044,7 @@ mod tests {
         let ops = vec![
             Op::Def {
                 name: "store_and_load".to_string(),
+                params: vec![],
                 body: vec![
                     Op::Store("x".to_string()),
                     Op::Load("x".to_string()),
@@ -1150,6 +1065,7 @@ mod tests {
         let ops = vec![
             Op::Def {
                 name: "countdown".to_string(),
+                params: vec![],
                 body: vec![
                     Op::Dup,
                     Op::Push(0.0),
@@ -1180,6 +1096,7 @@ mod tests {
         let ops = vec![
             Op::Def {
                 name: "push_and_pop".to_string(),
+                params: vec![],
                 body: vec![
                     Op::Push(42.0),
                     Op::Pop,
@@ -1200,6 +1117,7 @@ mod tests {
         let ops = vec![
             Op::Def {
                 name: "store_value".to_string(),
+                params: vec![],
                 body: vec![
                     Op::Store("x".to_string()),
                     Op::Return,
@@ -1220,6 +1138,7 @@ mod tests {
         let ops = vec![
             Op::Def {
                 name: "inner".to_string(),
+                params: vec![],
                 body: vec![
                     Op::Push(2.0),
                     Op::Mul,
@@ -1228,6 +1147,7 @@ mod tests {
             },
             Op::Def {
                 name: "outer".to_string(),
+                params: vec![],
                 body: vec![
                     Op::Call("inner".to_string()),
                     Op::Push(3.0),
@@ -1239,6 +1159,140 @@ mod tests {
             Op::Call("outer".to_string()),
         ];
         
+        assert!(vm.execute(&ops).is_ok());
+        assert_eq!(vm.top(), Some(42.0)); // 7 * 2 * 3
+    }
+
+    #[test]
+    fn test_function_with_named_params() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Def {
+                name: "add".to_string(),
+                params: vec!["a".to_string(), "b".to_string()],
+                body: vec![
+                    Op::Load("a".to_string()),
+                    Op::Load("b".to_string()),
+                    Op::Add,
+                    Op::Return,
+                ],
+            },
+            Op::Push(20.0),
+            Op::Push(22.0),
+            Op::Call("add".to_string()),
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
+        assert_eq!(vm.top(), Some(42.0));
+    }
+
+    #[test]
+    fn test_function_missing_args() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Def {
+                name: "add".to_string(),
+                params: vec!["x".to_string(), "y".to_string()],
+                body: vec![
+                    Op::Load("x".to_string()),
+                    Op::Load("y".to_string()),
+                    Op::Add,
+                    Op::Return,
+                ],
+            },
+            Op::Push(42.0),
+            Op::Call("add".to_string()),
+        ];
+         
+        assert_eq!(vm.execute(&ops), Err("Stack underflow: missing argument for parameter 'y'".to_string()));
+    }
+
+    #[test]
+    fn test_function_param_isolation() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Def {
+                name: "store_param".to_string(),
+                params: vec!["x".to_string()],
+                body: vec![
+                    Op::Load("x".to_string()),
+                    Op::Store("x".to_string()),
+                    Op::Return,
+                ],
+            },
+            Op::Push(42.0),
+            Op::Store("x".to_string()),
+            Op::Push(24.0),
+            Op::Call("store_param".to_string()),
+            Op::Load("x".to_string()),
+        ];
+         
+        assert!(vm.execute(&ops).is_ok());
+        assert_eq!(vm.top(), Some(42.0)); // Global x should be unchanged
+    }
+
+    #[test]
+    fn test_recursive_function_with_params() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Def {
+                name: "countdown".to_string(),
+                params: vec!["n".to_string()],
+                body: vec![
+                    Op::Load("n".to_string()),
+                    Op::Push(0.0),
+                    Op::Gt,
+                    Op::If {
+                        condition: vec![Op::Push(1.0)],
+                        then: vec![
+                            Op::Load("n".to_string()),
+                            Op::Push(1.0),
+                            Op::Sub,
+                            Op::Store("n".to_string()),
+                            Op::Load("n".to_string()),
+                            Op::Call("countdown".to_string()),
+                        ],
+                        else_: None,
+                    },
+                    Op::Return,
+                ],
+            },
+            Op::Push(5.0),
+            Op::Call("countdown".to_string()),
+        ];
+         
+        assert!(vm.execute(&ops).is_ok());
+    }
+
+    #[test]
+    fn test_nested_function_calls_with_params() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Def {
+                name: "inner".to_string(),
+                params: vec!["x".to_string()],
+                body: vec![
+                    Op::Load("x".to_string()),
+                    Op::Push(2.0),
+                    Op::Mul,
+                    Op::Return,
+                ],
+            },
+            Op::Def {
+                name: "outer".to_string(),
+                params: vec!["x".to_string()],
+                body: vec![
+                    Op::Load("x".to_string()),
+                    Op::Call("inner".to_string()),
+                    Op::Push(3.0),
+                    Op::Mul,
+                    Op::Return,
+                ],
+            },
+            Op::Push(7.0),
+            Op::Call("outer".to_string()),
+        ];
+         
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.top(), Some(42.0)); // 7 * 2 * 3
     }
