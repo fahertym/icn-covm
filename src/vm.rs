@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum Op {
     Push(f64),
     Add,
@@ -28,12 +28,25 @@ pub enum Op {
     Dup,
     Swap,
     Over,
+    Def { name: String, body: Vec<Op> },
+    Call(String),
+    Return,
+}
+
+#[derive(Debug)]
+struct CallFrame {
+    ops: Vec<Op>,
+    pc: usize,
+    stack: Vec<f64>,
+    memory: std::collections::HashMap<String, f64>,
 }
 
 #[derive(Debug)]
 pub struct VM {
     pub stack: Vec<f64>,
     memory: std::collections::HashMap<String, f64>,
+    functions: std::collections::HashMap<String, Vec<Op>>,
+    call_stack: Vec<CallFrame>,
 }
 
 impl VM {
@@ -41,14 +54,57 @@ impl VM {
         VM {
             stack: Vec::new(),
             memory: std::collections::HashMap::new(),
+            functions: std::collections::HashMap::new(),
+            call_stack: Vec::new(),
         }
     }
 
     pub fn execute(&mut self, ops: &[Op]) -> Result<(), &'static str> {
-        for op in ops {
+        let mut pc = 0;
+        let mut current_ops = ops;
+        let mut ops_vec = Vec::new();
+        
+        while pc < current_ops.len() {
+            let op = &current_ops[pc];
+            
             match op {
+                Op::Def { name, body } => {
+                    self.functions.insert(name.clone(), body.clone());
+                    pc += 1;
+                }
+                Op::Call(name) => {
+                    let body = self.functions.get(name).ok_or("Function not found")?;
+                    
+                    // Save current execution state
+                    self.call_stack.push(CallFrame {
+                        ops: current_ops.to_vec(),
+                        pc: pc + 1,
+                        stack: self.stack.clone(),
+                        memory: self.memory.clone(),
+                    });
+                    
+                    // Start executing function
+                    // Don't clear the stack - preserve function arguments
+                    self.memory.clear();
+                    ops_vec = body.clone();
+                    current_ops = &ops_vec;
+                    pc = 0;
+                }
+                Op::Return => {
+                    if let Some(frame) = self.call_stack.pop() {
+                        // Restore previous execution state
+                        self.stack = frame.stack;
+                        self.memory = frame.memory;
+                        ops_vec = frame.ops;
+                        current_ops = &ops_vec;
+                        pc = frame.pc;
+                    } else {
+                        return Err("Return called outside of function");
+                    }
+                }
                 Op::Push(value) => {
                     self.stack.push(*value);
+                    pc += 1;
                 }
                 Op::Add => {
                     if self.stack.len() < 2 {
@@ -57,6 +113,7 @@ impl VM {
                     let b = self.stack.pop().unwrap();
                     let a = self.stack.pop().unwrap();
                     self.stack.push(a + b);
+                    pc += 1;
                 }
                 Op::Sub => {
                     if self.stack.len() < 2 {
@@ -65,6 +122,7 @@ impl VM {
                     let b = self.stack.pop().unwrap();
                     let a = self.stack.pop().unwrap();
                     self.stack.push(a - b);
+                    pc += 1;
                 }
                 Op::Mul => {
                     if self.stack.len() < 2 {
@@ -73,6 +131,7 @@ impl VM {
                     let b = self.stack.pop().unwrap();
                     let a = self.stack.pop().unwrap();
                     self.stack.push(a * b);
+                    pc += 1;
                 }
                 Op::Div => {
                     if self.stack.len() < 2 {
@@ -84,6 +143,7 @@ impl VM {
                         return Err("Division by zero");
                     }
                     self.stack.push(a / b);
+                    pc += 1;
                 }
                 Op::Store(key) => {
                     if self.stack.is_empty() {
@@ -91,6 +151,7 @@ impl VM {
                     }
                     let value = self.stack.pop().unwrap();
                     self.memory.insert(key.clone(), value);
+                    pc += 1;
                 }
                 Op::Load(key) => {
                     if let Some(&value) = self.memory.get(key) {
@@ -98,31 +159,40 @@ impl VM {
                     } else {
                         return Err("Key not found in memory");
                     }
+                    pc += 1;
                 }
                 Op::If { condition, then, else_ } => {
-                    // Execute condition block
-                    self.execute(condition)?;
-                    
-                    // Check result
-                    if self.stack.is_empty() {
+                    let mut vm = VM::new();
+                    vm.stack = self.stack.clone();
+                    vm.memory = self.memory.clone();
+                    vm.execute(condition)?;
+                    if vm.stack.is_empty() {
                         return Err("Stack underflow: condition block must leave a value");
                     }
-                    let result = self.stack.pop().unwrap();
-                    
-                    // Execute appropriate branch
+                    let result = vm.stack.pop().unwrap();
                     if result != 0.0 {
-                        self.execute(then)?;
+                        vm.execute(then)?;
                     } else if let Some(else_block) = else_ {
-                        self.execute(&else_block)?;
+                        vm.execute(&else_block)?;
                     }
+                    self.stack = vm.stack;
+                    self.memory = vm.memory;
+                    pc += 1;
                 }
                 Op::Loop { count, body } => {
                     for _ in 0..*count {
-                        self.execute(body)?;
+                        let mut vm = VM::new();
+                        vm.stack = self.stack.clone();
+                        vm.memory = self.memory.clone();
+                        vm.execute(body)?;
+                        self.stack = vm.stack;
+                        self.memory = vm.memory;
                     }
+                    pc += 1;
                 }
                 Op::Emit(message) => {
                     println!("{}", message);
+                    pc += 1;
                 }
                 Op::Negate => {
                     if self.stack.is_empty() {
@@ -130,6 +200,7 @@ impl VM {
                     }
                     let value = self.stack.pop().unwrap();
                     self.stack.push(-value);
+                    pc += 1;
                 }
                 Op::AssertTop(expected) => {
                     if self.stack.is_empty() {
@@ -139,18 +210,21 @@ impl VM {
                     if (actual - expected).abs() > f64::EPSILON {
                         return Err("Assertion failed: value mismatch");
                     }
+                    pc += 1;
                 }
                 Op::DumpStack => {
                     println!("Stack contents (bottom to top):");
                     for (i, &value) in self.stack.iter().enumerate() {
                         println!("  [{}] {}", i, value);
                     }
+                    pc += 1;
                 }
                 Op::DumpMemory => {
                     println!("Memory contents:");
                     for (key, &value) in self.memory.iter() {
                         println!("  {} = {}", key, value);
                     }
+                    pc += 1;
                 }
                 Op::AssertMemory { key, expected } => {
                     if let Some(&value) = self.memory.get(key) {
@@ -160,12 +234,14 @@ impl VM {
                     } else {
                         return Err("Key not found in memory");
                     }
+                    pc += 1;
                 }
                 Op::Pop => {
                     if self.stack.is_empty() {
                         return Err("Stack underflow: need a value to pop");
                     }
                     self.stack.pop();
+                    pc += 1;
                 }
                 Op::Eq => {
                     if self.stack.len() < 2 {
@@ -174,6 +250,7 @@ impl VM {
                     let b = self.stack.pop().unwrap();
                     let a = self.stack.pop().unwrap();
                     self.stack.push(if a == b { 1.0 } else { 0.0 });
+                    pc += 1;
                 }
                 Op::Gt => {
                     if self.stack.len() < 2 {
@@ -182,6 +259,7 @@ impl VM {
                     let b = self.stack.pop().unwrap();
                     let a = self.stack.pop().unwrap();
                     self.stack.push(if a > b { 1.0 } else { 0.0 });
+                    pc += 1;
                 }
                 Op::Lt => {
                     if self.stack.len() < 2 {
@@ -190,6 +268,7 @@ impl VM {
                     let b = self.stack.pop().unwrap();
                     let a = self.stack.pop().unwrap();
                     self.stack.push(if a < b { 1.0 } else { 0.0 });
+                    pc += 1;
                 }
                 Op::Not => {
                     if self.stack.is_empty() {
@@ -197,6 +276,7 @@ impl VM {
                     }
                     let value = self.stack.pop().unwrap();
                     self.stack.push(if value == 0.0 { 1.0 } else { 0.0 });
+                    pc += 1;
                 }
                 Op::And => {
                     if self.stack.len() < 2 {
@@ -205,6 +285,7 @@ impl VM {
                     let b = self.stack.pop().unwrap();
                     let a = self.stack.pop().unwrap();
                     self.stack.push(if a != 0.0 && b != 0.0 { 1.0 } else { 0.0 });
+                    pc += 1;
                 }
                 Op::Or => {
                     if self.stack.len() < 2 {
@@ -213,26 +294,26 @@ impl VM {
                     let b = self.stack.pop().unwrap();
                     let a = self.stack.pop().unwrap();
                     self.stack.push(if a != 0.0 || b != 0.0 { 1.0 } else { 0.0 });
+                    pc += 1;
                 }
                 Op::While { condition, body } => {
                     loop {
-                        // Execute condition
-                        self.execute(condition)?;
-                        
-                        // Check result
-                        if self.stack.is_empty() {
+                        let mut vm = VM::new();
+                        vm.stack = self.stack.clone();
+                        vm.memory = self.memory.clone();
+                        vm.execute(condition)?;
+                        if vm.stack.is_empty() {
                             return Err("Stack underflow: condition block must leave a value");
                         }
-                        let result = self.stack.pop().unwrap();
-                        
-                        // Break if condition is false
+                        let result = vm.stack.pop().unwrap();
                         if result == 0.0 {
                             break;
                         }
-                        
-                        // Execute body
-                        self.execute(body)?;
+                        vm.execute(body)?;
+                        self.stack = vm.stack;
+                        self.memory = vm.memory;
                     }
+                    pc += 1;
                 }
                 Op::Dup => {
                     if self.stack.is_empty() {
@@ -240,6 +321,7 @@ impl VM {
                     }
                     let value = self.stack.last().unwrap();
                     self.stack.push(*value);
+                    pc += 1;
                 }
                 Op::Swap => {
                     if self.stack.len() < 2 {
@@ -249,6 +331,7 @@ impl VM {
                     let b = self.stack.pop().unwrap();
                     self.stack.push(a);
                     self.stack.push(b);
+                    pc += 1;
                 }
                 Op::Over => {
                     if self.stack.len() < 2 {
@@ -256,6 +339,7 @@ impl VM {
                     }
                     let value = self.stack[self.stack.len() - 2];
                     self.stack.push(value);
+                    pc += 1;
                 }
             }
         }
@@ -991,5 +1075,171 @@ mod tests {
         
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.stack, vec![1.0, 2.0, 3.0, 3.0, 2.0, 1.0]);
+    }
+
+    #[test]
+    fn test_function_definition_and_call() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Def {
+                name: "double".to_string(),
+                body: vec![
+                    Op::Push(2.0),
+                    Op::Mul,
+                ],
+            },
+            Op::Push(21.0),
+            Op::Call("double".to_string()),
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
+        assert_eq!(vm.top(), Some(42.0));
+    }
+
+    #[test]
+    fn test_function_not_found() {
+        let mut vm = VM::new();
+        let ops = vec![Op::Call("nonexistent".to_string())];
+        
+        assert_eq!(vm.execute(&ops), Err("Function not found"));
+    }
+
+    #[test]
+    fn test_function_return() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Def {
+                name: "add_one".to_string(),
+                body: vec![
+                    Op::Push(1.0),
+                    Op::Add,
+                    Op::Return,
+                ],
+            },
+            Op::Push(41.0),
+            Op::Call("add_one".to_string()),
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
+        assert_eq!(vm.top(), Some(42.0));
+    }
+
+    #[test]
+    fn test_function_with_memory() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Def {
+                name: "store_and_load".to_string(),
+                body: vec![
+                    Op::Store("x".to_string()),
+                    Op::Load("x".to_string()),
+                    Op::Return,
+                ],
+            },
+            Op::Push(42.0),
+            Op::Call("store_and_load".to_string()),
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
+        assert_eq!(vm.top(), Some(42.0));
+    }
+
+    #[test]
+    fn test_recursive_function() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Def {
+                name: "countdown".to_string(),
+                body: vec![
+                    Op::Dup,
+                    Op::Push(0.0),
+                    Op::Gt,
+                    Op::If {
+                        condition: vec![Op::Push(1.0)],
+                        then: vec![
+                            Op::Push(1.0),
+                            Op::Sub,
+                            Op::Call("countdown".to_string()),
+                        ],
+                        else_: None,
+                    },
+                    Op::Return,
+                ],
+            },
+            Op::Push(5.0),
+            Op::Call("countdown".to_string()),
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
+        assert_eq!(vm.top(), Some(0.0));
+    }
+
+    #[test]
+    fn test_function_stack_isolation() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Def {
+                name: "push_and_pop".to_string(),
+                body: vec![
+                    Op::Push(42.0),
+                    Op::Pop,
+                    Op::Return,
+                ],
+            },
+            Op::Push(24.0),
+            Op::Call("push_and_pop".to_string()),
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
+        assert_eq!(vm.top(), Some(24.0));
+    }
+
+    #[test]
+    fn test_function_memory_isolation() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Def {
+                name: "store_value".to_string(),
+                body: vec![
+                    Op::Store("x".to_string()),
+                    Op::Return,
+                ],
+            },
+            Op::Push(42.0),
+            Op::Call("store_value".to_string()),
+            Op::Load("x".to_string()),
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
+        assert_eq!(vm.top(), Some(42.0));
+    }
+
+    #[test]
+    fn test_nested_function_calls() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Def {
+                name: "inner".to_string(),
+                body: vec![
+                    Op::Push(2.0),
+                    Op::Mul,
+                    Op::Return,
+                ],
+            },
+            Op::Def {
+                name: "outer".to_string(),
+                body: vec![
+                    Op::Call("inner".to_string()),
+                    Op::Push(3.0),
+                    Op::Mul,
+                    Op::Return,
+                ],
+            },
+            Op::Push(7.0),
+            Op::Call("outer".to_string()),
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
+        assert_eq!(vm.top(), Some(42.0)); // 7 * 2 * 3
     }
 }

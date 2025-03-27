@@ -1,25 +1,59 @@
 [
-  { "Emit": "Starting countdown..." },
-  { "Push": 5.0 },
-  { "Store": "counter" },
-  { "While": {
-    "condition": [
-      { "Load": "counter" },
-      { "Push": 0.0 },
-      { "Gt": null }
-    ],
+  { "Emit": "Defining functions..." },
+  { "Def": {
+    "name": "double_and_print",
     "body": [
-      { "Load": "counter" },
       { "Dup": null },
-      { "Emit": "Countdown:" },
-      { "Push": 1.0 },
-      { "Sub": null },
-      { "Store": "counter" }
+      { "Emit": "Input value:" },
+      { "Push": 2.0 },
+      { "Mul": null },
+      { "Emit": "Doubled value:" }
     ]
   }},
-  { "Emit": "Final count:" },
-  { "Load": "counter" },
-  { "AssertTop": 0.0 },
+  { "Def": {
+    "name": "multiply_and_print",
+    "body": [
+      { "Dup": null },
+      { "Emit": "First number:" },
+      { "Swap": null },
+      { "Dup": null },
+      { "Emit": "Second number:" },
+      { "Swap": null },
+      { "Mul": null },
+      { "Emit": "Product:" }
+    ]
+  }},
+  { "Def": {
+    "name": "countdown",
+    "body": [
+      { "Dup": null },
+      { "Push": 0.0 },
+      { "Gt": null },
+      { "If": {
+        "condition": [
+          { "Push": 1.0 }
+        ],
+        "then": [
+          { "Emit": "Countdown:" },
+          { "Push": 1.0 },
+          { "Sub": null },
+          { "Call": "countdown" }
+        ],
+        "else_": null
+      }},
+      { "Return": null }
+    ]
+  }},
+  { "Emit": "Testing double_and_print with 21:" },
+  { "Push": 21.0 },
+  { "Call": "double_and_print" },
+  { "Emit": "Testing multiply_and_print with 6 and 7:" },
+  { "Push": 6.0 },
+  { "Push": 7.0 },
+  { "Call": "multiply_and_print" },
+  { "Emit": "Starting countdown from 5:" },
+  { "Push": 5.0 },
+  { "Call": "countdown" },
   { "Emit": "Stack manipulation demo:" },
   { "Push": 1.0 },
   { "Push": 2.0 },
