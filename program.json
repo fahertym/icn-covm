@@ -1,52 +1,76 @@
 [
   { "Emit": "Defining functions..." },
   { "Def": {
-    "name": "double_and_print",
+    "name": "add",
+    "params": ["x", "y"],
     "body": [
-      { "Dup": null },
-      { "Emit": "Input value:" },
-      { "Push": 2.0 },
-      { "Mul": null },
-      { "Emit": "Doubled value:" }
+      { "Load": "x" },
+      { "Load": "y" },
+      { "Add": null },
+      { "Return": null }
     ]
   }},
   { "Def": {
     "name": "multiply_and_print",
+    "params": ["x", "y"],
     "body": [
-      { "Dup": null },
+      { "Load": "x" },
       { "Emit": "First number:" },
-      { "Swap": null },
-      { "Dup": null },
+      { "Load": "y" },
       { "Emit": "Second number:" },
-      { "Swap": null },
+      { "Load": "x" },
+      { "Load": "y" },
       { "Mul": null },
-      { "Emit": "Product:" }
+      { "Emit": "Product:" },
+      { "Return": null }
     ]
   }},
   { "Def": {
     "name": "countdown",
+    "params": ["n"],
     "body": [
-      { "Dup": null },
+      { "Load": "n" },
       { "Push": 0.0 },
-      { "Gt": null },
-      { "If": {
-        "condition": [
-          { "Push": 1.0 }
-        ],
-        "then": [
-          { "Emit": "Countdown:" },
-          { "Push": 1.0 },
-          { "Sub": null },
-          { "Call": "countdown" }
-        ],
-        "else_": null
-      }},
-      { "Return": null }
+      { "Lt": null },
+      {
+        "If": {
+          "condition": [],
+          "then": [
+            { "Push": 0.0 },
+            { "Return": null }
+          ],
+          "else_": [
+            { "Load": "n" },
+            { "Emit": "Current value:" },
+            { "Load": "n" },
+            { "Push": 1.0 },
+            { "Sub": null },
+            { "Store": "n" },
+            { "Load": "n" },
+            { "Push": 0.0 },
+            { "Gt": null },
+            {
+              "If": {
+                "condition": [],
+                "then": [
+                  { "Load": "n" },
+                  { "Call": "countdown" }
+                ],
+                "else_": [
+                  { "Push": 0.0 }
+                ]
+              }
+            },
+            { "Return": null }
+          ]
+        }
+      }
     ]
   }},
-  { "Emit": "Testing double_and_print with 21:" },
-  { "Push": 21.0 },
-  { "Call": "double_and_print" },
+  { "Emit": "Testing add with 20 and 22:" },
+  { "Push": 20.0 },
+  { "Push": 22.0 },
+  { "Call": "add" },
   { "Emit": "Testing multiply_and_print with 6 and 7:" },
   { "Push": 6.0 },
   { "Push": 7.0 },
