@@ -1,0 +1,17 @@
+{
+  "name": "Basic Addition Test",
+  "description": "Tests basic addition operations with assertions",
+  "program": [
+    { "Push": 5.0 },
+    { "Push": 3.0 },
+    { "Add": null },
+    { "AssertTop": 8.0 },
+    { "Push": 10.0 },
+    { "Push": -2.0 },
+    { "Add": null },
+    { "AssertTop": 8.0 }
+  ],
+  "assertions": {
+    "final_stack": [8.0, 8.0]
+  }
+} 

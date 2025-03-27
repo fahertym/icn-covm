@@ -1,0 +1,45 @@
+{
+  "name": "VM Features Test",
+  "description": "Tests various VM features including memory operations, control flow, and functions",
+  "program": [
+    { "Def": {
+      "name": "add",
+      "params": ["x", "y"],
+      "body": [
+        { "Load": "x" },
+        { "Load": "y" },
+        { "Add": null },
+        { "Return": null }
+      ]
+    }},
+    { "Push": 5.0 },
+    { "Store": "a" },
+    { "Push": 3.0 },
+    { "Store": "b" },
+    { "Load": "a" },
+    { "Load": "b" },
+    { "Call": "add" },
+    { "AssertTop": 8.0 },
+    { "Push": 10.0 },
+    { "Push": 0.0 },
+    { "Gt": null },
+    {
+      "If": {
+        "condition": [],
+        "then": [
+          { "Push": 1.0 },
+          { "Store": "result" }
+        ],
+        "else_": [
+          { "Push": 0.0 },
+          { "Store": "result" }
+        ]
+      }
+    },
+    { "Load": "result" },
+    { "AssertTop": 1.0 }
+  ],
+  "assertions": {
+    "final_stack": [8.0, 1.0]
+  }
+} 
