@@ -34,6 +34,7 @@
       { "Lt": null },
       {
         "If": {
+          "condition": [],
           "then": [
             { "Push": 0.0 },
             { "Return": null }
@@ -46,7 +47,20 @@
             { "Sub": null },
             { "Store": "n" },
             { "Load": "n" },
-            { "Call": "countdown" },
+            { "Push": 0.0 },
+            { "Gt": null },
+            {
+              "If": {
+                "condition": [],
+                "then": [
+                  { "Load": "n" },
+                  { "Call": "countdown" }
+                ],
+                "else_": [
+                  { "Push": 0.0 }
+                ]
+              }
+            },
             { "Return": null }
           ]
         }
@@ -71,52 +85,5 @@
   { "Dup": null },
   { "Swap": null },
   { "Over": null },
-  { "DumpStack": null },
-  { "Emit": "Debugging features demo:" },
-  { "DumpFunctions": null },
-  { "DumpStackWithLabels": {
-    "labels": ["first", "second", "third", "duplicate", "swapped", "over"]
-  }},
-  { "Push": 42.0 },
-  { "Store": "x" },
-  { "Push": 24.0 },
-  { "Store": "y" },
-  { "DumpMemoryWithLabels": {
-    "labels": {
-      "x": "counter",
-      "y": "result"
-    }
-  }},
-  { "DebugBreak": {
-    "message": "Testing debug break"
-  }},
-  { "Trace": {
-    "enabled": true
-  }},
-  { "Push": 10.0 },
-  { "Push": 20.0 },
-  { "Add": null },
-  { "Trace": {
-    "enabled": false
-  }},
-  { "Emit": "Testing nested function calls with debugging:" },
-  { "Def": {
-    "name": "outer",
-    "params": ["x"],
-    "body": [
-      { "Def": {
-        "name": "inner",
-        "params": ["y"],
-        "body": [
-          { "DumpCallStack": null },
-          { "Return": null }
-        ]
-      }},
-      { "Push": 42.0 },
-      { "Call": "inner" },
-      { "Return": null }
-    ]
-  }},
-  { "Push": 24.0 },
-  { "Call": "outer" }
+  { "DumpStack": null }
 ]
