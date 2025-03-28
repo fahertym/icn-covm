@@ -85,5 +85,191 @@
   { "Dup": null },
   { "Swap": null },
   { "Over": null },
-  { "DumpStack": null }
+  { "DumpStack": null },
+  { "Emit": "Governance-inspired opcodes demonstration" },
+  
+  { "Def": {
+    "name": "process_votes",
+    "params": ["proposal_id", "support_votes", "against_votes"],
+    "body": [
+      { "Load": "support_votes" },
+      { "Load": "against_votes" },
+      { "Add": null },
+      { "Store": "total_votes" },
+      
+      { "Load": "support_votes" },
+      { "Push": 100.0 },
+      { "Mul": null },
+      { "Load": "total_votes" },
+      { "Div": null },
+      { "Store": "support_percentage" },
+      
+      { "EmitEvent": {
+        "category": "governance",
+        "message": "Votes processed for proposal"
+      }},
+      
+      { "Load": "support_percentage" },
+      { "Match": {
+        "value": [],
+        "cases": [
+          [50.0, [
+            { "EmitEvent": {
+              "category": "governance",
+              "message": "Exact tie - proposal is rejected"
+            }},
+            { "Push": 0.0 },
+            { "Return": null }
+          ]],
+          [66.0, [
+            { "EmitEvent": {
+              "category": "governance",
+              "message": "Exact 66% support - proposal passes threshold"
+            }},
+            { "Push": 1.0 },
+            { "Return": null }
+          ]]
+        ],
+        "default": [
+          { "Load": "support_percentage" },
+          { "Push": 67.0 },
+          { "Lt": null },
+          { "If": {
+            "condition": [],
+            "then": [
+              { "EmitEvent": {
+                "category": "governance",
+                "message": "Proposal rejected - insufficient support"
+              }},
+              { "Push": 0.0 }
+            ],
+            "else_": [
+              { "EmitEvent": {
+                "category": "governance",
+                "message": "Proposal approved with supermajority"
+              }},
+              { "Push": 1.0 }
+            ]
+          }},
+          { "Return": null }
+        ]
+      }}
+    ]
+  }},
+  
+  { "EmitEvent": {
+    "category": "governance",
+    "message": "Starting governance simulation"
+  }},
+  
+  { "Push": 3.0 },
+  { "Store": "proposal_count" },
+  
+  { "Push": 0.0 },
+  { "Store": "current_proposal" },
+  
+  { "While": {
+    "condition": [
+      { "Load": "current_proposal" },
+      { "Load": "proposal_count" },
+      { "Lt": null }
+    ],
+    "body": [
+      { "Load": "current_proposal" },
+      { "Emit": "Processing proposal" },
+      
+      { "Load": "current_proposal" },
+      { "Push": 2.0 },
+      { "Mod": null },
+      { "Push": 0.0 },
+      { "Eq": null },
+      { "If": {
+        "condition": [],
+        "then": [
+          { "EmitEvent": {
+            "category": "governance",
+            "message": "Skipping even-numbered proposal"
+          }},
+          { "Load": "current_proposal" },
+          { "Push": 1.0 },
+          { "Add": null },
+          { "Store": "current_proposal" },
+          { "Continue": null }
+        ],
+        "else_": null
+      }},
+      
+      { "Load": "current_proposal" },
+      { "Push": 1.0 },
+      { "Eq": null },
+      { "If": {
+        "condition": [],
+        "then": [
+          { "EmitEvent": {
+            "category": "governance",
+            "message": "Critical proposal detected"
+          }},
+          { "EmitEvent": {
+            "category": "governance",
+            "message": "Emergency protocol activated"
+          }},
+          { "Break": null }
+        ],
+        "else_": null
+      }},
+      
+      { "Push": 135.0 },
+      { "Store": "support_votes" },
+      
+      { "Push": 65.0 },
+      { "Store": "against_votes" },
+      
+      { "Load": "current_proposal" },
+      { "Load": "support_votes" },
+      { "Load": "against_votes" },
+      { "Call": "process_votes" },
+      
+      { "Dup": null },
+      { "Push": 0.0 },
+      { "Eq": null },
+      { "Push": 1.0 },
+      { "Eq": null },
+      { "Or": null },
+      { "Not": null },
+      { "If": {
+        "condition": [],
+        "then": [
+          { "EmitEvent": {
+            "category": "governance",
+            "message": "CRITICAL ERROR: Invalid vote result"
+          }}
+        ],
+        "else_": null
+      }},
+      
+      { "Load": "current_proposal" },
+      { "Push": 10.0 },
+      { "Mul": null },
+      { "Add": null },
+      { "Store": "result" },
+      
+      { "Load": "current_proposal" },
+      { "Push": 1.0 },
+      { "Add": null },
+      { "Store": "current_proposal" }
+    ]
+  }},
+  
+  { "Push": 1.0 },
+  { "Push": 1.0 },
+  { "Push": 1.0 },
+  { "AssertEqualStack": { "depth": 3 }},
+  
+  { "EmitEvent": {
+    "category": "governance",
+    "message": "Governance simulation completed"
+  }},
+  
+  { "DumpStack": null },
+  { "DumpMemory": null }
 ]

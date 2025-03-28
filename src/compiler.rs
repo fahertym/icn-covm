@@ -1,6 +1,58 @@
 use crate::vm::Op;
+use thiserror::Error;
 
-pub fn parse_dsl(source: &str) -> Result<Vec<Op>, String> {
+#[derive(Debug, Clone, PartialEq, Error)]
+pub enum CompilerError {
+    #[error("Unknown command: {0}")]
+    UnknownCommand(String),
+    
+    #[error("Unknown block type: {0}")]
+    UnknownBlockType(String),
+    
+    #[error("Invalid function definition: {0}")]
+    InvalidFunctionDefinition(String),
+    
+    #[error("Invalid function definition format: {0}")]
+    InvalidFunctionFormat(String),
+    
+    #[error("Function definition must start with 'def': {0}")]
+    InvalidFunctionStart(String),
+    
+    #[error("Missing number for push")]
+    MissingPushValue,
+    
+    #[error("Invalid number for push: {0}")]
+    InvalidPushValue(String),
+    
+    #[error("Missing quotes for emit command")]
+    MissingEmitQuotes,
+    
+    #[error("Invalid format for emitevent, expected: emitevent \"category\" \"message\"")]
+    InvalidEmitEventFormat,
+    
+    #[error("Missing variable for {0}")]
+    MissingVariable(String),
+    
+    #[error("Missing function name for call")]
+    MissingFunctionName,
+    
+    #[error("Missing depth for assertequalstack")]
+    MissingAssertDepth,
+    
+    #[error("Invalid depth for assertequalstack: {0}")]
+    InvalidAssertDepth(String),
+    
+    #[error("Depth for assertequalstack must be at least 2")]
+    InsufficientAssertDepth,
+    
+    #[error("Invalid case value: {0}")]
+    InvalidCaseValue(String),
+    
+    #[error("Match statement must have a value block")]
+    MissingMatchValue,
+}
+
+pub fn parse_dsl(source: &str) -> Result<Vec<Op>, CompilerError> {
     let lines: Vec<String> = source.lines().map(|s| s.to_string()).collect();
     let mut current_line = 0;
     let mut ops = Vec::new();
@@ -19,8 +71,10 @@ pub fn parse_dsl(source: &str) -> Result<Vec<Op>, String> {
                 parse_while_statement(&lines, &mut current_line)?
             } else if line.trim().starts_with("def ") {
                 parse_function_definition(&lines, &mut current_line)?
+            } else if line.trim() == "match:" {
+                parse_match_statement(&lines, &mut current_line)?
             } else {
-                return Err(format!("Unknown block type: {}", line.trim()));
+                return Err(CompilerError::UnknownBlockType(line.trim().to_string()));
             }
         } else {
             parse_line(line)?
@@ -35,11 +89,11 @@ pub fn parse_dsl(source: &str) -> Result<Vec<Op>, String> {
     Ok(ops)
 }
 
-fn parse_function_signature(line: &str) -> Result<(String, Vec<String>), String> {
+fn parse_function_signature(line: &str) -> Result<(String, Vec<String>), CompilerError> {
     // Format: def name(x, y):
     let parts: Vec<&str> = line.trim_end_matches(':').splitn(2, '(').collect();
     if parts.len() != 2 {
-        return Err(format!("Invalid function definition: {}", line));
+        return Err(CompilerError::InvalidFunctionDefinition(line.to_string()));
     }
 
     let name = parts[0].trim_start_matches("def").trim().to_string();
@@ -53,7 +107,7 @@ fn parse_function_signature(line: &str) -> Result<(String, Vec<String>), String>
     Ok((name, params))
 }
 
-fn parse_line(line: &str) -> Result<Op, String> {
+fn parse_line(line: &str) -> Result<Op, CompilerError> {
     // Skip comments
     if line.starts_with('#') {
         return Ok(Op::Nop);
@@ -67,10 +121,9 @@ fn parse_line(line: &str) -> Result<Op, String> {
 
     match command {
         "push" => {
-            let num = parts.next()
-                .ok_or("Missing number for push")?
-                .parse::<f64>()
-                .map_err(|_| "Invalid number for push")?;
+            let num_str = parts.next().ok_or(CompilerError::MissingPushValue)?;
+            let num = num_str.parse::<f64>()
+                .map_err(|_| CompilerError::InvalidPushValue(num_str.to_string()))?;
             Ok(Op::Push(num))
         }
         "emit" => {
@@ -78,14 +131,40 @@ fn parse_line(line: &str) -> Result<Op, String> {
                 let inner = &line[inner + 1..line.rfind('"').unwrap_or(line.len())];
                 Ok(Op::Emit(inner.to_string()))
             } else {
-                Err("Missing quotes for emit command".to_string())
+                Err(CompilerError::MissingEmitQuotes)
             }
         }
+        "emitevent" => {
+            // Format: emitevent "category" "message"
+            let line_str = line.to_string();
+            let parts: Vec<&str> = line_str.split('"').collect();
+            if parts.len() < 5 {
+                return Err(CompilerError::InvalidEmitEventFormat);
+            }
+            
+            let category = parts[1].trim().to_string();
+            let message = parts[3].trim().to_string();
+            
+            Ok(Op::EmitEvent { category, message })
+        }
+        "assertequalstack" => {
+            let depth_str = parts.next().ok_or(CompilerError::MissingAssertDepth)?;
+            let depth = depth_str.parse::<usize>()
+                .map_err(|_| CompilerError::InvalidAssertDepth(depth_str.to_string()))?;
+            
+            if depth < 2 {
+                return Err(CompilerError::InsufficientAssertDepth);
+            }
+            
+            Ok(Op::AssertEqualStack { depth })
+        }
+        "break" => Ok(Op::Break),
+        "continue" => Ok(Op::Continue),
         "load" => Ok(Op::Load(
-            parts.next().ok_or("Missing variable for load")?.to_string(),
+            parts.next().ok_or(CompilerError::MissingVariable("load".to_string()))?.to_string(),
         )),
         "store" => Ok(Op::Store(
-            parts.next().ok_or("Missing variable for store")?.to_string(),
+            parts.next().ok_or(CompilerError::MissingVariable("store".to_string()))?.to_string(),
         )),
         "add" => Ok(Op::Add),
         "sub" => Ok(Op::Sub),
@@ -105,11 +184,11 @@ fn parse_line(line: &str) -> Result<Op, String> {
         "pop" => Ok(Op::Pop),
         "return" => Ok(Op::Return),
         "call" => Ok(Op::Call(
-            parts.next().ok_or("Missing function name for call")?.to_string(),
+            parts.next().ok_or(CompilerError::MissingFunctionName)?.to_string(),
         )),
         "dumpstack" => Ok(Op::DumpStack),
         "dumpmemory" => Ok(Op::DumpMemory),
-        _ => Err(format!("Unknown command: {}", command)),
+        _ => Err(CompilerError::UnknownCommand(command.to_string())),
     }
 }
 
@@ -117,7 +196,7 @@ fn get_indent(line: &str) -> usize {
     line.chars().take_while(|c| c.is_whitespace()).count()
 }
 
-fn parse_if_statement(lines: &[String], current_line: &mut usize) -> Result<Op, String> {
+fn parse_if_statement(lines: &[String], current_line: &mut usize) -> Result<Op, CompilerError> {
     let mut condition = Vec::new();
     let mut then_block = Vec::new();
     let mut else_block = None;
@@ -186,23 +265,23 @@ fn parse_if_statement(lines: &[String], current_line: &mut usize) -> Result<Op, 
     })
 }
 
-fn parse_function_definition(lines: &[String], current_line: &mut usize) -> Result<Op, String> {
+fn parse_function_definition(lines: &[String], current_line: &mut usize) -> Result<Op, CompilerError> {
     let line = &lines[*current_line];
     
     // Expected format: def name(param1, param2):
     if !line.contains('(') || !line.contains(')') {
-        return Err(format!("Invalid function definition format: {}", line));
+        return Err(CompilerError::InvalidFunctionFormat(line.to_string()));
     }
     
     // Extract name and parameters
     let parts = line.trim().split('(').collect::<Vec<&str>>();
     if parts.len() != 2 {
-        return Err(format!("Invalid function definition: {}", line));
+        return Err(CompilerError::InvalidFunctionDefinition(line.to_string()));
     }
     
     let name_part = parts[0].trim();
     if !name_part.starts_with("def ") {
-        return Err(format!("Function definition must start with 'def': {}", line));
+        return Err(CompilerError::InvalidFunctionStart(line.to_string()));
     }
     
     let name = name_part["def ".len()..].trim().to_string();
@@ -242,7 +321,7 @@ fn parse_function_definition(lines: &[String], current_line: &mut usize) -> Resu
     })
 }
 
-fn parse_while_statement(lines: &[String], current_line: &mut usize) -> Result<Op, String> {
+fn parse_while_statement(lines: &[String], current_line: &mut usize) -> Result<Op, CompilerError> {
     let mut condition = Vec::new();
     let mut body = Vec::new();
     let mut current_indent = get_indent(&lines[*current_line]);
@@ -269,6 +348,115 @@ fn parse_while_statement(lines: &[String], current_line: &mut usize) -> Result<O
     Ok(Op::While {
         condition,
         body,
+    })
+}
+
+fn parse_match_statement(lines: &[String], current_line: &mut usize) -> Result<Op, CompilerError> {
+    let mut value_ops = Vec::new();
+    let mut cases = Vec::new();
+    let mut default_ops = None;
+    let current_indent = get_indent(&lines[*current_line]);
+    
+    // Skip the "match:" line
+    *current_line += 1;
+    
+    // First line after match: should be the value block
+    while *current_line < lines.len() {
+        let line = &lines[*current_line];
+        let indent = get_indent(line);
+        
+        if indent <= current_indent {
+            break;
+        }
+        
+        if line.trim() == "value:" {
+            *current_line += 1;
+            let value_indent = indent;
+            
+            // Parse the value block
+            while *current_line < lines.len() {
+                let line = &lines[*current_line];
+                let current_indent = get_indent(line);
+                
+                if current_indent <= value_indent {
+                    break;
+                }
+                
+                let op = parse_line(line)?;
+                if !matches!(op, Op::Nop) {
+                    value_ops.push(op);
+                }
+                *current_line += 1;
+            }
+        } else if line.trim().starts_with("case ") {
+            // Parse case value
+            let case_line = line.trim();
+            let case_value_str = case_line[5..].trim();
+            let case_value = case_value_str.parse::<f64>()
+                .map_err(|_| CompilerError::InvalidCaseValue(case_value_str.to_string()))?;
+            
+            let case_indent = indent;
+            *current_line += 1;
+            
+            let mut case_ops = Vec::new();
+            
+            // Parse case block
+            while *current_line < lines.len() {
+                let line = &lines[*current_line];
+                let current_indent = get_indent(line);
+                
+                if current_indent <= case_indent {
+                    break;
+                }
+                
+                let op = parse_line(line)?;
+                if !matches!(op, Op::Nop) {
+                    case_ops.push(op);
+                }
+                *current_line += 1;
+            }
+            
+            cases.push((case_value, case_ops));
+        } else if line.trim() == "default:" {
+            *current_line += 1;
+            let default_indent = indent;
+            
+            let mut default_block = Vec::new();
+            
+            // Parse default block
+            while *current_line < lines.len() {
+                let line = &lines[*current_line];
+                let current_indent = get_indent(line);
+                
+                if current_indent <= default_indent {
+                    break;
+                }
+                
+                let op = parse_line(line)?;
+                if !matches!(op, Op::Nop) {
+                    default_block.push(op);
+                }
+                *current_line += 1;
+            }
+            
+            default_ops = Some(default_block);
+        } else {
+            let op = parse_line(line)?;
+            if !matches!(op, Op::Nop) {
+                value_ops.push(op);
+            }
+            *current_line += 1;
+        }
+    }
+    
+    if value_ops.is_empty() {
+        return Err(CompilerError::MissingMatchValue);
+    }
+    
+    Ok(Op::Match {
+        value: value_ops,
+        cases,
+        default: default_ops,
     })
 }
 
@@ -381,5 +569,178 @@ else:
                 }
             ]
         );
+    }
+
+    #[test]
+    fn test_break_continue() {
+        let source = r#"
+push 0
+store counter
+loop 10:
+    load counter
+    push 1
+    add
+    store counter
+    load counter
+    push 5
+    eq
+    if:
+        break
+        
+push 0
+while:
+    push 1
+    if:
+        continue
+"#;
+        let ops = parse_dsl(source).unwrap();
+        assert_eq!(
+            ops,
+            vec![
+                Op::Push(0.0),
+                Op::Store("counter".to_string()),
+                Op::Loop {
+                    count: 10,
+                    body: vec![
+                        Op::Load("counter".to_string()),
+                        Op::Push(1.0),
+                        Op::Add,
+                        Op::Store("counter".to_string()),
+                        Op::Load("counter".to_string()),
+                        Op::Push(5.0),
+                        Op::Eq,
+                        Op::If {
+                            condition: vec![],
+                            then: vec![Op::Break],
+                            else_: None,
+                        },
+                    ],
+                },
+                Op::Push(0.0),
+                Op::While {
+                    condition: vec![
+                        Op::Push(1.0),
+                    ],
+                    body: vec![
+                        Op::If {
+                            condition: vec![],
+                            then: vec![Op::Continue],
+                            else_: None,
+                        },
+                    ],
+                },
+            ]
+        );
+    }
+    
+    #[test]
+    fn test_emitevent() {
+        let source = r#"emitevent "governance" "proposal accepted""#;
+        let ops = parse_dsl(source).unwrap();
+        assert_eq!(
+            ops,
+            vec![
+                Op::EmitEvent {
+                    category: "governance".to_string(),
+                    message: "proposal accepted".to_string(),
+                },
+            ]
+        );
+    }
+    
+    #[test]
+    fn test_assertequalstack() {
+        let source = r#"
+push 42
+push 42
+push 42
+assertequalstack 3
+"#;
+        let ops = parse_dsl(source).unwrap();
+        assert_eq!(
+            ops,
+            vec![
+                Op::Push(42.0),
+                Op::Push(42.0),
+                Op::Push(42.0),
+                Op::AssertEqualStack { depth: 3 },
+            ]
+        );
+    }
+    
+    #[test]
+    fn test_match_statement() {
+        let source = r#"
+push 2
+match:
+    value:
+        # Empty - will use the value on the stack
+    case 1:
+        push 10
+    case 2:
+        push 20
+    case 3:
+        push 30
+    default:
+        push 0
+"#;
+        let ops = parse_dsl(source).unwrap();
+        
+        match &ops[1] {
+            Op::Match { value, cases, default } => {
+                assert!(value.is_empty()); // Empty value block will use stack
+                assert_eq!(cases.len(), 3);
+                assert_eq!(cases[0], (1.0, vec![Op::Push(10.0)]));
+                assert_eq!(cases[1], (2.0, vec![Op::Push(20.0)]));
+                assert_eq!(cases[2], (3.0, vec![Op::Push(30.0)]));
+                assert_eq!(default.as_ref().unwrap(), &vec![Op::Push(0.0)]);
+            }
+            _ => panic!("Expected match statement"),
+        }
+    }
+    
+    #[test]
+    fn test_match_with_computed_value() {
+        let source = r#"
+match:
+    value:
+        push 1
+        push 2
+        add
+    case 3:
+        push 30
+"#;
+        let ops = parse_dsl(source).unwrap();
+        
+        match &ops[0] {
+            Op::Match { value, cases, default } => {
+                assert_eq!(value, &vec![Op::Push(1.0), Op::Push(2.0), Op::Add]);
+                assert_eq!(cases.len(), 1);
+                assert_eq!(cases[0], (3.0, vec![Op::Push(30.0)]));
+                assert!(default.is_none());
+            }
+            _ => panic!("Expected match statement"),
+        }
+    }
+    
+    #[test]
+    fn test_invalid_match() {
+        // Missing value block
+        let source = r#"
+match:
+    case 1:
+        push 10
+"#;
+        assert!(parse_dsl(source).is_err());
+        
+        // Invalid case value
+        let source = r#"
+match:
+    value:
+        push 1
+    case invalid:
+        push 10
+"#;
+        assert!(parse_dsl(source).is_err());
     }
 } 

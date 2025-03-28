@@ -152,4 +152,144 @@ load x
 load y
 add
 emit "x + y ="
+dumpmemory
+
+# Governance-inspired VM demonstration
+# This program shows all the new operations: Match, Break, Continue, EmitEvent, and AssertEqualStack
+
+# Define a voting function that processes votes and returns a decision
+def process_votes(proposal_id, support_votes, against_votes):
+    # Store total votes for reporting
+    load support_votes
+    load against_votes
+    add
+    store total_votes
+    
+    # Calculate support percentage
+    load support_votes
+    push 100
+    mul
+    load total_votes
+    div
+    store support_percentage
+    
+    # Emit event with voting statistics
+    emitevent "governance" "Votes processed for proposal"
+    
+    # Use match statement to determine outcome based on support percentage
+    load support_percentage
+    match:
+        value:
+            # We already have the percentage on the stack
+        case 50:
+            emitevent "governance" "Exact tie - proposal is rejected"
+            push 0  # Return 0 for rejection
+            return
+        case 66:
+            emitevent "governance" "Exact 66% support - proposal passes threshold"
+            push 1  # Return 1 for approval
+            return
+        default:
+            # Check if support >= 67% (super majority)
+            load support_percentage
+            push 67
+            lt
+            if:
+                emitevent "governance" "Proposal rejected - insufficient support"
+                push 0  # Return 0 for rejection
+            else:
+                emitevent "governance" "Proposal approved with supermajority"
+                push 1  # Return 1 for approval
+            return
+
+# Simulate governance voting process
+emitevent "governance" "Starting governance simulation"
+
+# Initialize proposals and their vote counts
+push 3  # Number of proposals
+store proposal_count
+
+push 0  # Current proposal index
+store current_proposal
+
+# Loop through proposals
+while:
+    load current_proposal
+    load proposal_count
+    lt
+    
+    # Process a proposal
+    load current_proposal
+    emit "Processing proposal"
+    
+    # Simulate vote counting for valid proposals (odd numbered)
+    load current_proposal
+    push 2
+    mod
+    push 0
+    eq
+    if:
+        # Skip even numbered proposals (demo of 'continue')
+        emitevent "governance" "Skipping even-numbered proposal"
+        load current_proposal
+        push 1
+        add
+        store current_proposal
+        continue
+    
+    # Trigger special case for proposal 1
+    load current_proposal
+    push 1
+    eq
+    if:
+        # Special handling for important proposal (demo of 'break')
+        emitevent "governance" "Critical proposal detected"
+        emitevent "governance" "Emergency protocol activated"
+        break
+    
+    # Simulate vote count for this proposal
+    push 135  # Support votes
+    store support_votes
+    
+    push 65  # Against votes
+    store against_votes
+    
+    # Calculate proposal outcome using our governance function
+    load current_proposal
+    load support_votes 
+    load against_votes
+    call process_votes
+    
+    # Check vote result consistency (should be 0 or 1)
+    dup
+    push 0
+    eq
+    push 1
+    eq
+    or
+    not
+    if:
+        emitevent "governance" "CRITICAL ERROR: Invalid vote result"
+    
+    # Store the result for this proposal
+    load current_proposal
+    push 10
+    mul
+    add
+    store result
+    
+    # Next proposal
+    load current_proposal
+    push 1
+    add
+    store current_proposal
+
+# Demonstrate AssertEqualStack with vote results
+push 1  # Approval (expected outcome)
+push 1  # Approval (expected outcome)
+push 1  # Approval (expected outcome)
+assertequalstack 3
+
+emitevent "governance" "Governance simulation completed"
+dumpstack
 dumpmemory 

@@ -1,3 +1,425 @@
+--- FILE: ./src/lib.rs ---
+pub mod vm;
+pub mod compiler;
+pub mod events;
+pub use vm::{Op, VM, VMError};
+pub use compiler::{parse_dsl, CompilerError};
+pub use events::{Event, LogFormat, set_log_format, set_log_file}; --- FILE: ./src/main.rs ---
+mod vm;
+mod compiler;
+use std::fs;
+use std::path::Path;
+use vm::{Op, VM, VMError, Event};
+use compiler::{parse_dsl, CompilerError};
+use clap::{Arg, Command};
+use serde_json;
+use std::process;
+use std::error::Error;
+use thiserror::Error;
+use std::collections::HashMap;
+
+#[derive(Debug, Error)]
+enum AppError {
+    #[error("VM error: {0}")]
+    VM(#[from] VMError),
+
+    #[error("Compiler error: {0}")]
+    Compiler(#[from] CompilerError),
+
+    #[error("IO error: {0}")]
+    IO(#[from] std::io::Error),
+
+    #[error("JSON error: {0}")]
+    Json(#[from] serde_json::Error),
+
+    #[error("{0}")]
+    Other(String),
+}
+
+impl From<&str> for AppError {
+    fn from(s: &str) -> Self {
+        AppError::Other(s.to_string())
+    }
+}
+
+impl From<String> for AppError {
+    fn from(s: String) -> Self {
+        AppError::Other(s)
+    }
+}
+
+fn main() {
+    // Parse command line arguments
+    let matches = Command::new("nano-cvm")
+        .version("0.2.0")
+        .author("Intercooperative Network")
+        .about("Secure stack-based virtual machine with governance-inspired opcodes")
+        .arg(Arg::new("program")
+            .short('p')
+            .long("program")
+            .value_name("FILE")
+            .help("Program file to execute (.dsl or .json)")
+            .default_value("program.dsl"))
+        .arg(Arg::new("verbose")
+            .short('v')
+            .long("verbose")
+            .help("Display detailed execution information")
+            .action(clap::ArgAction::SetTrue))
+        .arg(Arg::new("param")
+            .short('P')
+            .long("param")
+            .value_name("KEY=VALUE")
+            .help("Set a key-value parameter for the program (can be used multiple times)")
+            .action(clap::ArgAction::Append))
+        .arg(Arg::new("interactive")
+            .short('i')
+            .long("interactive")
+            .help("Start in interactive REPL mode")
+            .action(clap::ArgAction::SetTrue))
+        .get_matches();
+
+    // Get program file and verbosity setting
+    let program_path = matches.get_one::<String>("program").unwrap();
+    let verbose = matches.get_flag("verbose");
+    let interactive = matches.get_flag("interactive");
+    
+    // Collect parameters
+    let mut parameters = HashMap::new();
+    if let Some(params) = matches.get_many::<String>("param") {
+        for param_str in params {
+            if let Some(equals_pos) = param_str.find('=') {
+                let key = param_str[0..equals_pos].to_string();
+                let value = param_str[equals_pos+1..].to_string();
+                parameters.insert(key, value);
+                if verbose {
+                    println!("Parameter: {} = {}", key, value);
+                }
+            } else {
+                eprintln!("Warning: Invalid parameter format '{}', expected KEY=VALUE", param_str);
+            }
+        }
+    }
+
+    // Execute the program
+    if interactive {
+        if let Err(err) = run_interactive(verbose, parameters) {
+            eprintln!("Error: {}", err);
+            process::exit(1);
+        }
+    } else {
+        if let Err(err) = run_program(program_path, verbose, parameters) {
+            eprintln!("Error: {}", err);
+            process::exit(1);
+        }
+    }
+}
+
+fn run_program(program_path: &str, verbose: bool, parameters: HashMap<String, String>) -> Result<(), AppError> {
+    let path = Path::new(program_path);
+    
+    // Check if file exists
+    if !path.exists() {
+        return Err(format!("Program file not found: {}", program_path).into());
+    }
+    
+    // Parse operations based on file extension
+    let ops = if let Some(extension) = path.extension().and_then(|e| e.to_str()) {
+        match extension.to_lowercase().as_str() {
+            "dsl" => {
+                if verbose {
+                    println!("Parsing DSL program from {}", program_path);
+                }
+                let program_source = fs::read_to_string(path)?;
+                parse_dsl(&program_source)?
+            },
+            "json" => {
+                if verbose {
+                    println!("Parsing JSON program from {}", program_path);
+                }
+                let program_json = fs::read_to_string(path)?;
+                serde_json::from_str(&program_json)?
+            },
+            _ => return Err(format!("Unsupported file extension: {}", extension).into())
+        }
+    } else {
+        return Err("File has no extension".into());
+    };
+    
+    if verbose {
+        println!("Program loaded with {} operations", ops.len());
+    }
+
+    // Create and execute the VM
+    let mut vm = VM::new();
+    
+    // Set parameters
+    vm.set_parameters(parameters)?;
+    
+    if verbose {
+        println!("Executing program...");
+        println!("-----------------------------------");
+    }
+    
+    vm.execute(&ops)?;
+    
+    if verbose {
+        println!("-----------------------------------");
+        println!("Program execution completed successfully");
+    }
+
+    // Print the final stack
+    println!("Final stack:");
+    for (i, &value) in vm.get_stack().iter().enumerate() {
+        println!("  {}: {}", i, value);
+    }
+
+    Ok(())
+}
+
+fn run_interactive(verbose: bool, parameters: HashMap<String, String>) -> Result<(), AppError> {
+    use std::io::{self, Write, BufRead};
+    
+    println!("nano-cvm interactive mode");
+    println!("Enter commands in DSL format, 'help' for available commands, 'exit' to quit");
+    
+    let mut vm = VM::new();
+    vm.set_parameters(parameters)?;
+    
+    // Show initial parameters if any
+    if !vm.get_memory_map().is_empty() {
+        println!("Initial parameters:");
+        for (key, &value) in vm.get_memory_map().iter() {
+            println!("  {}: {}", key, value);
+        }
+    }
+    
+    let stdin = io::stdin();
+    let mut handle = stdin.lock();
+    let mut buffer = String::new();
+    
+    loop {
+        print!("> ");
+        io::stdout().flush()?;
+        
+        buffer.clear();
+        handle.read_line(&mut buffer)?;
+        
+        let input = buffer.trim();
+        
+        match input {
+            "exit" | "quit" => {
+                println!("Exiting interactive mode");
+                break;
+            },
+            "help" => {
+                println!("Available commands:");
+                println!("  push <number>     - Push a number onto the stack");
+                println!("  add               - Add the top two values on the stack");
+                println!("  sub               - Subtract the top value from the second value");
+                println!("  mul               - Multiply the top two values on the stack");
+                println!("  div               - Divide the second value by the top value");
+                println!("  dup               - Duplicate the top value on the stack");
+                println!("  swap              - Swap the top two values on the stack");
+                println!("  emit \"message\"    - Output a message");
+                println!("  store <key>       - Store the top stack value in memory with the given key");
+                println!("  load <key>        - Load a value from memory with the given key");
+                println!("  dump_stack        - Display the current stack");
+                println!("  dump_memory       - Display the current memory");
+                println!("  exit, quit        - Exit the interactive mode");
+            },
+            "dump_stack" => {
+                println!("Stack:");
+                for (i, &value) in vm.get_stack().iter().enumerate() {
+                    println!("  {}: {}", i, value);
+                }
+            },
+            "dump_memory" => {
+                println!("Memory:");
+                for (key, &value) in vm.get_memory_map().iter() {
+                    println!("  {}: {}", key, value);
+                }
+            },
+            _ => {
+                // Try to parse and execute the input as DSL
+                if !input.is_empty() {
+                    match parse_dsl(input) {
+                        Ok(ops) => {
+                            if verbose {
+                                println!("Executing {} operation(s)", ops.len());
+                            }
+                            
+                            if let Err(err) = vm.execute(&ops) {
+                                println!("Error executing operations: {}", err);
+                            } else if verbose {
+                                println!("Operation(s) executed successfully");
+                                
+                                println!("Stack:");
+                                for (i, &value) in vm.get_stack().iter().enumerate() {
+                                    println!("  {}: {}", i, value);
+                                }
+                            }
+                        },
+                        Err(err) => {
+                            println!("Error parsing input: {}", err);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    Ok(())
+}
+--- FILE: ./src/events.rs ---
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use std::fs::{File, OpenOptions};
+use std::io::{self, Write};
+use std::path::Path;
+use std::sync::Mutex;
+use once_cell::sync::Lazy;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Event {
+    pub level: String,     // "info", "warn", "error"
+    pub tag: String,       // e.g., "emit", "stack", "memory", "governance"
+    pub message: String,
+    pub timestamp: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogFormat {
+    Pretty,
+    Json,
+}
+
+static LOG_FORMAT: Lazy<Mutex<LogFormat>> = Lazy::new(|| Mutex::new(LogFormat::Pretty));
+static LOG_FILE: Lazy<Mutex<Option<String>>> = Lazy::new(|| Mutex::new(None));
+
+impl Event {
+    pub fn new<S: Into<String>>(level: S, tag: S, message: S) -> Self {
+        let now: DateTime<Utc> = Utc::now();
+        
+        Self {
+            level: level.into(),
+            tag: tag.into(),
+            message: message.into(),
+            timestamp: now.to_rfc3339(),
+            data: None,
+        }
+    }
+    
+    pub fn with_data(mut self, data: serde_json::Value) -> Self {
+        self.data = Some(data);
+        self
+    }
+    
+    pub fn info<S: Into<String>>(tag: S, message: S) -> Self {
+        Self::new("info", tag, message)
+    }
+    
+    pub fn warn<S: Into<String>>(tag: S, message: S) -> Self {
+        Self::new("warn", tag, message)
+    }
+    
+    pub fn error<S: Into<String>>(tag: S, message: S) -> Self {
+        Self::new("error", tag, message)
+    }
+    
+    pub fn emit(&self) -> io::Result<()> {
+        let format = LOG_FORMAT.lock().unwrap();
+        let log_file = LOG_FILE.lock().unwrap().clone();
+        
+        match *format {
+            LogFormat::Pretty => self.emit_pretty(log_file),
+            LogFormat::Json => self.emit_json(log_file),
+        }
+    }
+    
+    fn emit_pretty(&self, log_file: Option<String>) -> io::Result<()> {
+        let level_color = match self.level.as_str() {
+            "info" => "\x1b[32m", // Green
+            "warn" => "\x1b[33m", // Yellow
+            "error" => "\x1b[31m", // Red
+            _ => "\x1b[0m",       // Default
+        };
+        
+        let pretty_line = format!(
+            "{}{} [{}] [{}] {}\x1b[0m", 
+            level_color,
+            self.timestamp.split('T').nth(1).unwrap_or(&self.timestamp).split('.').next().unwrap_or(""),
+            self.level.to_uppercase(), 
+            self.tag,
+            self.message
+        );
+        
+        // Always print to stdout
+        println!("{}", pretty_line);
+        
+        // If log file is specified, write to it
+        if let Some(file_path) = log_file {
+            let plain_line = format!(
+                "{} [{}] [{}] {}", 
+                self.timestamp, 
+                self.level.to_uppercase(), 
+                self.tag,
+                self.message
+            );
+            
+            append_to_file(&file_path, &plain_line)?;
+        }
+        
+        Ok(())
+    }
+    
+    fn emit_json(&self, log_file: Option<String>) -> io::Result<()> {
+        let json = serde_json::to_string(&self).unwrap();
+        
+        // Always print to stdout
+        println!("{}", json);
+        
+        // If log file is specified, write to it
+        if let Some(file_path) = log_file {
+            append_to_file(&file_path, &json)?;
+        }
+        
+        Ok(())
+    }
+}
+
+pub fn set_log_format(format: LogFormat) {
+    let mut log_format = LOG_FORMAT.lock().unwrap();
+    *log_format = format;
+}
+
+pub fn set_log_file(file_path: Option<String>) {
+    let mut log_file = LOG_FILE.lock().unwrap();
+    *log_file = file_path;
+}
+
+fn append_to_file(file_path: &str, content: &str) -> io::Result<()> {
+    let path = Path::new(file_path);
+    
+    // Create parent directories if they don't exist
+    if let Some(parent) = path.parent() {
+        if !parent.exists() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+    
+    // Open file with append mode
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    
+    // Write content with newline
+    writeln!(file, "{}", content)?;
+    
+    Ok(())
+} --- FILE: ./src/vm.rs ---
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use thiserror::Error;
@@ -1976,3 +2398,1414 @@ mod tests {
         assert!(vm.execute(&ops).is_err());
     }
 }
+--- FILE: ./src/compiler.rs ---
+use crate::vm::Op;
+use thiserror::Error;
+
+#[derive(Debug, Clone, PartialEq, Error)]
+pub enum CompilerError {
+    #[error("Unknown command: {0}")]
+    UnknownCommand(String),
+    
+    #[error("Unknown block type: {0}")]
+    UnknownBlockType(String),
+    
+    #[error("Invalid function definition: {0}")]
+    InvalidFunctionDefinition(String),
+    
+    #[error("Invalid function definition format: {0}")]
+    InvalidFunctionFormat(String),
+    
+    #[error("Function definition must start with 'def': {0}")]
+    InvalidFunctionStart(String),
+    
+    #[error("Missing number for push")]
+    MissingPushValue,
+    
+    #[error("Invalid number for push: {0}")]
+    InvalidPushValue(String),
+    
+    #[error("Missing quotes for emit command")]
+    MissingEmitQuotes,
+    
+    #[error("Invalid format for emitevent, expected: emitevent \"category\" \"message\"")]
+    InvalidEmitEventFormat,
+    
+    #[error("Missing variable for {0}")]
+    MissingVariable(String),
+    
+    #[error("Missing function name for call")]
+    MissingFunctionName,
+    
+    #[error("Missing depth for assertequalstack")]
+    MissingAssertDepth,
+    
+    #[error("Invalid depth for assertequalstack: {0}")]
+    InvalidAssertDepth(String),
+    
+    #[error("Depth for assertequalstack must be at least 2")]
+    InsufficientAssertDepth,
+    
+    #[error("Invalid case value: {0}")]
+    InvalidCaseValue(String),
+    
+    #[error("Match statement must have a value block")]
+    MissingMatchValue,
+}
+
+pub fn parse_dsl(source: &str) -> Result<Vec<Op>, CompilerError> {
+    let lines: Vec<String> = source.lines().map(|s| s.to_string()).collect();
+    let mut current_line = 0;
+    let mut ops = Vec::new();
+
+    while current_line < lines.len() {
+        let line = &lines[current_line];
+        if line.trim().is_empty() {
+            current_line += 1;
+            continue;
+        }
+
+        let op = if line.trim().ends_with(':') {
+            if line.trim() == "if:" {
+                parse_if_statement(&lines, &mut current_line)?
+            } else if line.trim() == "while:" {
+                parse_while_statement(&lines, &mut current_line)?
+            } else if line.trim().starts_with("def ") {
+                parse_function_definition(&lines, &mut current_line)?
+            } else if line.trim() == "match:" {
+                parse_match_statement(&lines, &mut current_line)?
+            } else {
+                return Err(CompilerError::UnknownBlockType(line.trim().to_string()));
+            }
+        } else {
+            parse_line(line)?
+        };
+
+        if !matches!(op, Op::Nop) {
+            ops.push(op);
+        }
+        current_line += 1;
+    }
+
+    Ok(ops)
+}
+
+fn parse_function_signature(line: &str) -> Result<(String, Vec<String>), CompilerError> {
+    // Format: def name(x, y):
+    let parts: Vec<&str> = line.trim_end_matches(':').splitn(2, '(').collect();
+    if parts.len() != 2 {
+        return Err(CompilerError::InvalidFunctionDefinition(line.to_string()));
+    }
+
+    let name = parts[0].trim_start_matches("def").trim().to_string();
+    let params_str = parts[1].trim_end_matches(')');
+    let params: Vec<String> = params_str
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    Ok((name, params))
+}
+
+fn parse_line(line: &str) -> Result<Op, CompilerError> {
+    // Skip comments
+    if line.starts_with('#') {
+        return Ok(Op::Nop);
+    }
+
+    let mut parts = line.split_whitespace();
+    let command = match parts.next() {
+        Some(cmd) => cmd,
+        None => return Ok(Op::Nop),
+    };
+
+    match command {
+        "push" => {
+            let num_str = parts.next().ok_or(CompilerError::MissingPushValue)?;
+            let num = num_str.parse::<f64>()
+                .map_err(|_| CompilerError::InvalidPushValue(num_str.to_string()))?;
+            Ok(Op::Push(num))
+        }
+        "emit" => {
+            if let Some(inner) = line.find('"') {
+                let inner = &line[inner + 1..line.rfind('"').unwrap_or(line.len())];
+                Ok(Op::Emit(inner.to_string()))
+            } else {
+                Err(CompilerError::MissingEmitQuotes)
+            }
+        }
+        "emitevent" => {
+            // Format: emitevent "category" "message"
+            let line_str = line.to_string();
+            let parts: Vec<&str> = line_str.split('"').collect();
+            if parts.len() < 5 {
+                return Err(CompilerError::InvalidEmitEventFormat);
+            }
+            
+            let category = parts[1].trim().to_string();
+            let message = parts[3].trim().to_string();
+            
+            Ok(Op::EmitEvent { category, message })
+        }
+        "assertequalstack" => {
+            let depth_str = parts.next().ok_or(CompilerError::MissingAssertDepth)?;
+            let depth = depth_str.parse::<usize>()
+                .map_err(|_| CompilerError::InvalidAssertDepth(depth_str.to_string()))?;
+            
+            if depth < 2 {
+                return Err(CompilerError::InsufficientAssertDepth);
+            }
+            
+            Ok(Op::AssertEqualStack { depth })
+        }
+        "break" => Ok(Op::Break),
+        "continue" => Ok(Op::Continue),
+        "load" => Ok(Op::Load(
+            parts.next().ok_or(CompilerError::MissingVariable("load".to_string()))?.to_string(),
+        )),
+        "store" => Ok(Op::Store(
+            parts.next().ok_or(CompilerError::MissingVariable("store".to_string()))?.to_string(),
+        )),
+        "add" => Ok(Op::Add),
+        "sub" => Ok(Op::Sub),
+        "mul" => Ok(Op::Mul),
+        "div" => Ok(Op::Div),
+        "mod" => Ok(Op::Mod),
+        "eq" => Ok(Op::Eq),
+        "gt" => Ok(Op::Gt),
+        "lt" => Ok(Op::Lt),
+        "not" => Ok(Op::Not),
+        "and" => Ok(Op::And),
+        "or" => Ok(Op::Or),
+        "negate" => Ok(Op::Negate),
+        "dup" => Ok(Op::Dup),
+        "swap" => Ok(Op::Swap),
+        "over" => Ok(Op::Over),
+        "pop" => Ok(Op::Pop),
+        "return" => Ok(Op::Return),
+        "call" => Ok(Op::Call(
+            parts.next().ok_or(CompilerError::MissingFunctionName)?.to_string(),
+        )),
+        "dumpstack" => Ok(Op::DumpStack),
+        "dumpmemory" => Ok(Op::DumpMemory),
+        _ => Err(CompilerError::UnknownCommand(command.to_string())),
+    }
+}
+
+fn get_indent(line: &str) -> usize {
+    line.chars().take_while(|c| c.is_whitespace()).count()
+}
+
+fn parse_if_statement(lines: &[String], current_line: &mut usize) -> Result<Op, CompilerError> {
+    let mut condition = Vec::new();
+    let mut then_block = Vec::new();
+    let mut else_block = None;
+    let mut current_indent = get_indent(&lines[*current_line]);
+
+    // Skip the "if:" line
+    *current_line += 1;
+
+    // Parse the then block
+    while *current_line < lines.len() {
+        let line = &lines[*current_line];
+        let indent = get_indent(line);
+        
+        if indent <= current_indent {
+            break;
+        }
+
+        // Check for nested if
+        if line.trim() == "if:" {
+            let nested_if = parse_if_statement(lines, current_line)?;
+            then_block.push(nested_if);
+            continue; // parse_if_statement already incremented current_line
+        }
+
+        let op = parse_line(line)?;
+        if !matches!(op, Op::Nop) {
+            then_block.push(op);
+        }
+        *current_line += 1;
+    }
+
+    // Check for else block
+    if *current_line < lines.len() && lines[*current_line].trim() == "else:" {
+        *current_line += 1;
+        let mut else_ops = Vec::new();
+
+        while *current_line < lines.len() {
+            let line = &lines[*current_line];
+            let indent = get_indent(line);
+            
+            if indent <= current_indent {
+                break;
+            }
+
+            // Check for nested if in else block
+            if line.trim() == "if:" {
+                let nested_if = parse_if_statement(lines, current_line)?;
+                else_ops.push(nested_if);
+                continue; // parse_if_statement already incremented current_line
+            }
+
+            let op = parse_line(line)?;
+            if !matches!(op, Op::Nop) {
+                else_ops.push(op);
+            }
+            *current_line += 1;
+        }
+
+        else_block = Some(else_ops);
+    }
+
+    Ok(Op::If {
+        condition,
+        then: then_block,
+        else_: else_block,
+    })
+}
+
+fn parse_function_definition(lines: &[String], current_line: &mut usize) -> Result<Op, CompilerError> {
+    let line = &lines[*current_line];
+    
+    // Expected format: def name(param1, param2):
+    if !line.contains('(') || !line.contains(')') {
+        return Err(CompilerError::InvalidFunctionFormat(line.to_string()));
+    }
+    
+    // Extract name and parameters
+    let parts = line.trim().split('(').collect::<Vec<&str>>();
+    if parts.len() != 2 {
+        return Err(CompilerError::InvalidFunctionDefinition(line.to_string()));
+    }
+    
+    let name_part = parts[0].trim();
+    if !name_part.starts_with("def ") {
+        return Err(CompilerError::InvalidFunctionStart(line.to_string()));
+    }
+    
+    let name = name_part["def ".len()..].trim().to_string();
+    
+    // Extract parameters
+    let params_part = parts[1].split(')').next().unwrap().trim();
+    let params: Vec<String> = params_part
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    
+    let mut body = Vec::new();
+    let current_indent = get_indent(line);
+    *current_line += 1;
+    
+    // Parse function body
+    while *current_line < lines.len() {
+        let line = &lines[*current_line];
+        let indent = get_indent(line);
+        
+        if indent <= current_indent {
+            break;
+        }
+        
+        let op = parse_line(line)?;
+        if !matches!(op, Op::Nop) {
+            body.push(op);
+        }
+        *current_line += 1;
+    }
+    
+    Ok(Op::Def {
+        name,
+        params,
+        body,
+    })
+}
+
+fn parse_while_statement(lines: &[String], current_line: &mut usize) -> Result<Op, CompilerError> {
+    let mut condition = Vec::new();
+    let mut body = Vec::new();
+    let mut current_indent = get_indent(&lines[*current_line]);
+
+    // Skip the "while:" line
+    *current_line += 1;
+
+    // Parse the body
+    while *current_line < lines.len() {
+        let line = &lines[*current_line];
+        let indent = get_indent(line);
+        
+        if indent <= current_indent {
+            break;
+        }
+
+        let op = parse_line(line)?;
+        if !matches!(op, Op::Nop) {
+            body.push(op);
+        }
+        *current_line += 1;
+    }
+
+    Ok(Op::While {
+        condition,
+        body,
+    })
+}
+
+fn parse_match_statement(lines: &[String], current_line: &mut usize) -> Result<Op, CompilerError> {
+    let mut value_ops = Vec::new();
+    let mut cases = Vec::new();
+    let mut default_ops = None;
+    let current_indent = get_indent(&lines[*current_line]);
+    
+    // Skip the "match:" line
+    *current_line += 1;
+    
+    // First line after match: should be the value block
+    while *current_line < lines.len() {
+        let line = &lines[*current_line];
+        let indent = get_indent(line);
+        
+        if indent <= current_indent {
+            break;
+        }
+        
+        if line.trim() == "value:" {
+            *current_line += 1;
+            let value_indent = indent;
+            
+            // Parse the value block
+            while *current_line < lines.len() {
+                let line = &lines[*current_line];
+                let current_indent = get_indent(line);
+                
+                if current_indent <= value_indent {
+                    break;
+                }
+                
+                let op = parse_line(line)?;
+                if !matches!(op, Op::Nop) {
+                    value_ops.push(op);
+                }
+                *current_line += 1;
+            }
+        } else if line.trim().starts_with("case ") {
+            // Parse case value
+            let case_line = line.trim();
+            let case_value_str = case_line[5..].trim();
+            let case_value = case_value_str.parse::<f64>()
+                .map_err(|_| CompilerError::InvalidCaseValue(case_value_str.to_string()))?;
+            
+            let case_indent = indent;
+            *current_line += 1;
+            
+            let mut case_ops = Vec::new();
+            
+            // Parse case block
+            while *current_line < lines.len() {
+                let line = &lines[*current_line];
+                let current_indent = get_indent(line);
+                
+                if current_indent <= case_indent {
+                    break;
+                }
+                
+                let op = parse_line(line)?;
+                if !matches!(op, Op::Nop) {
+                    case_ops.push(op);
+                }
+                *current_line += 1;
+            }
+            
+            cases.push((case_value, case_ops));
+        } else if line.trim() == "default:" {
+            *current_line += 1;
+            let default_indent = indent;
+            
+            let mut default_block = Vec::new();
+            
+            // Parse default block
+            while *current_line < lines.len() {
+                let line = &lines[*current_line];
+                let current_indent = get_indent(line);
+                
+                if current_indent <= default_indent {
+                    break;
+                }
+                
+                let op = parse_line(line)?;
+                if !matches!(op, Op::Nop) {
+                    default_block.push(op);
+                }
+                *current_line += 1;
+            }
+            
+            default_ops = Some(default_block);
+        } else {
+            let op = parse_line(line)?;
+            if !matches!(op, Op::Nop) {
+                value_ops.push(op);
+            }
+            *current_line += 1;
+        }
+    }
+    
+    if value_ops.is_empty() {
+        return Err(CompilerError::MissingMatchValue);
+    }
+    
+    Ok(Op::Match {
+        value: value_ops,
+        cases,
+        default: default_ops,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::vm::Op;
+
+    #[test]
+    fn test_simple_push_emit() {
+        let source = r#"push 42
+emit "hello world""#;
+        let ops = parse_dsl(source).unwrap();
+        assert_eq!(
+            ops,
+            vec![Op::Push(42.0), Op::Emit("hello world".to_string())]
+        );
+    }
+
+    #[test]
+    fn test_function_definition() {
+        let source = r#"
+def add(x, y):
+    load x
+    load y
+    add
+    return
+"#;
+        let ops = parse_dsl(source).unwrap();
+        match &ops[0] {
+            Op::Def { name, params, body } => {
+                assert_eq!(name, "add");
+                assert_eq!(params, &vec!["x".to_string(), "y".to_string()]);
+                assert_eq!(
+                    body,
+                    &vec![
+                        Op::Load("x".to_string()),
+                        Op::Load("y".to_string()),
+                        Op::Add,
+                        Op::Return
+                    ]
+                );
+            }
+            _ => panic!("Expected function definition"),
+        }
+    }
+
+    #[test]
+    fn test_invalid_instruction() {
+        let result = parse_dsl("foobar");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_emit_without_quotes() {
+        let result = parse_dsl("emit hello");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_if_statement() {
+        let source = r#"
+push 1
+if:
+    push 42
+else:
+    push 24
+"#;
+        let ops = parse_dsl(source).unwrap();
+        assert_eq!(
+            ops,
+            vec![
+                Op::Push(1.0),
+                Op::If {
+                    condition: vec![],
+                    then: vec![Op::Push(42.0)],
+                    else_: Some(vec![Op::Push(24.0)])
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn test_nested_if() {
+        let source = r#"push 1
+if:
+    push 2
+    if:
+        push 3
+    else:
+        push 4
+else:
+    push 5"#;
+        let ops = parse_dsl(source).unwrap();
+        assert_eq!(
+            ops,
+            vec![
+                Op::Push(1.0),
+                Op::If {
+                    condition: vec![],
+                    then: vec![
+                        Op::Push(2.0),
+                        Op::If {
+                            condition: vec![],
+                            then: vec![Op::Push(3.0)],
+                            else_: Some(vec![Op::Push(4.0)])
+                        }
+                    ],
+                    else_: Some(vec![Op::Push(5.0)])
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn test_break_continue() {
+        let source = r#"
+push 0
+store counter
+loop 10:
+    load counter
+    push 1
+    add
+    store counter
+    load counter
+    push 5
+    eq
+    if:
+        break
+        
+push 0
+while:
+    push 1
+    if:
+        continue
+"#;
+        let ops = parse_dsl(source).unwrap();
+        assert_eq!(
+            ops,
+            vec![
+                Op::Push(0.0),
+                Op::Store("counter".to_string()),
+                Op::Loop {
+                    count: 10,
+                    body: vec![
+                        Op::Load("counter".to_string()),
+                        Op::Push(1.0),
+                        Op::Add,
+                        Op::Store("counter".to_string()),
+                        Op::Load("counter".to_string()),
+                        Op::Push(5.0),
+                        Op::Eq,
+                        Op::If {
+                            condition: vec![],
+                            then: vec![Op::Break],
+                            else_: None,
+                        },
+                    ],
+                },
+                Op::Push(0.0),
+                Op::While {
+                    condition: vec![
+                        Op::Push(1.0),
+                    ],
+                    body: vec![
+                        Op::If {
+                            condition: vec![],
+                            then: vec![Op::Continue],
+                            else_: None,
+                        },
+                    ],
+                },
+            ]
+        );
+    }
+    
+    #[test]
+    fn test_emitevent() {
+        let source = r#"emitevent "governance" "proposal accepted""#;
+        let ops = parse_dsl(source).unwrap();
+        assert_eq!(
+            ops,
+            vec![
+                Op::EmitEvent {
+                    category: "governance".to_string(),
+                    message: "proposal accepted".to_string(),
+                },
+            ]
+        );
+    }
+    
+    #[test]
+    fn test_assertequalstack() {
+        let source = r#"
+push 42
+push 42
+push 42
+assertequalstack 3
+"#;
+        let ops = parse_dsl(source).unwrap();
+        assert_eq!(
+            ops,
+            vec![
+                Op::Push(42.0),
+                Op::Push(42.0),
+                Op::Push(42.0),
+                Op::AssertEqualStack { depth: 3 },
+            ]
+        );
+    }
+    
+    #[test]
+    fn test_match_statement() {
+        let source = r#"
+push 2
+match:
+    value:
+        # Empty - will use the value on the stack
+    case 1:
+        push 10
+    case 2:
+        push 20
+    case 3:
+        push 30
+    default:
+        push 0
+"#;
+        let ops = parse_dsl(source).unwrap();
+        
+        match &ops[1] {
+            Op::Match { value, cases, default } => {
+                assert!(value.is_empty()); // Empty value block will use stack
+                assert_eq!(cases.len(), 3);
+                assert_eq!(cases[0], (1.0, vec![Op::Push(10.0)]));
+                assert_eq!(cases[1], (2.0, vec![Op::Push(20.0)]));
+                assert_eq!(cases[2], (3.0, vec![Op::Push(30.0)]));
+                assert_eq!(default.as_ref().unwrap(), &vec![Op::Push(0.0)]);
+            }
+            _ => panic!("Expected match statement"),
+        }
+    }
+    
+    #[test]
+    fn test_match_with_computed_value() {
+        let source = r#"
+match:
+    value:
+        push 1
+        push 2
+        add
+    case 3:
+        push 30
+"#;
+        let ops = parse_dsl(source).unwrap();
+        
+        match &ops[0] {
+            Op::Match { value, cases, default } => {
+                assert_eq!(value, &vec![Op::Push(1.0), Op::Push(2.0), Op::Add]);
+                assert_eq!(cases.len(), 1);
+                assert_eq!(cases[0], (3.0, vec![Op::Push(30.0)]));
+                assert!(default.is_none());
+            }
+            _ => panic!("Expected match statement"),
+        }
+    }
+    
+    #[test]
+    fn test_invalid_match() {
+        // Missing value block
+        let source = r#"
+match:
+    case 1:
+        push 10
+"#;
+        assert!(parse_dsl(source).is_err());
+        
+        // Invalid case value
+        let source = r#"
+match:
+    value:
+        push 1
+    case invalid:
+        push 10
+"#;
+        assert!(parse_dsl(source).is_err());
+    }
+} --- FILE: ./tests/integration.rs ---
+use std::fs;
+use std::path::Path;
+use serde_json;
+use nano_cvm::{Op, VM};
+
+#[test]
+fn test_program_json_runs_correctly() -> Result<(), Box<dyn std::error::Error>> {
+    // Read and parse program.json
+    let program_path = Path::new("program.json");
+    let program_json = fs::read_to_string(program_path)?;
+    let ops: Vec<Op> = serde_json::from_str(&program_json)?;
+
+    // Create and run VM
+    let mut vm = VM::new();
+    vm.execute(&ops)?;
+
+    // Print debug info
+    println!("\nFinal stack:");
+    for (i, &value) in vm.get_stack().iter().enumerate() {
+        println!("  {}: {}", i, value);
+    }
+
+    Ok(())
+}
+
+#[test]
+fn test_governance_operations() -> Result<(), Box<dyn std::error::Error>> {
+    // Create a program that uses all governance-inspired opcodes
+    let ops = vec![
+        // Test Match opcode with value computed on stack
+        Op::Push(1.0),
+        Op::Push(2.0),
+        Op::Add,
+        Op::Match {
+            value: vec![],  // Empty - use value on stack
+            cases: vec![
+                (3.0, vec![Op::Push(42.0)]),  // Should match 3
+                (4.0, vec![Op::Push(24.0)]),
+            ],
+            default: Some(vec![Op::Push(0.0)]),
+        },
+        
+        // Test AssertEqualStack
+        Op::Dup,
+        Op::Dup,
+        Op::AssertEqualStack { depth: 3 },
+        
+        // Test EmitEvent
+        Op::EmitEvent { 
+            category: "test".to_string(), 
+            message: "governance operations test".to_string() 
+        },
+        
+        // Test Break in Loop
+        Op::Push(0.0),
+        Op::Store("counter".to_string()),
+        Op::Loop {
+            count: 10,
+            body: vec![
+                Op::Load("counter".to_string()),
+                Op::Push(1.0),
+                Op::Add,
+                Op::Store("counter".to_string()),
+                Op::Load("counter".to_string()),
+                Op::Push(5.0),
+                Op::Eq,
+                Op::If {
+                    condition: vec![],
+                    then: vec![Op::Break],
+                    else_: None,
+                },
+            ],
+        },
+        Op::Load("counter".to_string()),
+        
+        // Test Continue in While
+        Op::Push(0.0),
+        Op::Store("sum".to_string()),
+        Op::Push(0.0),
+        Op::Store("i".to_string()),
+        Op::While {
+            condition: vec![
+                Op::Load("i".to_string()),
+                Op::Push(5.0),
+                Op::Lt,
+            ],
+            body: vec![
+                Op::Load("i".to_string()),
+                Op::Push(1.0),
+                Op::Add, 
+                Op::Store("i".to_string()),
+                
+                // Skip odd numbers
+                Op::Load("i".to_string()),
+                Op::Push(2.0),
+                Op::Mod,
+                Op::Push(0.0),
+                Op::Eq,
+                Op::Not,
+                Op::If {
+                    condition: vec![],
+                    then: vec![Op::Continue],
+                    else_: None,
+                },
+                
+                // Add even numbers
+                Op::Load("sum".to_string()),
+                Op::Load("i".to_string()),
+                Op::Add,
+                Op::Store("sum".to_string()),
+            ],
+        },
+        Op::Load("sum".to_string()),
+    ];
+
+    // Create and run VM
+    let mut vm = VM::new();
+    vm.execute(&ops)?;
+
+    // Verify results
+    let stack = vm.get_stack();
+    assert_eq!(stack.len(), 3);
+    assert_eq!(stack[0], 42.0);  // Result of Match operation
+    assert_eq!(stack[1], 5.0);   // Result of Break test
+    assert_eq!(stack[2], 6.0);   // Result of Continue test (sum of 2+4)
+
+    // Verify memory
+    assert_eq!(vm.get_memory("counter"), Some(5.0));
+    assert_eq!(vm.get_memory("sum"), Some(6.0));
+    assert_eq!(vm.get_memory("i"), Some(5.0));
+
+    Ok(())
+} --- FILE: ./.cursor/rules/rust.json ---
+{
+    "$schema": "https://cursor.sh/schemas/rules.json",
+    "description": "Cursor automation rules for nano-cvm Rust VM project",
+    "globs": ["**/*.rs"],
+    "rules": [
+      {
+        "when": "saving",
+        "do": [
+          "run: cargo fmt",
+          "run: cargo clippy -- -D warnings"
+        ]
+      },
+      {
+        "when": "before committing",
+        "do": [
+          "run: cargo test",
+          "remind: Are all new features covered by unit tests?",
+          "remind: Is your commit message clear, descriptive, and concise?",
+          "remind: Are you on a feature branch? Avoid committing directly to main."
+        ]
+      },
+      {
+        "when": "creating new files",
+        "do": [
+          "remind: Should this file include module-level docs or comments?",
+          "remind: Should this file contain unit tests if logic is added?",
+          "remind: Is this file used in main, tests, or VM execution path?"
+        ]
+      },
+      {
+        "when": "creating a new branch",
+        "do": [
+          "remind: Use feature/ or fix/ prefix to follow branch naming conventions",
+          "remind: Are you branching off the latest main?"
+        ]
+      },
+      {
+        "when": "modifying: src/vm.rs",
+        "do": [
+          "remind: Did you write or update unit tests for this logic?",
+          "remind: Does this change affect VM state, recursion, or memory?"
+        ]
+      },
+      {
+        "when": "modifying: src/main.rs",
+        "do": [
+          "remind: Should CLI behavior or input/output handling be tested?",
+          "remind: Should user feedback be logged or emitted?"
+        ]
+      },
+      {
+        "when": "modifying: program.json",
+        "do": [
+          "remind: Is this program meant to test a new opcode or feature?",
+          "remind: Should this be added to a test suite or sample directory?"
+        ]
+      }
+    ]
+  }
+  --- FILE: ./.cursor/rules/intent.md ---
+# Cursor AI Rules for `nano-cvm`
+
+## 🦀 Rust Code Standards
+
+- Always write safe, idiomatic Rust
+- Use pattern matching and enums over magic values
+- Prefer small, focused functions and clean match arms
+- Derive `Debug` and `Serialize`/`Deserialize` for data structures where appropriate
+- Avoid unsafe blocks unless explicitly instructed
+
+## 🧠 Virtual Machine Design
+
+- The VM uses a stack-based architecture with memory and control flow
+- All opcodes (`Op` enum) must be serializable with Serde
+- Every new `Op` should include:
+  - Execution logic inside `execute()`
+  - A JSON-compatible serialization format
+  - Unit tests in `#[cfg(test)]` module
+  - Optional usage in `program.json` for demonstration
+
+## 🧪 Testing Expectations
+
+- Every new operation must be tested:
+  - Functionality (`test_opcode_name`)
+  - Edge cases (stack underflow, invalid memory, etc.)
+  - Nested/recursive use if applicable (e.g., loops, conditionals)
+- Do not add new logic without corresponding tests unless explicitly instructed
+
+## 🔄 Workflow Rules
+
+- New logic should generally be added on a feature branch
+- Prompt user to write clean, concise commit messages
+- Encourage testing before merge
+- Use semantic and descriptive branch names (e.g., `feature/emit`, `fix/loop-bug`)
+
+## 📝 JSON DSL Rules
+
+- JSON input programs must match the `Vec<Op>` structure
+- Each opcode should have a clear JSON form (e.g., `{ "Emit": "hello" }`)
+- Maintain simplicity and readability of example JSON programs
+- Nesting (e.g., `IfZero`, `Loop`) should be kept consistent and easy to interpret
+
+## 🗣 Prompt Behavior
+
+- When user asks to add a new `Op`, always include:
+  - Enum addition
+  - Execute match logic
+  - Serde support
+  - Unit tests
+  - JSON usage demo
+- Ask the user if they want CLI, REPL, export, or interactive features when appropriate
+- Be mindful of execution state (stack/memory) when designing new logic
+
+## 📦 Running the Program
+
+To run the program, use the following command:
+
+```bash
+cargo run
+```
+
+This will start the calculation and output the final result.
+--- FILE: ./program.json ---
+[
+  { "Emit": "Defining functions..." },
+  { "Def": {
+    "name": "add",
+    "params": ["x", "y"],
+    "body": [
+      { "Load": "x" },
+      { "Load": "y" },
+      { "Add": null },
+      { "Return": null }
+    ]
+  }},
+  { "Def": {
+    "name": "multiply_and_print",
+    "params": ["x", "y"],
+    "body": [
+      { "Load": "x" },
+      { "Emit": "First number:" },
+      { "Load": "y" },
+      { "Emit": "Second number:" },
+      { "Load": "x" },
+      { "Load": "y" },
+      { "Mul": null },
+      { "Emit": "Product:" },
+      { "Return": null }
+    ]
+  }},
+  { "Def": {
+    "name": "countdown",
+    "params": ["n"],
+    "body": [
+      { "Load": "n" },
+      { "Push": 0.0 },
+      { "Lt": null },
+      {
+        "If": {
+          "condition": [],
+          "then": [
+            { "Push": 0.0 },
+            { "Return": null }
+          ],
+          "else_": [
+            { "Load": "n" },
+            { "Emit": "Current value:" },
+            { "Load": "n" },
+            { "Push": 1.0 },
+            { "Sub": null },
+            { "Store": "n" },
+            { "Load": "n" },
+            { "Push": 0.0 },
+            { "Gt": null },
+            {
+              "If": {
+                "condition": [],
+                "then": [
+                  { "Load": "n" },
+                  { "Call": "countdown" }
+                ],
+                "else_": [
+                  { "Push": 0.0 }
+                ]
+              }
+            },
+            { "Return": null }
+          ]
+        }
+      }
+    ]
+  }},
+  { "Emit": "Testing add with 20 and 22:" },
+  { "Push": 20.0 },
+  { "Push": 22.0 },
+  { "Call": "add" },
+  { "Emit": "Testing multiply_and_print with 6 and 7:" },
+  { "Push": 6.0 },
+  { "Push": 7.0 },
+  { "Call": "multiply_and_print" },
+  { "Emit": "Starting countdown from 5:" },
+  { "Push": 5.0 },
+  { "Call": "countdown" },
+  { "Emit": "Stack manipulation demo:" },
+  { "Push": 1.0 },
+  { "Push": 2.0 },
+  { "Push": 3.0 },
+  { "Dup": null },
+  { "Swap": null },
+  { "Over": null },
+  { "DumpStack": null },
+  { "Emit": "Governance-inspired opcodes demonstration" },
+  
+  { "Def": {
+    "name": "process_votes",
+    "params": ["proposal_id", "support_votes", "against_votes"],
+    "body": [
+      { "Load": "support_votes" },
+      { "Load": "against_votes" },
+      { "Add": null },
+      { "Store": "total_votes" },
+      
+      { "Load": "support_votes" },
+      { "Push": 100.0 },
+      { "Mul": null },
+      { "Load": "total_votes" },
+      { "Div": null },
+      { "Store": "support_percentage" },
+      
+      { "EmitEvent": {
+        "category": "governance",
+        "message": "Votes processed for proposal"
+      }},
+      
+      { "Load": "support_percentage" },
+      { "Match": {
+        "value": [],
+        "cases": [
+          [50.0, [
+            { "EmitEvent": {
+              "category": "governance",
+              "message": "Exact tie - proposal is rejected"
+            }},
+            { "Push": 0.0 },
+            { "Return": null }
+          ]],
+          [66.0, [
+            { "EmitEvent": {
+              "category": "governance",
+              "message": "Exact 66% support - proposal passes threshold"
+            }},
+            { "Push": 1.0 },
+            { "Return": null }
+          ]]
+        ],
+        "default": [
+          { "Load": "support_percentage" },
+          { "Push": 67.0 },
+          { "Lt": null },
+          { "If": {
+            "condition": [],
+            "then": [
+              { "EmitEvent": {
+                "category": "governance",
+                "message": "Proposal rejected - insufficient support"
+              }},
+              { "Push": 0.0 }
+            ],
+            "else_": [
+              { "EmitEvent": {
+                "category": "governance",
+                "message": "Proposal approved with supermajority"
+              }},
+              { "Push": 1.0 }
+            ]
+          }},
+          { "Return": null }
+        ]
+      }}
+    ]
+  }},
+  
+  { "EmitEvent": {
+    "category": "governance",
+    "message": "Starting governance simulation"
+  }},
+  
+  { "Push": 3.0 },
+  { "Store": "proposal_count" },
+  
+  { "Push": 0.0 },
+  { "Store": "current_proposal" },
+  
+  { "While": {
+    "condition": [
+      { "Load": "current_proposal" },
+      { "Load": "proposal_count" },
+      { "Lt": null }
+    ],
+    "body": [
+      { "Load": "current_proposal" },
+      { "Emit": "Processing proposal" },
+      
+      { "Load": "current_proposal" },
+      { "Push": 2.0 },
+      { "Mod": null },
+      { "Push": 0.0 },
+      { "Eq": null },
+      { "If": {
+        "condition": [],
+        "then": [
+          { "EmitEvent": {
+            "category": "governance",
+            "message": "Skipping even-numbered proposal"
+          }},
+          { "Load": "current_proposal" },
+          { "Push": 1.0 },
+          { "Add": null },
+          { "Store": "current_proposal" },
+          { "Continue": null }
+        ],
+        "else_": null
+      }},
+      
+      { "Load": "current_proposal" },
+      { "Push": 1.0 },
+      { "Eq": null },
+      { "If": {
+        "condition": [],
+        "then": [
+          { "EmitEvent": {
+            "category": "governance",
+            "message": "Critical proposal detected"
+          }},
+          { "EmitEvent": {
+            "category": "governance",
+            "message": "Emergency protocol activated"
+          }},
+          { "Break": null }
+        ],
+        "else_": null
+      }},
+      
+      { "Push": 135.0 },
+      { "Store": "support_votes" },
+      
+      { "Push": 65.0 },
+      { "Store": "against_votes" },
+      
+      { "Load": "current_proposal" },
+      { "Load": "support_votes" },
+      { "Load": "against_votes" },
+      { "Call": "process_votes" },
+      
+      { "Dup": null },
+      { "Push": 0.0 },
+      { "Eq": null },
+      { "Push": 1.0 },
+      { "Eq": null },
+      { "Or": null },
+      { "Not": null },
+      { "If": {
+        "condition": [],
+        "then": [
+          { "EmitEvent": {
+            "category": "governance",
+            "message": "CRITICAL ERROR: Invalid vote result"
+          }}
+        ],
+        "else_": null
+      }},
+      
+      { "Load": "current_proposal" },
+      { "Push": 10.0 },
+      { "Mul": null },
+      { "Add": null },
+      { "Store": "result" },
+      
+      { "Load": "current_proposal" },
+      { "Push": 1.0 },
+      { "Add": null },
+      { "Store": "current_proposal" }
+    ]
+  }},
+  
+  { "Push": 1.0 },
+  { "Push": 1.0 },
+  { "Push": 1.0 },
+  { "AssertEqualStack": { "depth": 3 }},
+  
+  { "EmitEvent": {
+    "category": "governance",
+    "message": "Governance simulation completed"
+  }},
+  
+  { "DumpStack": null },
+  { "DumpMemory": null }
+]
+--- FILE: ./Cargo.toml ---
+[package]
+name = "nano-cvm"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+regex = "1.10"
+clap = { version = "4.4", features = ["derive"] }
+thiserror = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+once_cell = "1.19"
+rustyline = "12.0"
+colored = "2.1"
+
+[features]
+default = []
+--- FILE: ./README.md ---
+# Nano-CVM: Cooperative Virtual Machine
+
+A secure, stack-based virtual machine in Rust for the Intercooperative Network (ICN), featuring governance-inspired operations, memory-isolated execution, and a custom DSL parser.
+
+## Features
+
+- **Stack-based architecture**: Simple and secure execution model
+- **Memory isolation**: Each function call has isolated memory space
+- **Custom DSL**: Human-readable text format for programs
+- **JSON serialization**: Machine-readable format for program interchange
+- **Governance-inspired opcodes**: Special operations for cooperative decision processes
+
+## Opcodes
+
+### Core Operations
+- Basic arithmetic: `Add`, `Sub`, `Mul`, `Div`, `Mod`
+- Stack manipulation: `Push`, `Pop`, `Dup`, `Swap`, `Over`
+- Memory: `Store`, `Load`
+- Control flow: `If`, `Loop`, `While`, `Return`
+- Functions: `Def`, `Call`
+
+### Governance-Inspired Operations
+- **Match**: Pattern-style branching for multi-way decisions
+- **Break** and **Continue**: Fine-grained loop control
+- **EmitEvent**: Trigger governance logs with categorized messages
+- **AssertEqualStack**: Validate consensus/coordination by ensuring stack uniformity
+
+## Usage
+
+### Installation
+
+```bash
+cargo build --release
+```
+
+### Running Programs
+
+The VM supports both the DSL text format and JSON serialized programs:
+
+```bash
+# Run a DSL program
+./target/release/nano-cvm --program program.dsl
+
+# Run a JSON program
+./target/release/nano-cvm --program program.json
+
+# Verbose output
+./target/release/nano-cvm --program program.dsl --verbose
+```
+
+## DSL Syntax
+
+```
+# Define a function
+def function_name(param1, param2):
+    # Function body
+    load param1
+    load param2
+    add
+    return
+
+# Invoke Match operation
+match:
+    value:
+        # Instructions that leave a value on the stack
+        push 1
+        push 2
+        add
+    case 3:
+        # Execute if value is 3
+        push 30
+    case 4:
+        # Execute if value is 4
+        push 40
+    default:
+        # Execute if no case matches
+        push 999
+
+# Break and Continue
+while:
+    push 1  # Infinite loop
+    if:
+        # Condition to break
+        break
+    if:
+        # Condition to skip to next iteration
+        continue
+
+# Emit governance events
+emitevent "category" "message"
+
+# Validate stack consensus
+push 42
+push 42
+push 42
+assertequalstack 3  # Verify last 3 values are equal
+```
+
+## Security Features
+
+- No `unsafe` Rust code
+- Memory isolation between function calls
+- Comprehensive stack underflow checks
+- Detailed error messages
+- Limited recursion depth protection
+
+## Example
+
+See `program.dsl` and `program.json` for example programs demonstrating the governance-inspired opcodes.
+
+## License
+
+MIT License 
