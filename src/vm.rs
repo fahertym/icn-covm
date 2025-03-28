@@ -1,13 +1,14 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum Op {
     Push(f64),
     Add,
     Sub,
     Mul,
     Div,
+    Mod,
     Store(String),
     Load(String),
     If { condition: Vec<Op>, then: Vec<Op>, else_: Option<Vec<Op>> },
@@ -180,6 +181,14 @@ impl VM {
                         return Err("Division by zero".to_string());
                     }
                     self.stack.push(a / b);
+                }
+                Op::Mod => {
+                    let b = self.stack.pop().ok_or_else(|| "Stack underflow".to_string())?;
+                    let a = self.stack.pop().ok_or_else(|| "Stack underflow".to_string())?;
+                    if b == 0.0 {
+                        return Err("Modulo by zero".to_string());
+                    }
+                    self.stack.push(a % b);
                 }
                 Op::Lt => {
                     let b = self.stack.pop().ok_or_else(|| "Stack underflow".to_string())?;

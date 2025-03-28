@@ -1,15 +1,17 @@
 mod vm;
+mod compiler;
 use std::fs;
 use std::path::Path;
 use vm::{Op, VM};
+use compiler::parse_dsl;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Read the program file
-    let program_path = Path::new("program.json");
-    let program_json = fs::read_to_string(program_path)?;
+    let program_path = Path::new("program.dsl");
+    let program_source = fs::read_to_string(program_path)?;
 
-    // Parse the JSON into Vec<Op>
-    let ops: Vec<Op> = serde_json::from_str(&program_json)?;
+    // Parse the DSL into Vec<Op>
+    let ops = parse_dsl(&program_source)?;
 
     // Create and execute the VM
     let mut vm = VM::new();
