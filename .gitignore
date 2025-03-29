@@ -19,3 +19,4 @@ target/
 
 # Ignore all files in the .cargo directory
 .cargo/
+full_project_dump.txt
