@@ -2,6 +2,10 @@ mod compiler;
 mod events;
 mod vm;
 mod bytecode;
+
+#[cfg(feature = "typed-values")]
+mod typed;
+
 use bytecode::{BytecodeCompiler, BytecodeInterpreter};
 use clap::{Arg, Command};
 use compiler::{parse_dsl, parse_dsl_with_stdlib, CompilerError};
@@ -12,6 +16,9 @@ use std::process;
 use std::time::Instant;
 use thiserror::Error;
 use vm::{VMError, VM};
+
+#[cfg(feature = "typed-values")]
+use typed::TypedValue;
 
 #[derive(Debug, Error)]
 enum AppError {
@@ -442,7 +449,7 @@ fn run_interactive(verbose: bool, parameters: HashMap<String, String>, use_bytec
                 println!("Stack:");
                 if use_bytecode {
                     let stack = vm.get_stack();
-                    for (i, &value) in stack.iter().enumerate() {
+                    for (i, value) in stack.iter().enumerate() {
                         println!("  {}: {}", i, value);
                     }
                     if stack.is_empty() {
@@ -450,7 +457,7 @@ fn run_interactive(verbose: bool, parameters: HashMap<String, String>, use_bytec
                     }
                 } else {
                     let stack = vm.get_stack();
-                    for (i, &value) in stack.iter().enumerate() {
+                    for (i, value) in stack.iter().enumerate() {
                         println!("  {}: {}", i, value);
                     }
                     if stack.is_empty() {
@@ -512,7 +519,7 @@ fn run_interactive(verbose: bool, parameters: HashMap<String, String>, use_bytec
             }
             _ => {
                 // Parse and execute the input as DSL code
-                match parse_dsl(trimmed) {
+                match parse_dsl_with_stdlib(trimmed) {
                     Ok(ops) => {
                         if use_bytecode {
                             // Compile to bytecode and execute
@@ -527,8 +534,12 @@ fn run_interactive(verbose: bool, parameters: HashMap<String, String>, use_bytec
                             let mut interpreter = BytecodeInterpreter::new(program);
                             
                             // Copy VM state to interpreter
-                            for (key, &value) in vm.get_memory_map() {
-                                interpreter.vm_mut().memory.insert(key.clone(), value);
+                            for (key, value) in vm.get_memory_map() {
+                                #[cfg(not(feature = "typed-values"))]
+                                interpreter.vm_mut().memory.insert(key.clone(), *value);
+                                
+                                #[cfg(feature = "typed-values")]
+                                interpreter.vm_mut().memory.insert(key.clone(), value.clone());
                             }
                             
                             // Execute
@@ -540,6 +551,10 @@ fn run_interactive(verbose: bool, parameters: HashMap<String, String>, use_bytec
                                     
                                     // Show result
                                     if let Some(result) = interpreter.vm().top() {
+                                        #[cfg(not(feature = "typed-values"))]
+                                        println!("Result: {}", result);
+                                        
+                                        #[cfg(feature = "typed-values")]
                                         println!("Result: {}", result);
                                     }
                                 }
@@ -550,6 +565,10 @@ fn run_interactive(verbose: bool, parameters: HashMap<String, String>, use_bytec
                             match vm.execute(&ops) {
                                 Ok(()) => {
                                     if let Some(result) = vm.top() {
+                                        #[cfg(not(feature = "typed-values"))]
+                                        println!("Result: {}", result);
+                                        
+                                        #[cfg(feature = "typed-values")]
                                         println!("Result: {}", result);
                                     }
                                 }

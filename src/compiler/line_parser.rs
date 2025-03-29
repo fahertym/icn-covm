@@ -1,6 +1,10 @@
 use super::{common, CompilerError, SourcePosition};
 use crate::vm::Op;
 
+// Import TypedValue when the feature is enabled
+#[cfg(feature = "typed-values")]
+use crate::typed::TypedValue;
+
 /// Parse a single line of DSL code
 pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> {
     // Skip comments
@@ -16,17 +20,47 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
 
     match command {
         "push" => {
-            let num_str = parts
+            let value_str = parts
                 .next()
                 .ok_or(CompilerError::MissingPushValue(pos.line, pos.column))?;
-            let num = num_str.parse::<f64>().map_err(|_| {
-                CompilerError::InvalidPushValue(
-                    num_str.to_string(),
-                    pos.line,
-                    common::adjusted_position(pos, line, num_str).column,
-                )
-            })?;
-            Ok(Op::Push(num))
+                
+            #[cfg(not(feature = "typed-values"))]
+            {
+                // In non-typed mode, try to parse as f64
+                let num = value_str.parse::<f64>().map_err(|_| {
+                    CompilerError::InvalidPushValue(
+                        value_str.to_string(),
+                        pos.line,
+                        common::adjusted_position(pos, line, value_str).column,
+                    )
+                })?;
+                Ok(Op::Push(num))
+            }
+            
+            #[cfg(feature = "typed-values")]
+            {
+                // In typed mode, support various literal types
+                if value_str == "true" {
+                    Ok(Op::Push(TypedValue::Boolean(true)))
+                } else if value_str == "false" {
+                    Ok(Op::Push(TypedValue::Boolean(false)))
+                } else if value_str == "null" {
+                    Ok(Op::Push(TypedValue::Null))
+                } else if value_str.starts_with('"') && value_str.ends_with('"') {
+                    // String literal (simple version, doesn't handle escapes)
+                    let string_content = value_str[1..value_str.len()-1].to_string();
+                    Ok(Op::Push(TypedValue::String(string_content)))
+                } else {
+                    // Try to parse as number, fall back to string if it fails
+                    match value_str.parse::<f64>() {
+                        Ok(num) => Ok(Op::Push(TypedValue::Number(num))),
+                        Err(_) => {
+                            // If not a valid number format, treat it as a string without quotes
+                            Ok(Op::Push(TypedValue::String(value_str.to_string())))
+                        }
+                    }
+                }
+            }
         }
         "emit" => {
             if let Some(inner) = line.find('"') {
@@ -111,6 +145,45 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
         "dumpstack" => Ok(Op::DumpStack),
         "dumpmemory" => Ok(Op::DumpMemory),
         "dumpstate" => Ok(Op::DumpState), // New debug/introspection opcode
+        "asserttop" => {
+            let val_str = parts
+                .next()
+                .ok_or(CompilerError::MissingAssertValue(pos.line, pos.column))?;
+                
+            #[cfg(not(feature = "typed-values"))]
+            {
+                let val = val_str.parse::<f64>().map_err(|_| {
+                    CompilerError::InvalidAssertValue(
+                        val_str.to_string(),
+                        pos.line,
+                        common::adjusted_position(pos, line, val_str).column,
+                    )
+                })?;
+                Ok(Op::AssertTop(val))
+            }
+            
+            #[cfg(feature = "typed-values")]
+            {
+                // Similar to push, support various literal types for assertions
+                if val_str == "true" {
+                    Ok(Op::AssertTop(TypedValue::Boolean(true)))
+                } else if val_str == "false" {
+                    Ok(Op::AssertTop(TypedValue::Boolean(false)))
+                } else if val_str == "null" {
+                    Ok(Op::AssertTop(TypedValue::Null))
+                } else if val_str.starts_with('"') && val_str.ends_with('"') {
+                    let string_content = val_str[1..val_str.len()-1].to_string();
+                    Ok(Op::AssertTop(TypedValue::String(string_content)))
+                } else {
+                    match val_str.parse::<f64>() {
+                        Ok(num) => Ok(Op::AssertTop(TypedValue::Number(num))),
+                        Err(_) => {
+                            Ok(Op::AssertTop(TypedValue::String(val_str.to_string())))
+                        }
+                    }
+                }
+            }
+        }
         _ => Err(CompilerError::UnknownCommand(
             command.to_string(),
             pos.line,

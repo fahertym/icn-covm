@@ -49,3 +49,9 @@ benchmark:
 run_all: all
 	@echo "Running nano-cvm..."
 	cargo run -- --program program.dsl
+
+
+# Generate full project dump for LLM ingestion
+dump:
+	@echo "Generating full project dump..."
+	@bash scripts/generate_full_dump.sh

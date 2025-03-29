@@ -111,6 +111,14 @@ pub enum CompilerError {
     /// Invalid depth format for assertequalstack operation
     #[error("Invalid depth for assertequalstack: {0} at line {1}, column {2}")]
     InvalidAssertDepth(String, usize, usize),
+    
+    /// Missing value for asserttop operation
+    #[error("Missing value for asserttop at line {0}, column {1}")]
+    MissingAssertValue(usize, usize),
+
+    /// Invalid value format for asserttop operation
+    #[error("Invalid value for asserttop: {0} at line {1}, column {2}")]
+    InvalidAssertValue(String, usize, usize),
 
     /// Insufficient depth for assertequalstack operation
     #[error("Depth for assertequalstack must be at least 2 at line {0}, column {1}")]

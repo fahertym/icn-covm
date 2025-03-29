@@ -108,11 +108,7 @@ mod tests {
         let op = parse_match_block(&source, &mut current_line, pos).unwrap();
 
         match op {
-            Op::Match {
-                value,
-                cases,
-                default,
-            } => {
+            Op::Match { value, cases, default } => {
                 assert_eq!(value.len(), 1);
                 assert_eq!(cases.len(), 2);
                 assert!(default.is_some());
@@ -129,7 +125,6 @@ mod tests {
                 let default_block = default.unwrap();
                 assert_eq!(default_block.len(), 1);
             }
-            _ => panic!("Expected Match operation"),
         }
     }
 
@@ -151,16 +146,11 @@ mod tests {
         let op = parse_match_block(&source, &mut current_line, pos).unwrap();
 
         match op {
-            Op::Match {
-                value,
-                cases,
-                default,
-            } => {
+            Op::Match { value, cases, default } => {
                 assert_eq!(value.len(), 1);
                 assert_eq!(cases.len(), 2);
                 assert!(default.is_none());
             }
-            _ => panic!("Expected Match operation"),
         }
     }
 
@@ -179,10 +169,12 @@ mod tests {
         assert!(result.is_err());
 
         match result.unwrap_err() {
-            CompilerError::MissingMatchValue(line, _) => {
+            CompilerError::SyntaxError(message, SourcePosition { line, column }) => {
+                assert_eq!(message, "Expected value block in match statement");
                 assert_eq!(line, 1);
+                assert_eq!(column, 1);
             }
-            err => panic!("Expected MissingMatchValue error, got {:?}", err),
+            err => panic!("Expected SyntaxError, got {:?}", err),
         }
     }
 }

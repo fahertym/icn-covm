@@ -11,7 +11,9 @@
 //! The bytecode system improves performance for repeated execution by converting
 //! the nested AST representation into a flat, linear sequence of instructions.
 
-use crate::vm::{Op, VMError};
+use crate::compiler::{CompilerError, SourcePosition};
+use crate::events::Event;
+use crate::vm::{Op, VMError, VM};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -54,6 +56,7 @@ pub enum BytecodeOp {
     AssertTop(f64),
     AssertMemory(String, f64),
     AssertEqualStack(usize),
+    LogicalNot,
 }
 
 /// The bytecode program with flattened instructions and a function lookup table
@@ -219,10 +222,18 @@ impl BytecodeCompiler {
                 Op::Store(name) => self.program.instructions.push(BytecodeOp::Store(name.clone())),
                 Op::Load(name) => self.program.instructions.push(BytecodeOp::Load(name.clone())),
                 Op::Pop => self.program.instructions.push(BytecodeOp::Pop),
-                Op::Eq => self.program.instructions.push(BytecodeOp::Eq),
-                Op::Gt => self.program.instructions.push(BytecodeOp::Gt),
-                Op::Lt => self.program.instructions.push(BytecodeOp::Lt),
-                Op::Not => self.program.instructions.push(BytecodeOp::Not),
+                Op::Eq => {
+                    self.program.instructions.push(BytecodeOp::Eq);
+                },
+                Op::Gt => {
+                    self.program.instructions.push(BytecodeOp::Gt);
+                },
+                Op::Lt => {
+                    self.program.instructions.push(BytecodeOp::Lt);
+                },
+                Op::Not => {
+                    self.program.instructions.push(BytecodeOp::LogicalNot);
+                },
                 Op::And => self.program.instructions.push(BytecodeOp::And),
                 Op::Or => self.program.instructions.push(BytecodeOp::Or),
                 Op::Dup => self.program.instructions.push(BytecodeOp::Dup),
@@ -735,29 +746,25 @@ impl BytecodeInterpreter {
             },
             Emit(msg) => {
                 // Use the VM's emit functionality
-                use crate::events::Event;
                 let event = Event::info("vm", msg.clone());
                 event.emit().map_err(|e| VMError::IOError(e.to_string()))?;
             },
             EmitEvent(category, message) => {
-                use crate::events::Event;
-                let event = Event::info(category, message.clone());
-                event.emit().map_err(|e| VMError::IOError(e.to_string()))?;
+                let event = Event::new("info", category.clone(), message.clone());
+                println!("Event: {} - {}", category, message);
+                self.pc += 1;
             },
             DumpStack => {
-                use crate::events::Event;
                 let stack_str = format!("Stack: {:?}", self.vm.stack);
                 let event = Event::info("vm", stack_str);
                 event.emit().map_err(|e| VMError::IOError(e.to_string()))?;
             },
             DumpMemory => {
-                use crate::events::Event;
                 let mem_str = format!("Memory: {:?}", self.vm.memory);
                 let event = Event::info("vm", mem_str);
                 event.emit().map_err(|e| VMError::IOError(e.to_string()))?;
             },
             DumpState => {
-                use crate::events::Event;
                 let state_str = format!(
                     "VM State - PC: {}, Stack: {:?}, Call Stack: {:?}",
                     self.pc, self.vm.stack, self.call_stack
@@ -818,6 +825,10 @@ impl BytecodeInterpreter {
             },
             Nop => {
                 // Do nothing
+            },
+            LogicalNot => {
+                let val = self.vm.pop_one("not")?;
+                self.vm.stack.push(if val == 0.0 { 1.0 } else { 0.0 });
             },
         }
         

@@ -337,16 +337,15 @@ impl TypedVM {
         Ok((b, a))
     }
     
-    /// Execute a list of operations
+    /// Push a number value onto the stack
+    pub fn push_number(&mut self, val: f64) {
+        self.stack.push(TypedValue::Number(val));
+    }
+
+    /// Execute a program with the typed VM
     pub fn execute(&mut self, ops: &[crate::vm::Op]) -> Result<(), crate::vm::VMError> {
-        if self.recursion_depth > 1000 {
-            return Err(crate::vm::VMError::MaxRecursionDepth);
-        }
-        
-        // Implementation will be similar to VM::execute_inner but with typed values
-        // This would be a much longer implementation, but for brevity we'll just
-        // show the high-level structure
-        
+        // Similar implementation to VM::execute
+        // Convert regular Ops to typed operations
         for op in ops {
             match op {
                 crate::vm::Op::Push(val) => {
