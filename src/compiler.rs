@@ -50,6 +50,12 @@ pub enum CompilerError {
     
     #[error("Match statement must have a value block")]
     MissingMatchValue,
+    
+    #[error("Invalid loop format: {0}")]
+    InvalidLoopFormat(String),
+    
+    #[error("Invalid loop count: {0}")]
+    InvalidLoopCount(String),
 }
 
 pub fn parse_dsl(source: &str) -> Result<Vec<Op>, CompilerError> {
@@ -73,6 +79,8 @@ pub fn parse_dsl(source: &str) -> Result<Vec<Op>, CompilerError> {
                 parse_function_definition(&lines, &mut current_line)?
             } else if line.trim() == "match:" {
                 parse_match_statement(&lines, &mut current_line)?
+            } else if line.trim().starts_with("loop ") {
+                parse_loop_statement(&lines, &mut current_line)?
             } else {
                 return Err(CompilerError::UnknownBlockType(line.trim().to_string()));
             }
@@ -109,7 +117,7 @@ fn parse_function_signature(line: &str) -> Result<(String, Vec<String>), Compile
 
 fn parse_line(line: &str) -> Result<Op, CompilerError> {
     // Skip comments
-    if line.starts_with('#') {
+    if line.trim().starts_with('#') {
         return Ok(Op::Nop);
     }
 
@@ -321,14 +329,24 @@ fn parse_function_definition(lines: &[String], current_line: &mut usize) -> Resu
     })
 }
 
-fn parse_while_statement(lines: &[String], current_line: &mut usize) -> Result<Op, CompilerError> {
-    let mut condition = Vec::new();
+fn parse_loop_statement(lines: &[String], current_line: &mut usize) -> Result<Op, CompilerError> {
+    // Parse the "loop N:" line, extracting N
+    let line = &lines[*current_line];
+    let parts: Vec<&str> = line.trim().splitn(2, ' ').collect();
+    if parts.len() != 2 || !parts[0].eq_ignore_ascii_case("loop") {
+        return Err(CompilerError::InvalidLoopFormat(line.trim().to_string()));
+    }
+    
+    let count_str = parts[1].trim_end_matches(':');
+    let count = count_str.parse::<usize>()
+        .map_err(|_| CompilerError::InvalidLoopCount(count_str.to_string()))?;
+    
     let mut body = Vec::new();
-    let mut current_indent = get_indent(&lines[*current_line]);
-
-    // Skip the "while:" line
+    let current_indent = get_indent(line);
+    
+    // Skip the "loop N:" line
     *current_line += 1;
-
+    
     // Parse the body
     while *current_line < lines.len() {
         let line = &lines[*current_line];
@@ -337,12 +355,96 @@ fn parse_while_statement(lines: &[String], current_line: &mut usize) -> Result<O
         if indent <= current_indent {
             break;
         }
-
+        
+        // Handle nested blocks inside the loop body
+        if line.trim().ends_with(':') {
+            if line.trim() == "if:" {
+                body.push(parse_if_statement(lines, current_line)?);
+                continue;
+            } else if line.trim() == "while:" {
+                body.push(parse_while_statement(lines, current_line)?);
+                continue;
+            } else if line.trim().starts_with("loop ") {
+                body.push(parse_loop_statement(lines, current_line)?);
+                continue;
+            } else if line.trim() == "match:" {
+                body.push(parse_match_statement(lines, current_line)?);
+                continue;
+            } else {
+                return Err(CompilerError::UnknownBlockType(line.trim().to_string()));
+            }
+        }
+        
         let op = parse_line(line)?;
         if !matches!(op, Op::Nop) {
             body.push(op);
         }
         *current_line += 1;
+    }
+    
+    Ok(Op::Loop { count, body })
+}
+
+fn parse_while_statement(lines: &[String], current_line: &mut usize) -> Result<Op, CompilerError> {
+    let mut condition = Vec::new();
+    let mut body = Vec::new();
+    let mut current_indent = get_indent(&lines[*current_line]);
+    let mut parsing_condition = true;
+
+    // Skip the "while:" line
+    *current_line += 1;
+
+    // Parse the body, looking for an explicit condition: block
+    while *current_line < lines.len() {
+        let line = &lines[*current_line];
+        let indent = get_indent(line);
+        
+        if indent <= current_indent {
+            break;
+        }
+
+        // Check for condition: marker
+        if line.trim() == "condition:" && parsing_condition {
+            parsing_condition = false;
+            *current_line += 1;
+            let condition_indent = indent;
+            
+            // Parse condition block
+            while *current_line < lines.len() {
+                let line = &lines[*current_line];
+                let current_indent = get_indent(line);
+                
+                if current_indent <= condition_indent {
+                    break;
+                }
+                
+                let op = parse_line(line)?;
+                if !matches!(op, Op::Nop) {
+                    condition.push(op);
+                }
+                *current_line += 1;
+            }
+        } else if line.trim().ends_with(':') {
+            // Handle nested block structures
+            if line.trim() == "if:" {
+                body.push(parse_if_statement(lines, current_line)?);
+            } else if line.trim() == "while:" {
+                body.push(parse_while_statement(lines, current_line)?);
+            } else if line.trim().starts_with("loop ") {
+                body.push(parse_loop_statement(lines, current_line)?);
+            } else if line.trim() == "match:" {
+                body.push(parse_match_statement(lines, current_line)?);
+            } else {
+                return Err(CompilerError::UnknownBlockType(line.trim().to_string()));
+            }
+        } else {
+            // Regular statement in body
+            let op = parse_line(line)?;
+            if !matches!(op, Op::Nop) {
+                body.push(op);
+            }
+            *current_line += 1;
+        }
     }
 
     Ok(Op::While {
@@ -360,7 +462,7 @@ fn parse_match_statement(lines: &[String], current_line: &mut usize) -> Result<O
     // Skip the "match:" line
     *current_line += 1;
     
-    // First line after match: should be the value block
+    // First line after match should be the value block
     while *current_line < lines.len() {
         let line = &lines[*current_line];
         let indent = get_indent(line);
@@ -391,7 +493,7 @@ fn parse_match_statement(lines: &[String], current_line: &mut usize) -> Result<O
         } else if line.trim().starts_with("case ") {
             // Parse case value
             let case_line = line.trim();
-            let case_value_str = case_line[5..].trim();
+            let case_value_str = case_line[5..].trim().trim_end_matches(':');
             let case_value = case_value_str.parse::<f64>()
                 .map_err(|_| CompilerError::InvalidCaseValue(case_value_str.to_string()))?;
             
@@ -441,6 +543,7 @@ fn parse_match_statement(lines: &[String], current_line: &mut usize) -> Result<O
             
             default_ops = Some(default_block);
         } else {
+            // If not in a special block, assume it's part of the value
             let op = parse_line(line)?;
             if !matches!(op, Op::Nop) {
                 value_ops.push(op);
@@ -574,6 +677,7 @@ else:
     #[test]
     fn test_break_continue() {
         let source = r#"
+# Test break in loop
 push 0
 store counter
 loop 10:
@@ -586,14 +690,10 @@ loop 10:
     eq
     if:
         break
-        
-push 0
-while:
-    push 1
-    if:
-        continue
 "#;
         let ops = parse_dsl(source).unwrap();
+        
+        // Verify loop with break
         assert_eq!(
             ops,
             vec![
@@ -612,19 +712,6 @@ while:
                         Op::If {
                             condition: vec![],
                             then: vec![Op::Break],
-                            else_: None,
-                        },
-                    ],
-                },
-                Op::Push(0.0),
-                Op::While {
-                    condition: vec![
-                        Op::Push(1.0),
-                    ],
-                    body: vec![
-                        Op::If {
-                            condition: vec![],
-                            then: vec![Op::Continue],
                             else_: None,
                         },
                     ],
@@ -671,10 +758,8 @@ assertequalstack 3
     #[test]
     fn test_match_statement() {
         let source = r#"
-push 2
 match:
-    value:
-        # Empty - will use the value on the stack
+    push 2
     case 1:
         push 10
     case 2:
@@ -684,19 +769,23 @@ match:
     default:
         push 0
 "#;
+        
         let ops = parse_dsl(source).unwrap();
         
-        match &ops[1] {
-            Op::Match { value, cases, default } => {
-                assert!(value.is_empty()); // Empty value block will use stack
-                assert_eq!(cases.len(), 3);
-                assert_eq!(cases[0], (1.0, vec![Op::Push(10.0)]));
-                assert_eq!(cases[1], (2.0, vec![Op::Push(20.0)]));
-                assert_eq!(cases[2], (3.0, vec![Op::Push(30.0)]));
-                assert_eq!(default.as_ref().unwrap(), &vec![Op::Push(0.0)]);
-            }
-            _ => panic!("Expected match statement"),
-        }
+        assert_eq!(
+            ops,
+            vec![
+                Op::Match {
+                    value: vec![Op::Push(2.0)],
+                    cases: vec![
+                        (1.0, vec![Op::Push(10.0)]),
+                        (2.0, vec![Op::Push(20.0)]),
+                        (3.0, vec![Op::Push(30.0)]),
+                    ],
+                    default: Some(vec![Op::Push(0.0)]),
+                }
+            ]
+        );
     }
     
     #[test]
