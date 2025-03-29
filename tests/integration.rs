@@ -1,5 +1,4 @@
 use nano_cvm::{Op, VM};
-use serde_json;
 use std::fs;
 use std::path::Path;
 

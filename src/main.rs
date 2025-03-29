@@ -3,15 +3,12 @@ mod events;
 mod vm;
 use clap::{Arg, Command};
 use compiler::{parse_dsl, parse_dsl_with_stdlib, CompilerError};
-use events::Event;
-use serde_json;
 use std::collections::HashMap;
-use std::error::Error;
 use std::fs;
 use std::path::Path;
 use std::process;
 use thiserror::Error;
-use vm::{Op, VMError, VM};
+use vm::{VMError, VM};
 
 #[derive(Debug, Error)]
 enum AppError {

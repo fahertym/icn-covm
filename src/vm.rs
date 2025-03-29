@@ -171,7 +171,7 @@ impl VM {
                     // Also log this for debugging
                     let event = Event::info(
                         "params",
-                        &format!(
+                        format!(
                             "Parameter '{}' is not numeric, storing length {}",
                             key,
                             value.len()
@@ -364,16 +364,16 @@ impl VM {
                     self.stack.push(value);
                 }
                 Op::DumpStack => {
-                    let event = Event::info("stack", &format!("{:?}", self.stack));
+                    let event = Event::info("stack", format!("{:?}", self.stack));
                     event.emit().map_err(|e| VMError::IOError(e.to_string()))?;
                 }
                 Op::DumpMemory => {
-                    let event = Event::info("memory", &format!("{:?}", self.memory));
+                    let event = Event::info("memory", format!("{:?}", self.memory));
                     event.emit().map_err(|e| VMError::IOError(e.to_string()))?;
                 }
                 Op::DumpState => {
                     // Output the full state of the VM (stack, memory, and more)
-                    let event = Event::info("vm_state", &format!(
+                    let event = Event::info("vm_state", format!(
                         "Stack: {:?}\nMemory: {:?}\nFunctions: {}\nCall Frames: {}\nRecursion Depth: {}", 
                         self.stack,
                         self.memory,
@@ -422,8 +422,8 @@ impl VM {
                         if self.stack.is_empty() {
                             // Emit an event indicating the missing condition
                             let event = Event::info(
-                                "while_loop", 
-                                "Skipping while loop due to empty stack condition"
+                                "while_loop",
+                                "Skipping while loop due to empty stack condition",
                             );
                             event.emit().map_err(|e| VMError::IOError(e.to_string()))?;
                             break;
@@ -691,11 +691,15 @@ impl VM {
     }
 }
 
+impl Default for VM {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::{self, Write};
-    use std::sync::Mutex;
 
     #[test]
     fn test_basic_arithmetic() {

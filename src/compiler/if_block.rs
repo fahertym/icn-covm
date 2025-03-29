@@ -7,8 +7,7 @@ pub fn parse_if_block(
     current_line: &mut usize,
     pos: SourcePosition,
 ) -> Result<Op, CompilerError> {
-    let mut condition = Vec::new();
-    let mut then_block = Vec::new();
+    let condition = Vec::new();
     let mut else_block = None;
     let current_indent = common::get_indent(&lines[*current_line]);
 
@@ -16,7 +15,7 @@ pub fn parse_if_block(
     *current_line += 1;
 
     // Parse the then block
-    then_block = line_parser::parse_block(lines, current_line, current_indent, pos)?;
+    let then_block = line_parser::parse_block(lines, current_line, current_indent, pos)?;
 
     // Check for else block
     if *current_line < lines.len() && lines[*current_line].trim() == "else:" {
