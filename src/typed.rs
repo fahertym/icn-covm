@@ -349,7 +349,11 @@ impl TypedVM {
         for op in ops {
             match op {
                 crate::vm::Op::Push(val) => {
+                    #[cfg(not(feature = "typed-values"))]
                     self.stack.push(TypedValue::Number(*val));
+                    
+                    #[cfg(feature = "typed-values")]
+                    self.stack.push(val.clone());
                 }
                 crate::vm::Op::Add => {
                     let (b, a) = self.pop_two("add")?;

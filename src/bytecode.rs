@@ -20,7 +20,11 @@ use std::collections::HashMap;
 /// A more compact, serializable representation of VM operations for efficient execution
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum BytecodeOp {
+    #[cfg(not(feature = "typed-values"))]
     Push(f64),
+    #[cfg(feature = "typed-values")]
+    Push(crate::typed::TypedValue),
+    
     Add,
     Sub,
     Mul,
@@ -53,8 +57,17 @@ pub enum BytecodeOp {
     DumpStack,
     DumpMemory,
     DumpState,
+    
+    #[cfg(not(feature = "typed-values"))]
     AssertTop(f64),
+    #[cfg(feature = "typed-values")]
+    AssertTop(crate::typed::TypedValue),
+    
+    #[cfg(not(feature = "typed-values"))]
     AssertMemory(String, f64),
+    #[cfg(feature = "typed-values")]
+    AssertMemory(String, crate::typed::TypedValue),
+    
     AssertEqualStack(usize),
     LogicalNot,
 }
@@ -125,6 +138,7 @@ impl BytecodeProgram {
 /// - Building a function table for function calls
 pub struct BytecodeCompiler {
     program: BytecodeProgram,
+    loop_stack: Vec<(usize, usize)>, // Stack of (loop_start, loop_end) for break/continue
 }
 
 impl BytecodeCompiler {
@@ -136,6 +150,7 @@ impl BytecodeCompiler {
     pub fn new() -> Self {
         Self {
             program: BytecodeProgram::new(),
+            loop_stack: Vec::new(),
         }
     }
     
@@ -209,19 +224,218 @@ impl BytecodeCompiler {
         self.program.instructions.truncate(current_pos);
     }
     
-    /// Compile a vector of AST operations
+    /// Compile operations into bytecode
     fn compile_ops(&mut self, ops: &[Op]) {
         for op in ops {
             match op {
-                Op::Push(val) => self.program.instructions.push(BytecodeOp::Push(*val)),
-                Op::Add => self.program.instructions.push(BytecodeOp::Add),
-                Op::Sub => self.program.instructions.push(BytecodeOp::Sub),
-                Op::Mul => self.program.instructions.push(BytecodeOp::Mul),
-                Op::Div => self.program.instructions.push(BytecodeOp::Div),
-                Op::Mod => self.program.instructions.push(BytecodeOp::Mod),
-                Op::Store(name) => self.program.instructions.push(BytecodeOp::Store(name.clone())),
-                Op::Load(name) => self.program.instructions.push(BytecodeOp::Load(name.clone())),
-                Op::Pop => self.program.instructions.push(BytecodeOp::Pop),
+                #[cfg(not(feature = "typed-values"))]
+                Op::Push(val) => {
+                    self.program.instructions.push(BytecodeOp::Push(*val));
+                },
+                
+                #[cfg(feature = "typed-values")]
+                Op::Push(val) => {
+                    self.program.instructions.push(BytecodeOp::Push(val.clone()));
+                },
+                
+                Op::Add => {
+                    self.program.instructions.push(BytecodeOp::Add);
+                },
+                Op::Sub => {
+                    self.program.instructions.push(BytecodeOp::Sub);
+                },
+                Op::Mul => {
+                    self.program.instructions.push(BytecodeOp::Mul);
+                },
+                Op::Div => {
+                    self.program.instructions.push(BytecodeOp::Div);
+                },
+                Op::Mod => {
+                    self.program.instructions.push(BytecodeOp::Mod);
+                },
+                Op::Store(name) => {
+                    self.program.instructions.push(BytecodeOp::Store(name.clone()));
+                },
+                Op::Load(name) => {
+                    self.program.instructions.push(BytecodeOp::Load(name.clone()));
+                },
+                Op::If {
+                    condition,
+                    then,
+                    else_,
+                } => {
+                    // Compile condition
+                    self.compile_ops(condition);
+                    
+                    // Add a conditional jump to skip the 'then' block if condition is zero
+                    let jump_if_zero_pos = self.program.instructions.len();
+                    self.program.instructions.push(BytecodeOp::JumpIfZero(0)); // Placeholder
+                    
+                    // Compile 'then' block
+                    self.compile_ops(then);
+                    
+                    if let Some(else_block) = else_ {
+                        // If we have an 'else' block, add an unconditional jump to skip it
+                        // after executing the 'then' block
+                        let jump_pos = self.program.instructions.len();
+                        self.program.instructions.push(BytecodeOp::Jump(0)); // Placeholder
+                        
+                        // Update the conditional jump to point after the 'then' block
+                        let then_end = self.program.instructions.len();
+                        if let BytecodeOp::JumpIfZero(ref mut addr) = self.program.instructions[jump_if_zero_pos] {
+                            *addr = then_end;
+                        }
+                        
+                        // Compile 'else' block
+                        self.compile_ops(else_block);
+                        
+                        // Update the unconditional jump to point after the 'else' block
+                        let else_end = self.program.instructions.len();
+                        if let BytecodeOp::Jump(ref mut addr) = self.program.instructions[jump_pos] {
+                            *addr = else_end;
+                        }
+                    } else {
+                        // No 'else' block, update the conditional jump to point after the 'then' block
+                        let then_end = self.program.instructions.len();
+                        if let BytecodeOp::JumpIfZero(ref mut addr) = self.program.instructions[jump_if_zero_pos] {
+                            *addr = then_end;
+                        }
+                    }
+                },
+                Op::Loop { count, body } => {
+                    // Add 'count' to the stack
+                    #[cfg(not(feature = "typed-values"))]
+                    self.program.instructions.push(BytecodeOp::Push(*count as f64));
+                    
+                    #[cfg(feature = "typed-values")]
+                    self.program.instructions.push(BytecodeOp::Push(crate::typed::TypedValue::Number(*count as f64)));
+                    
+                    // Store it in a temporary counter variable
+                    self.program.instructions.push(BytecodeOp::Store("_loop_counter".to_string()));
+                    
+                    // Mark the start of the loop
+                    let loop_start = self.program.instructions.len();
+                    
+                    // Load the counter
+                    self.program.instructions.push(BytecodeOp::Load("_loop_counter".to_string()));
+                    
+                    // Check if it's zero
+                    #[cfg(not(feature = "typed-values"))]
+                    self.program.instructions.push(BytecodeOp::Push(0.0));
+                    
+                    #[cfg(feature = "typed-values")]
+                    self.program.instructions.push(BytecodeOp::Push(crate::typed::TypedValue::Number(0.0)));
+                    
+                    self.program.instructions.push(BytecodeOp::Eq);
+                    
+                    // If it's zero, break out of the loop
+                    let exit_jump_pos = self.program.instructions.len();
+                    self.program.instructions.push(BytecodeOp::JumpIfZero(0)); // Placeholder
+                    
+                    // Otherwise, execute the body
+                    self.program.instructions.push(BytecodeOp::Pop); // Remove the comparison result
+                    
+                    // Set up loop break/continue context
+                    let loop_context = (loop_start, 0); // End position will be filled in later
+                    self.loop_stack.push(loop_context);
+                    
+                    // Compile the body
+                    self.compile_ops(body);
+                    
+                    // Decrement the counter
+                    self.program.instructions.push(BytecodeOp::Load("_loop_counter".to_string()));
+                    
+                    #[cfg(not(feature = "typed-values"))]
+                    self.program.instructions.push(BytecodeOp::Push(1.0));
+                    
+                    #[cfg(feature = "typed-values")]
+                    self.program.instructions.push(BytecodeOp::Push(crate::typed::TypedValue::Number(1.0)));
+                    
+                    self.program.instructions.push(BytecodeOp::Sub);
+                    self.program.instructions.push(BytecodeOp::Store("_loop_counter".to_string()));
+                    
+                    // Jump back to the start of the loop
+                    self.program.instructions.push(BytecodeOp::Jump(loop_start));
+                    
+                    // Update the exit jump position
+                    let loop_end = self.program.instructions.len();
+                    if let BytecodeOp::JumpIfZero(ref mut addr) = self.program.instructions[exit_jump_pos] {
+                        *addr = loop_end;
+                    }
+                    
+                    // Update the loop context end position and pop it
+                    if let Some((_, ref mut end)) = self.loop_stack.last_mut() {
+                        *end = self.program.instructions.len();
+                    }
+                    self.loop_stack.pop();
+                },
+                Op::While {
+                    condition,
+                    body,
+                } => {
+                    // Mark the start of the loop
+                    let loop_start = self.program.instructions.len();
+                    
+                    // Compile the condition
+                    self.compile_ops(condition);
+                    
+                    // If condition is zero, break out of the loop
+                    let exit_jump_pos = self.program.instructions.len();
+                    self.program.instructions.push(BytecodeOp::JumpIfZero(0)); // Placeholder
+                    
+                    // Set up loop break/continue context
+                    let loop_context = (loop_start, 0); // End position will be filled in later
+                    self.loop_stack.push(loop_context);
+                    
+                    // Compile the body
+                    self.compile_ops(body);
+                    
+                    // Jump back to re-evaluate the condition
+                    self.program.instructions.push(BytecodeOp::Jump(loop_start));
+                    
+                    // Update the exit jump position
+                    let loop_end = self.program.instructions.len();
+                    if let BytecodeOp::JumpIfZero(ref mut addr) = self.program.instructions[exit_jump_pos] {
+                        *addr = loop_end;
+                    }
+                    
+                    // Update the loop context end position and pop it
+                    if let Some((_, ref mut end)) = self.loop_stack.last_mut() {
+                        *end = self.program.instructions.len();
+                    }
+                    self.loop_stack.pop();
+                },
+                Op::Emit(msg) => {
+                    self.program.instructions.push(BytecodeOp::Emit(msg.clone()));
+                },
+                Op::Negate => {
+                    self.program.instructions.push(BytecodeOp::Negate);
+                },
+                #[cfg(not(feature = "typed-values"))]
+                Op::AssertTop(expected) => {
+                    self.program.instructions.push(BytecodeOp::AssertTop(*expected));
+                },
+                #[cfg(feature = "typed-values")]
+                Op::AssertTop(expected) => {
+                    self.program.instructions.push(BytecodeOp::AssertTop(expected.clone()));
+                },
+                Op::DumpStack => {
+                    self.program.instructions.push(BytecodeOp::DumpStack);
+                },
+                Op::DumpMemory => {
+                    self.program.instructions.push(BytecodeOp::DumpMemory);
+                },
+                #[cfg(not(feature = "typed-values"))]
+                Op::AssertMemory { key, expected } => {
+                    self.program.instructions.push(BytecodeOp::AssertMemory(key.clone(), *expected));
+                },
+                #[cfg(feature = "typed-values")]
+                Op::AssertMemory { key, expected } => {
+                    self.program.instructions.push(BytecodeOp::AssertMemory(key.clone(), expected.clone()));
+                },
+                Op::Pop => {
+                    self.program.instructions.push(BytecodeOp::Pop);
+                },
                 Op::Eq => {
                     self.program.instructions.push(BytecodeOp::Eq);
                 },
@@ -232,208 +446,176 @@ impl BytecodeCompiler {
                     self.program.instructions.push(BytecodeOp::Lt);
                 },
                 Op::Not => {
-                    self.program.instructions.push(BytecodeOp::LogicalNot);
+                    self.program.instructions.push(BytecodeOp::Not);
                 },
-                Op::And => self.program.instructions.push(BytecodeOp::And),
-                Op::Or => self.program.instructions.push(BytecodeOp::Or),
-                Op::Dup => self.program.instructions.push(BytecodeOp::Dup),
-                Op::Swap => self.program.instructions.push(BytecodeOp::Swap),
-                Op::Over => self.program.instructions.push(BytecodeOp::Over),
-                Op::Negate => self.program.instructions.push(BytecodeOp::Negate),
-                Op::Call(name) => self.program.instructions.push(BytecodeOp::Call(name.clone())),
-                Op::Return => self.program.instructions.push(BytecodeOp::Return),
-                Op::Nop => self.program.instructions.push(BytecodeOp::Nop),
-                Op::Break => self.program.instructions.push(BytecodeOp::Break),
-                Op::Continue => self.program.instructions.push(BytecodeOp::Continue),
-                Op::Emit(msg) => self.program.instructions.push(BytecodeOp::Emit(msg.clone())),
-                Op::EmitEvent { category, message } => self.program.instructions.push(
-                    BytecodeOp::EmitEvent(category.clone(), message.clone()),
-                ),
-                Op::DumpStack => self.program.instructions.push(BytecodeOp::DumpStack),
-                Op::DumpMemory => self.program.instructions.push(BytecodeOp::DumpMemory),
-                Op::DumpState => self.program.instructions.push(BytecodeOp::DumpState),
-                Op::AssertTop(val) => self.program.instructions.push(BytecodeOp::AssertTop(*val)),
-                Op::AssertMemory { key, expected } => self.program.instructions.push(
-                    BytecodeOp::AssertMemory(key.clone(), *expected),
-                ),
-                Op::AssertEqualStack { depth } => {
-                    self.program.instructions.push(BytecodeOp::AssertEqualStack(*depth))
+                Op::And => {
+                    self.program.instructions.push(BytecodeOp::And);
                 },
-                
-                // Handle more complex operations
-                Op::If { condition, then, else_ } => {
-                    self.compile_if(condition, then, else_);
+                Op::Or => {
+                    self.program.instructions.push(BytecodeOp::Or);
                 },
-                Op::While { condition, body } => {
-                    self.compile_while(condition, body);
+                Op::Dup => {
+                    self.program.instructions.push(BytecodeOp::Dup);
                 },
-                Op::Loop { count, body } => {
-                    self.compile_loop(*count, body);
+                Op::Swap => {
+                    self.program.instructions.push(BytecodeOp::Swap);
+                },
+                Op::Over => {
+                    self.program.instructions.push(BytecodeOp::Over);
                 },
                 Op::Def { name, params, body } => {
                     self.compile_def(name, params, body);
                 },
-                Op::Match { value, cases, default } => {
-                    self.compile_match(value, cases, default);
+                Op::Call(name) => {
+                    // Call the function directly
+                    self.program.instructions.push(BytecodeOp::Call(name.clone()));
                 },
+                Op::Return => {
+                    self.program.instructions.push(BytecodeOp::Return);
+                },
+                #[cfg(feature = "typed-values")]
+                Op::Match { value, cases, default } => {
+                    self.compile_match_typed(&value, cases, default);
+                },
+                #[cfg(not(feature = "typed-values"))]
+                Op::Match { value, cases, default } => {
+                    // Compile the expression to match on
+                    self.compile_ops(value);
+                    
+                    // Keep track of all the exit jumps
+                    let mut exit_jumps = Vec::new();
+                    
+                    // Compile each case
+                    for (case_val, case_body) in cases {
+                        // Duplicate the expression value for comparison
+                        self.program.instructions.push(BytecodeOp::Dup);
+                        
+                        // Push the case value
+                        self.program.instructions.push(BytecodeOp::Push(*case_val));
+                        
+                        // Compare them
+                        self.program.instructions.push(BytecodeOp::Eq);
+                        
+                        // If they're not equal, skip this case
+                        let skip_jump_pos = self.program.instructions.len();
+                        self.program.instructions.push(BytecodeOp::JumpIfZero(0)); // Placeholder
+                        
+                        // Remove the comparison result and the original value
+                        self.program.instructions.push(BytecodeOp::Pop);
+                        self.program.instructions.push(BytecodeOp::Pop);
+                        
+                        // Compile the case body
+                        self.compile_ops(case_body);
+                        
+                        // Jump to the end of the match statement
+                        let exit_jump_pos = self.program.instructions.len();
+                        self.program.instructions.push(BytecodeOp::Jump(0)); // Placeholder
+                        exit_jumps.push(exit_jump_pos);
+                        
+                        // Update the skip jump to point after this case
+                        let after_case = self.program.instructions.len();
+                        if let BytecodeOp::JumpIfZero(ref mut addr) = self.program.instructions[skip_jump_pos] {
+                            *addr = after_case;
+                        }
+                    }
+                    
+                    // For the default case
+                    if let Some(default_body) = default {
+                        // Remove the original value since we don't need it anymore
+                        self.program.instructions.push(BytecodeOp::Pop);
+                        
+                        // Compile the default body
+                        self.compile_ops(default_body);
+                    } else {
+                        // No default case, just remove the original value
+                        self.program.instructions.push(BytecodeOp::Pop);
+                    }
+                    
+                    // Update all the exit jumps to point after the match statement
+                    let after_match_pos = self.program.instructions.len();
+                    for exit_jump_pos in exit_jumps {
+                        if let BytecodeOp::Jump(ref mut addr) = self.program.instructions[exit_jump_pos] {
+                            *addr = after_match_pos;
+                        }
+                    }
+                },
+                Op::Break => {
+                    self.program.instructions.push(BytecodeOp::Break);
+                },
+                Op::Continue => {
+                    self.program.instructions.push(BytecodeOp::Continue);
+                },
+                _ => {
+                    // Handle other operations as they are added to the VM
+                }
             }
         }
     }
     
-    /// Compile an if-else statement
-    fn compile_if(&mut self, condition: &[Op], then_branch: &[Op], else_branch: &Option<Vec<Op>>) {
-        // Compile the condition code
-        self.compile_ops(condition);
+    #[cfg(feature = "typed-values")]
+    /// Compile a match statement with TypedValue
+    fn compile_match_typed(&mut self, value: &[Op], cases: &[(crate::typed::TypedValue, Vec<Op>)], default: &Option<Vec<Op>>) {
+        use crate::typed::TypedValue;
         
-        // Add a conditional jump
-        let jump_if_zero_pos = self.program.instructions.len();
-        self.program.instructions.push(BytecodeOp::JumpIfZero(0)); // Placeholder
+        // Compile the expression to match on
+        self.compile_ops(value);
         
-        // Compile the 'then' branch
-        self.compile_ops(then_branch);
+        // Keep track of all the exit jumps
+        let mut exit_jumps = Vec::new();
         
-        if let Some(else_ops) = else_branch {
-            // If there's an else branch, add a jump to skip over it after the 'then' branch
-            let jump_pos = self.program.instructions.len();
-            self.program.instructions.push(BytecodeOp::Jump(0)); // Placeholder
+        // Store the match value in a temporary variable for multiple comparisons
+        self.program.instructions.push(BytecodeOp::Dup);
+        self.program.instructions.push(BytecodeOp::Store("_match_value".to_string()));
+        
+        // Compile each case
+        for (case_val, case_body) in cases {
+            // Load the expression value for comparison
+            self.program.instructions.push(BytecodeOp::Load("_match_value".to_string()));
             
-            // Update the conditional jump to point to the 'else' branch
-            let else_pos = self.program.instructions.len();
-            if let BytecodeOp::JumpIfZero(ref mut addr) = self.program.instructions[jump_if_zero_pos] {
-                *addr = else_pos;
-            }
+            // Push the case value
+            self.program.instructions.push(BytecodeOp::Push(case_val.clone()));
             
-            // Compile the 'else' branch
-            self.compile_ops(else_ops);
+            // Compare them for equality
+            self.program.instructions.push(BytecodeOp::Eq);
             
-            // Update the jump after 'then' to point after the 'else' branch
-            let after_else_pos = self.program.instructions.len();
-            if let BytecodeOp::Jump(ref mut addr) = self.program.instructions[jump_pos] {
-                *addr = after_else_pos;
-            }
-        } else {
-            // If there's no else branch, update the conditional jump to skip the 'then' branch
-            let after_then_pos = self.program.instructions.len();
-            if let BytecodeOp::JumpIfZero(ref mut addr) = self.program.instructions[jump_if_zero_pos] {
-                *addr = after_then_pos;
-            }
-        }
-    }
-    
-    /// Compile a while loop
-    fn compile_while(&mut self, condition: &[Op], body: &[Op]) {
-        // Record the start of the loop
-        let loop_start = self.program.instructions.len();
-        
-        // Compile the condition
-        self.compile_ops(condition);
-        
-        // Add a conditional jump to exit the loop
-        let exit_jump_pos = self.program.instructions.len();
-        self.program.instructions.push(BytecodeOp::JumpIfZero(0)); // Placeholder
-        
-        // Compile the loop body
-        self.compile_ops(body);
-        
-        // Add an unconditional jump back to the start of the loop
-        self.program.instructions.push(BytecodeOp::Jump(loop_start));
-        
-        // Update the exit jump position
-        let after_loop_pos = self.program.instructions.len();
-        if let BytecodeOp::JumpIfZero(ref mut addr) = self.program.instructions[exit_jump_pos] {
-            *addr = after_loop_pos;
-        }
-    }
-    
-    /// Compile a counted loop
-    fn compile_loop(&mut self, count: usize, body: &[Op]) {
-        // For very small loops, unroll completely
-        if count <= 5 {
-            for _ in 0..count {
-                self.compile_ops(body);
-            }
-            return;
-        }
-        
-        // For the specific benchmark case - optimize 1000 iterations even more
-        if count == 1000 && body.len() <= 5 {
-            // Specialized approach for small body loops with many iterations
-            // Push the loop counter (kept on stack instead of memory for speed)
-            self.program.instructions.push(BytecodeOp::Push(count as f64));
-            
-            // Loop start
-            let loop_start = self.program.instructions.len();
-            
-            // Duplicate counter for check (leaves one copy on stack)
-            self.program.instructions.push(BytecodeOp::Dup);
-            
-            // Check if counter > 0
-            self.program.instructions.push(BytecodeOp::Push(0.0));
-            self.program.instructions.push(BytecodeOp::Gt);
-            
-            // Exit loop if counter <= 0
-            let exit_jump_pos = self.program.instructions.len();
+            // If they're not equal, skip this case
+            let skip_jump_pos = self.program.instructions.len();
             self.program.instructions.push(BytecodeOp::JumpIfZero(0)); // Placeholder
             
-            // Compile loop body
-            self.compile_ops(body);
-            
-            // Decrement counter that's still on stack
-            self.program.instructions.push(BytecodeOp::Push(1.0));
-            self.program.instructions.push(BytecodeOp::Sub);
-            
-            // Jump back to loop start
-            self.program.instructions.push(BytecodeOp::Jump(loop_start));
-            
-            // Update exit jump position
-            let after_loop_pos = self.program.instructions.len();
-            if let BytecodeOp::JumpIfZero(ref mut addr) = self.program.instructions[exit_jump_pos] {
-                *addr = after_loop_pos;
-            }
-            
-            // Pop the counter from stack at end (will be 0)
+            // Remove the comparison result
             self.program.instructions.push(BytecodeOp::Pop);
             
-            return;
+            // Compile the case body
+            self.compile_ops(case_body);
+            
+            // Jump to the end of the match statement
+            let exit_jump_pos = self.program.instructions.len();
+            self.program.instructions.push(BytecodeOp::Jump(0)); // Placeholder
+            exit_jumps.push(exit_jump_pos);
+            
+            // Update the skip jump to point after this case
+            let after_case = self.program.instructions.len();
+            if let BytecodeOp::JumpIfZero(ref mut addr) = self.program.instructions[skip_jump_pos] {
+                *addr = after_case;
+            }
         }
         
-        // Standard implementation for other loops
-        // Push the loop counter
-        self.program.instructions.push(BytecodeOp::Push(count as f64));
-        
-        // Store the counter in a temporary variable
-        let counter_var = format!("__loop_counter_{}", self.program.instructions.len());
-        self.program.instructions.push(BytecodeOp::Store(counter_var.clone()));
-        
-        // Record the start of the loop
-        let loop_start = self.program.instructions.len();
-        
-        // Load and check the counter
-        self.program.instructions.push(BytecodeOp::Load(counter_var.clone()));
-        self.program.instructions.push(BytecodeOp::Push(0.0));
-        self.program.instructions.push(BytecodeOp::Gt);
-        
-        // Exit the loop if counter <= 0
-        let exit_jump_pos = self.program.instructions.len();
-        self.program.instructions.push(BytecodeOp::JumpIfZero(0)); // Placeholder
-        
-        // Compile the loop body
-        self.compile_ops(body);
-        
-        // Decrement the counter
-        self.program.instructions.push(BytecodeOp::Load(counter_var.clone()));
-        self.program.instructions.push(BytecodeOp::Push(1.0));
-        self.program.instructions.push(BytecodeOp::Sub);
-        self.program.instructions.push(BytecodeOp::Store(counter_var));
-        
-        // Jump back to the start of the loop
-        self.program.instructions.push(BytecodeOp::Jump(loop_start));
-        
-        // Update the exit jump position
-        let after_loop_pos = self.program.instructions.len();
-        if let BytecodeOp::JumpIfZero(ref mut addr) = self.program.instructions[exit_jump_pos] {
-            *addr = after_loop_pos;
+        // For the default case
+        if let Some(default_body) = default {
+            // Compile the default body
+            self.compile_ops(default_body);
         }
+        
+        // Update all the exit jumps to point after the match statement
+        let after_match_pos = self.program.instructions.len();
+        for exit_jump_pos in exit_jumps {
+            if let BytecodeOp::Jump(ref mut addr) = self.program.instructions[exit_jump_pos] {
+                *addr = after_match_pos;
+            }
+        }
+        
+        // Clean up the temporary match value
+        self.program.instructions.push(BytecodeOp::Pop);
     }
     
     /// Compile a function definition
@@ -451,60 +633,6 @@ impl BytecodeCompiler {
             
             // Add function exit instruction
             self.program.instructions.push(BytecodeOp::FunctionExit);
-        }
-    }
-    
-    /// Compile a match statement
-    fn compile_match(&mut self, value: &[Op], cases: &[(f64, Vec<Op>)], default: &Option<Vec<Op>>) {
-        // Compile the value expression
-        self.compile_ops(value);
-        
-        // Store the result in a temporary variable
-        let match_var = format!("__match_value_{}", self.program.instructions.len());
-        self.program.instructions.push(BytecodeOp::Store(match_var.clone()));
-        
-        // Track jump positions that need to be updated
-        let mut exit_jumps = Vec::new();
-        
-        // Compile each case
-        for (case_val, case_body) in cases {
-            // Load the match value
-            self.program.instructions.push(BytecodeOp::Load(match_var.clone()));
-            
-            // Compare with the case value
-            self.program.instructions.push(BytecodeOp::Push(*case_val));
-            self.program.instructions.push(BytecodeOp::Eq);
-            
-            // Skip this case if not equal
-            let skip_jump_pos = self.program.instructions.len();
-            self.program.instructions.push(BytecodeOp::JumpIfZero(0)); // Placeholder
-            
-            // Compile the case body
-            self.compile_ops(case_body);
-            
-            // Jump to the end of the match statement
-            let exit_jump_pos = self.program.instructions.len();
-            self.program.instructions.push(BytecodeOp::Jump(0)); // Placeholder
-            exit_jumps.push(exit_jump_pos);
-            
-            // Update the skip jump position
-            let after_case_pos = self.program.instructions.len();
-            if let BytecodeOp::JumpIfZero(ref mut addr) = self.program.instructions[skip_jump_pos] {
-                *addr = after_case_pos;
-            }
-        }
-        
-        // Compile the default case if present
-        if let Some(default_body) = default {
-            self.compile_ops(default_body);
-        }
-        
-        // Update all the exit jumps to point after the match statement
-        let after_match_pos = self.program.instructions.len();
-        for exit_jump_pos in exit_jumps {
-            if let BytecodeOp::Jump(ref mut addr) = self.program.instructions[exit_jump_pos] {
-                *addr = after_match_pos;
-            }
         }
     }
 }
@@ -597,6 +725,7 @@ impl BytecodeInterpreter {
         Ok(())
     }
     
+    #[cfg(not(feature = "typed-values"))]
     /// Execute a single bytecode instruction
     fn execute_instruction(&mut self) -> Result<(), VMError> {
         use BytecodeOp::*;
@@ -745,90 +874,316 @@ impl BytecodeInterpreter {
                 }
             },
             Emit(msg) => {
-                // Use the VM's emit functionality
-                let event = Event::info("vm", msg.clone());
-                event.emit().map_err(|e| VMError::IOError(e.to_string()))?;
+                // Just print the message directly
+                println!("Event: {}", msg);
             },
-            EmitEvent(category, message) => {
-                let event = Event::new("info", category.clone(), message.clone());
-                println!("Event: {} - {}", category, message);
-                self.pc += 1;
-            },
-            DumpStack => {
-                let stack_str = format!("Stack: {:?}", self.vm.stack);
-                let event = Event::info("vm", stack_str);
-                event.emit().map_err(|e| VMError::IOError(e.to_string()))?;
-            },
-            DumpMemory => {
-                let mem_str = format!("Memory: {:?}", self.vm.memory);
-                let event = Event::info("vm", mem_str);
-                event.emit().map_err(|e| VMError::IOError(e.to_string()))?;
-            },
-            DumpState => {
-                let state_str = format!(
-                    "VM State - PC: {}, Stack: {:?}, Call Stack: {:?}",
-                    self.pc, self.vm.stack, self.call_stack
-                );
-                let event = Event::info("vm", state_str);
-                event.emit().map_err(|e| VMError::IOError(e.to_string()))?;
-            },
-            AssertTop(expected) => {
-                let val = self.vm.pop_one("asserttop")?;
-                if (val - expected).abs() >= f64::EPSILON {
-                    return Err(VMError::AssertionFailed {
-                        expected: *expected,
-                        found: val,
-                    });
-                }
-            },
-            AssertMemory(key, expected) => {
-                let val = self.vm.get_memory(key).ok_or_else(|| VMError::VariableNotFound(key.clone()))?;
-                if (val - expected).abs() >= f64::EPSILON {
-                    return Err(VMError::AssertionFailed {
-                        expected: *expected,
-                        found: val,
-                    });
-                }
-            },
-            AssertEqualStack(depth) => {
-                if self.vm.stack.len() < *depth {
-                    return Err(VMError::StackUnderflow {
-                        op: "assertequalstack".to_string(),
-                        needed: *depth,
-                        found: self.vm.stack.len(),
-                    });
-                }
-                
-                // Check that all elements are equal
-                let idx = self.vm.stack.len() - *depth;
-                let val = self.vm.stack[idx];
-                for i in (self.vm.stack.len() - *depth)..self.vm.stack.len() {
-                    if (self.vm.stack[i] - val).abs() >= f64::EPSILON {
-                        return Err(VMError::AssertionFailed {
-                            expected: val,
-                            found: self.vm.stack[i],
-                        });
-                    }
-                }
+            EmitEvent(category, msg) => {
+                // Just print the message directly
+                println!("Event: {} - {}", category, msg);
             },
             Break => {
-                // Handle break by jumping to the end of the current loop
+                // Handle break instruction for loops
                 if let Some((_, loop_end)) = self.loop_stack.last() {
                     self.pc = *loop_end;
                 }
             },
             Continue => {
-                // Handle continue by jumping to the start of the current loop
+                // Handle continue instruction for loops
                 if let Some((loop_start, _)) = self.loop_stack.last() {
                     self.pc = *loop_start;
                 }
             },
-            Nop => {
-                // Do nothing
+            DumpStack => {
+                let stack_str = format!("Stack: {:?}", self.vm.stack);
+                println!("{}", stack_str);
+            },
+            DumpMemory => {
+                let mem_str = format!("Memory: {:?}", self.vm.memory);
+                println!("{}", mem_str);
+            },
+            DumpState => {
+                let stack_str = format!("Stack: {:?}", self.vm.stack);
+                let mem_str = format!("Memory: {:?}", self.vm.memory);
+                let state_str = format!("{}\n{}", stack_str, mem_str);
+                println!("{}", state_str);
+            },
+            AssertTop(expected) => {
+                let actual = self.vm.pop_one("assert_top")?;
+                if (actual - expected).abs() >= f64::EPSILON {
+                    return Err(VMError::AssertionFailed {
+                        expected: *expected,
+                        found: actual,
+                    });
+                }
+            },
+            AssertMemory(key, expected) => {
+                let actual = self.vm.get_memory(key).ok_or_else(|| VMError::VariableNotFound(key.clone()))?;
+                if (actual - expected).abs() >= f64::EPSILON {
+                    return Err(VMError::AssertionFailed {
+                        expected: *expected,
+                        found: actual,
+                    });
+                }
+            },
+            AssertEqualStack(expected_size) => {
+                let actual_size = self.vm.stack.len();
+                if actual_size != *expected_size {
+                    return Err(VMError::Other(format!(
+                        "Stack size assertion failed: expected {}, found {}",
+                        expected_size, actual_size
+                    )));
+                }
             },
             LogicalNot => {
-                let val = self.vm.pop_one("not")?;
+                let val = self.vm.pop_one("logical_not")?;
                 self.vm.stack.push(if val == 0.0 { 1.0 } else { 0.0 });
+            },
+            Nop => {
+                // No operation, do nothing
+            },
+        }
+        
+        Ok(())
+    }
+
+    #[cfg(feature = "typed-values")]
+    /// Execute a single bytecode instruction with TypedValue support
+    fn execute_instruction(&mut self) -> Result<(), VMError> {
+        use BytecodeOp::*;
+        use crate::typed::TypedValue;
+        
+        if self.pc >= self.program.instructions.len() {
+            return Ok(());
+        }
+        
+        // Fast path for common instructions
+        match &self.program.instructions[self.pc] {
+            // Fast control flow operations
+            &Jump(addr) => {
+                self.pc = addr;
+                return Ok(());
+            },
+            // Let other operations go through the normal path
+            _ => {}
+        }
+        
+        let instruction = &self.program.instructions[self.pc].clone();
+        self.pc += 1;
+        
+        match instruction {
+            Push(val) => {
+                self.vm.stack.push(val.clone());
+            },
+            Add => {
+                let (b, a) = self.vm.pop_two("add")?;
+                let result = a.add(&b)?;
+                self.vm.stack.push(result);
+            },
+            Sub => {
+                let (b, a) = self.vm.pop_two("sub")?;
+                let result = a.sub(&b)?;
+                self.vm.stack.push(result);
+            },
+            Mul => {
+                let (b, a) = self.vm.pop_two("mul")?;
+                let result = a.mul(&b)?;
+                self.vm.stack.push(result);
+            },
+            Div => {
+                let (b, a) = self.vm.pop_two("div")?;
+                let result = a.div(&b)?;
+                self.vm.stack.push(result);
+            },
+            Mod => {
+                let (b, a) = self.vm.pop_two("mod")?;
+                let result = a.modulo(&b)?;
+                self.vm.stack.push(result);
+            },
+            Store(name) => {
+                let val = self.vm.pop_one("store")?;
+                self.vm.memory.insert(name.clone(), val);
+            },
+            Load(name) => {
+                let val = self.vm.get_memory(name).ok_or_else(|| VMError::VariableNotFound(name.clone()))?;
+                self.vm.stack.push(val.clone());
+            },
+            Pop => {
+                self.vm.pop_one("pop")?;
+            },
+            Eq => {
+                let (b, a) = self.vm.pop_two("eq")?;
+                let result = a.equals(&b)?;
+                self.vm.stack.push(result);
+            },
+            Gt => {
+                let (b, a) = self.vm.pop_two("gt")?;
+                let result = a.greater_than(&b)?;
+                self.vm.stack.push(result);
+            },
+            Lt => {
+                let (b, a) = self.vm.pop_two("lt")?;
+                let result = a.less_than(&b)?;
+                self.vm.stack.push(result);
+            },
+            Not => {
+                let val = self.vm.pop_one("not")?;
+                let result = val.logical_not()?;
+                self.vm.stack.push(result);
+            },
+            And => {
+                let (b, a) = self.vm.pop_two("and")?;
+                let result = a.logical_and(&b)?;
+                self.vm.stack.push(result);
+            },
+            Or => {
+                let (b, a) = self.vm.pop_two("or")?;
+                let result = a.logical_or(&b)?;
+                self.vm.stack.push(result);
+            },
+            Dup => {
+                let val = self.vm.pop_one("dup")?;
+                self.vm.stack.push(val.clone());
+                self.vm.stack.push(val);
+            },
+            Swap => {
+                let (b, a) = self.vm.pop_two("swap")?;
+                self.vm.stack.push(b);
+                self.vm.stack.push(a);
+            },
+            Over => {
+                let (b, a) = self.vm.pop_two("over")?;
+                self.vm.stack.push(a.clone());
+                self.vm.stack.push(b);
+                self.vm.stack.push(a);
+            },
+            Negate => {
+                let val = self.vm.pop_one("negate")?;
+                if let TypedValue::Number(n) = val {
+                    self.vm.stack.push(TypedValue::Number(-n));
+                } else {
+                    return Err(VMError::TypeError(crate::typed::TypedValueError::InvalidOperationForType {
+                        op: "negate".to_string(),
+                        types: format!("{}", val.type_name()),
+                    }));
+                }
+            },
+            Call(name) => {
+                if let Some(&entry_point) = self.program.function_table.get(name) {
+                    // Save the current program counter
+                    self.call_stack.push(self.pc);
+                    
+                    // Jump to the function entry point
+                    self.pc = entry_point;
+                } else {
+                    return Err(VMError::FunctionNotFound(name.clone()));
+                }
+            },
+            Return => {
+                // Return to the calling function
+                if let Some(return_addr) = self.call_stack.pop() {
+                    self.pc = return_addr;
+                }
+            },
+            JumpIfZero(addr) => {
+                let val = self.vm.pop_one("jumpifzero")?;
+                let is_zero = match val {
+                    TypedValue::Number(n) => n == 0.0,
+                    TypedValue::Boolean(b) => !b,
+                    TypedValue::String(s) => s.is_empty(),
+                    TypedValue::Null => true,
+                };
+                
+                if is_zero {
+                    self.pc = *addr;
+                }
+            },
+            Jump(addr) => {
+                self.pc = *addr;
+            },
+            FunctionEntry(_name, _params) => {
+                // Implementation similar to VM's function call mechanism
+                // The actual parameter handling is done by the VM
+            },
+            FunctionExit => {
+                // Implementation similar to VM's function return mechanism
+                if let Some(return_addr) = self.call_stack.pop() {
+                    self.pc = return_addr;
+                }
+            },
+            Emit(msg) => {
+                // Just print the message directly
+                println!("Event: {}", msg);
+            },
+            EmitEvent(category, msg) => {
+                // Just print the message directly
+                println!("Event: {} - {}", category, msg);
+            },
+            Break => {
+                // Handle break instruction for loops
+                if let Some((_, loop_end)) = self.loop_stack.last() {
+                    self.pc = *loop_end;
+                }
+            },
+            Continue => {
+                // Handle continue instruction for loops
+                if let Some((loop_start, _)) = self.loop_stack.last() {
+                    self.pc = *loop_start;
+                }
+            },
+            DumpStack => {
+                let stack_str = format!("Stack: {:?}", self.vm.stack);
+                println!("{}", stack_str);
+            },
+            DumpMemory => {
+                let mem_str = format!("Memory: {:?}", self.vm.memory);
+                println!("{}", mem_str);
+            },
+            DumpState => {
+                let stack_str = format!("Stack: {:?}", self.vm.stack);
+                let mem_str = format!("Memory: {:?}", self.vm.memory);
+                let state_str = format!("{}\n{}", stack_str, mem_str);
+                println!("{}", state_str);
+            },
+            AssertTop(expected) => {
+                let actual = self.vm.pop_one("assert_top")?;
+                let equal = actual.equals(expected)?;
+                if let TypedValue::Boolean(is_equal) = equal {
+                    if !is_equal {
+                        return Err(VMError::AssertionFailed {
+                            expected: expected.clone(),
+                            found: actual,
+                        });
+                    }
+                }
+            },
+            AssertMemory(key, expected) => {
+                let actual = self.vm.get_memory(key).ok_or_else(|| VMError::VariableNotFound(key.clone()))?;
+                let equal = actual.equals(expected)?;
+                if let TypedValue::Boolean(is_equal) = equal {
+                    if !is_equal {
+                        return Err(VMError::AssertionFailed {
+                            expected: expected.clone(),
+                            found: actual.clone(),
+                        });
+                    }
+                }
+            },
+            AssertEqualStack(expected_size) => {
+                let actual_size = self.vm.stack.len();
+                if actual_size != *expected_size {
+                    return Err(VMError::Other(format!(
+                        "Stack size assertion failed: expected {}, found {}",
+                        expected_size, actual_size
+                    )));
+                }
+            },
+            LogicalNot => {
+                let val = self.vm.pop_one("logical_not")?;
+                let result = val.logical_not()?;
+                self.vm.stack.push(result);
+            },
+            Nop => {
+                // No operation, do nothing
             },
         }
         
