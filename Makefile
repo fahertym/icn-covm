@@ -1,34 +1,51 @@
-.PHONY: dump run test fmt check clean all demo
+.PHONY: build clean test clippy fmt doc benchmark
 
-dump:
-	@./scripts/generate_full_dump.sh
+# Default target
+all: build test clippy fmt
 
-run:
-	cargo run
+# Build the project
+build:
+	@echo "Building nano-cvm..."
+	cargo build
 
+# Clean build artifacts
+clean:
+	@echo "Cleaning build artifacts..."
+	cargo clean
+
+# Run tests
 test:
-	timeout 30s cargo test -- --quiet --nocapture --test-threads=1 || echo "⚠️ Test suite may have hung or timed out."
+	@echo "Running tests..."
+	cargo test
 
+# Run clippy lints
+clippy:
+	@echo "Running clippy..."
+	cargo clippy -- -D warnings
+
+# Check code formatting
 fmt:
+	@echo "Checking code formatting..."
 	cargo fmt -- --check
 
-check:
-	cargo check
+# Build and open documentation
+doc:
+	@echo "Building documentation..."
+	cargo doc --no-deps --open
 
-clean:
-	@echo "Cleaning up dump and other generated files..."
-	@rm -f full_project_dump.txt
+# Run benchmarks comparing AST vs bytecode execution
+benchmark:
+	@echo "Running benchmarks..."
+	@echo "Benchmark: Fibonacci"
+	@cargo run --release -- --benchmark --program demo/benchmark/fibonacci.dsl
+	@echo ""
+	@echo "Benchmark: Factorial"
+	@cargo run --release -- --benchmark --program demo/benchmark/factorial.dsl
+	@echo ""
+	@echo "Benchmark: Loop"
+	@cargo run --release -- --benchmark --program demo/benchmark/loop.dsl
 
-all: fmt check test dump
-	@echo "✅ All tasks completed."
-
-
-
-
-demo:
-	@echo "Running all .dsl demo programs..."
-	@find demo -type f -name "*.dsl" | sort | while read -r file; do \
-		echo "=== Running $$file ==="; \
-		cargo run -- -p "$$file" --stdlib || echo "❌ Failed: $$file"; \
-		echo ""; \
-	done
+# Run all
+run_all: all
+	@echo "Running nano-cvm..."
+	cargo run -- --program program.dsl

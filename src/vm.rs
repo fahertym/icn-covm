@@ -3,8 +3,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use thiserror::Error;
 
+/// Error variants that can occur during VM execution
 #[derive(Debug, Error, Clone, PartialEq)]
 pub enum VMError {
+    /// Stack underflow occurs when trying to pop more values than are available
     #[error("Stack underflow in {op}: needed {needed}, found {found}")]
     StackUnderflow {
         op: String,
@@ -12,100 +14,191 @@ pub enum VMError {
         found: usize,
     },
 
+    /// Division by zero error
     #[error("Division by zero")]
     DivisionByZero,
 
+    /// Error when a variable is not found in memory
     #[error("Variable not found: {0}")]
     VariableNotFound(String),
 
+    /// Error when a function is not found
     #[error("Function not found: {0}")]
     FunctionNotFound(String),
 
+    /// Error when maximum recursion depth is exceeded
     #[error("Maximum recursion depth exceeded")]
     MaxRecursionDepth,
 
+    /// Error when a condition expression is invalid
     #[error("Invalid condition: {0}")]
     InvalidCondition(String),
 
+    /// Error when an assertion fails
     #[error("Assertion failed: expected {expected}, found {found}")]
     AssertionFailed { expected: f64, found: f64 },
 
+    /// I/O error during execution
     #[error("IO error: {0}")]
     IOError(String),
 
+    /// Error in the REPL
     #[error("REPL error: {0}")]
     ReplError(String),
 
+    /// Error with parameter handling
     #[error("Parameter error: {0}")]
     ParameterError(String),
 }
 
+/// Operation types for the virtual machine
+/// 
+/// The VM executes these operations in sequence, manipulating the stack,
+/// memory, and control flow according to each operation's semantics.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum Op {
+    /// Push a numeric value onto the stack
     Push(f64),
+    
+    /// Pop two values, add them, and push the result
     Add,
+    
+    /// Pop two values, subtract the top from the second, and push the result
     Sub,
+    
+    /// Pop two values, multiply them, and push the result
     Mul,
+    
+    /// Pop two values, divide the second by the top, and push the result
     Div,
+    
+    /// Pop two values, compute the modulo of the second by the top, and push the result
     Mod,
+    
+    /// Pop a value and store it in memory with the given name
     Store(String),
+    
+    /// Load a value from memory and push it onto the stack
     Load(String),
+    
+    /// Conditional execution based on a condition
+    /// 
+    /// The condition is evaluated, and if it's non-zero, the 'then' branch
+    /// is executed. Otherwise, the 'else_' branch is executed if present.
     If {
         condition: Vec<Op>,
         then: Vec<Op>,
         else_: Option<Vec<Op>>,
     },
+    
+    /// Execute a block of operations a fixed number of times
     Loop {
         count: usize,
         body: Vec<Op>,
     },
+    
+    /// Execute a block of operations while a condition is true
     While {
         condition: Vec<Op>,
         body: Vec<Op>,
     },
+    
+    /// Emit a message to the output
     Emit(String),
+    
+    /// Negate the top value on the stack
     Negate,
+    
+    /// Assert that the top value on the stack equals the expected value
     AssertTop(f64),
+    
+    /// Display the current stack contents
     DumpStack,
+    
+    /// Display the current memory contents
     DumpMemory,
+    
+    /// Assert that a value in memory equals the expected value
     AssertMemory {
         key: String,
         expected: f64,
     },
+    
+    /// Pop a value from the stack
     Pop,
+    
+    /// Compare the top two values for equality
     Eq,
+    
+    /// Compare if the second value is greater than the top value
     Gt,
+    
+    /// Compare if the second value is less than the top value
     Lt,
+    
+    /// Logical NOT of the top value
     Not,
+    
+    /// Logical AND of the top two values
     And,
+    
+    /// Logical OR of the top two values
     Or,
+    
+    /// Duplicate the top value on the stack
     Dup,
+    
+    /// Swap the top two values on the stack
     Swap,
+    
+    /// Copy the second value to the top of the stack
     Over,
+    
+    /// Define a function with a name, parameters, and body
     Def {
         name: String,
         params: Vec<String>,
         body: Vec<Op>,
     },
+    
+    /// Call a named function
     Call(String),
+    
+    /// Return from a function
     Return,
+    
+    /// No operation, does nothing
     Nop,
-    // New governance-inspired opcodes
+    
+    /// Match a value against several cases
+    /// 
+    /// Evaluates 'value', then checks it against each case.
+    /// If a match is found, executes the corresponding operations.
+    /// If no match is found and a default is provided, executes the default.
     Match {
         value: Vec<Op>,
         cases: Vec<(f64, Vec<Op>)>,
         default: Option<Vec<Op>>,
     },
+    
+    /// Break out of the innermost loop
     Break,
+    
+    /// Continue to the next iteration of the innermost loop
     Continue,
+    
+    /// Emit an event with a category and message
     EmitEvent {
         category: String,
         message: String,
     },
+    
+    /// Assert that all values in a depth of the stack are equal
     AssertEqualStack {
         depth: usize,
     },
-    // Debug/introspection opcode
+    
+    /// Display the entire VM state
     DumpState,
 }
 
@@ -122,17 +215,33 @@ enum LoopControl {
     Continue,
 }
 
+/// The stack-based virtual machine
+/// 
+/// This VM executes operations on a stack, with memory for variables,
+/// function definitions, and call frames for function invocation.
 #[derive(Debug)]
 pub struct VM {
+    /// The stack of values being operated on
     pub stack: Vec<f64>,
-    memory: HashMap<String, f64>,
+    
+    /// Memory for storing variables
+    pub memory: HashMap<String, f64>,
+    
+    /// Storage for function definitions
     functions: HashMap<String, (Vec<String>, Vec<Op>)>,
+    
+    /// Call stack for function invocation
     call_frames: Vec<CallFrame>,
+    
+    /// Current recursion depth
     recursion_depth: usize,
+    
+    /// Control flow for loops
     loop_control: LoopControl,
 }
 
 impl VM {
+    /// Create a new VM instance
     pub fn new() -> Self {
         VM {
             stack: Vec::new(),
@@ -144,18 +253,22 @@ impl VM {
         }
     }
 
+    /// Get a reference to the stack contents
     pub fn get_stack(&self) -> &[f64] {
         &self.stack
     }
 
+    /// Get a value from memory by key
     pub fn get_memory(&self, key: &str) -> Option<f64> {
         self.memory.get(key).copied()
     }
 
+    /// Get a reference to the entire memory map
     pub fn get_memory_map(&self) -> &HashMap<String, f64> {
         &self.memory
     }
 
+    /// Set program parameters, used to pass values to the VM before execution
     pub fn set_parameters(&mut self, params: HashMap<String, String>) -> Result<(), VMError> {
         for (key, value) in params {
             // Try to parse as f64 first
@@ -184,6 +297,7 @@ impl VM {
         Ok(())
     }
 
+    /// Execute a program consisting of a sequence of operations
     pub fn execute(&mut self, ops: &[Op]) -> Result<(), VMError> {
         if self.recursion_depth > 1000 {
             return Err(VMError::MaxRecursionDepth);
@@ -191,8 +305,13 @@ impl VM {
         self.execute_inner(ops)
     }
 
-    // Helper for stack operations that need to pop one value
-    fn pop_one(&mut self, op_name: &str) -> Result<f64, VMError> {
+    /// Get the top value on the stack without removing it
+    pub fn top(&self) -> Option<f64> {
+        self.stack.last().copied()
+    }
+
+    /// Helper for stack operations that need to pop one value
+    pub fn pop_one(&mut self, op_name: &str) -> Result<f64, VMError> {
         self.stack.pop().ok_or_else(|| VMError::StackUnderflow {
             op: op_name.to_string(),
             needed: 1,
@@ -200,8 +319,8 @@ impl VM {
         })
     }
 
-    // Helper for stack operations that need to pop two values
-    fn pop_two(&mut self, op_name: &str) -> Result<(f64, f64), VMError> {
+    /// Helper for stack operations that need to pop two values
+    pub fn pop_two(&mut self, op_name: &str) -> Result<(f64, f64), VMError> {
         if self.stack.len() < 2 {
             return Err(VMError::StackUnderflow {
                 op: op_name.to_string(),
@@ -209,9 +328,10 @@ impl VM {
                 found: self.stack.len(),
             });
         }
+
         let b = self.stack.pop().unwrap();
         let a = self.stack.pop().unwrap();
-        Ok((a, b))
+        Ok((b, a))
     }
 
     fn execute_inner(&mut self, ops: &[Op]) -> Result<(), VMError> {
@@ -682,12 +802,6 @@ impl VM {
         }
 
         Ok(())
-    }
-
-    // These methods are used in tests
-    #[cfg(test)]
-    pub fn top(&self) -> Option<f64> {
-        self.stack.last().copied()
     }
 }
 
