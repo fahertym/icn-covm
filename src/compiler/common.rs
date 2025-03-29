@@ -34,11 +34,11 @@ pub fn adjusted_position(pos: SourcePosition, line: &str, part: &str) -> SourceP
 /// Helper to find nested blocks within indented code
 pub fn find_block_end(lines: &[String], start_line: usize, base_indent: usize) -> usize {
     let mut end_line = start_line;
-    
+
     while end_line < lines.len() && get_indent(&lines[end_line]) > base_indent {
         end_line += 1;
     }
-    
+
     end_line
 }
 
@@ -46,4 +46,4 @@ pub fn find_block_end(lines: &[String], start_line: usize, base_indent: usize) -
 pub fn collect_block_lines(lines: &[String], start_line: usize, base_indent: usize) -> Vec<String> {
     let end_line = find_block_end(lines, start_line, base_indent);
     lines[start_line..end_line].to_vec()
-} 
+}

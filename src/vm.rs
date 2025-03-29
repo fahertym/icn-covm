@@ -1,37 +1,41 @@
+use crate::events::Event;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use thiserror::Error;
-use crate::events::Event;
 
 #[derive(Debug, Error, Clone, PartialEq)]
 pub enum VMError {
     #[error("Stack underflow in {op}: needed {needed}, found {found}")]
-    StackUnderflow { op: String, needed: usize, found: usize },
-    
+    StackUnderflow {
+        op: String,
+        needed: usize,
+        found: usize,
+    },
+
     #[error("Division by zero")]
     DivisionByZero,
-    
+
     #[error("Variable not found: {0}")]
     VariableNotFound(String),
-    
+
     #[error("Function not found: {0}")]
     FunctionNotFound(String),
-    
+
     #[error("Maximum recursion depth exceeded")]
     MaxRecursionDepth,
-    
+
     #[error("Invalid condition: {0}")]
     InvalidCondition(String),
-    
+
     #[error("Assertion failed: expected {expected}, found {found}")]
     AssertionFailed { expected: f64, found: f64 },
-    
+
     #[error("IO error: {0}")]
     IOError(String),
-    
+
     #[error("REPL error: {0}")]
     ReplError(String),
-    
+
     #[error("Parameter error: {0}")]
     ParameterError(String),
 }
@@ -46,15 +50,28 @@ pub enum Op {
     Mod,
     Store(String),
     Load(String),
-    If { condition: Vec<Op>, then: Vec<Op>, else_: Option<Vec<Op>> },
-    Loop { count: usize, body: Vec<Op> },
-    While { condition: Vec<Op>, body: Vec<Op> },
+    If {
+        condition: Vec<Op>,
+        then: Vec<Op>,
+        else_: Option<Vec<Op>>,
+    },
+    Loop {
+        count: usize,
+        body: Vec<Op>,
+    },
+    While {
+        condition: Vec<Op>,
+        body: Vec<Op>,
+    },
     Emit(String),
     Negate,
     AssertTop(f64),
     DumpStack,
     DumpMemory,
-    AssertMemory { key: String, expected: f64 },
+    AssertMemory {
+        key: String,
+        expected: f64,
+    },
     Pop,
     Eq,
     Gt,
@@ -65,16 +82,29 @@ pub enum Op {
     Dup,
     Swap,
     Over,
-    Def { name: String, params: Vec<String>, body: Vec<Op> },
+    Def {
+        name: String,
+        params: Vec<String>,
+        body: Vec<Op>,
+    },
     Call(String),
     Return,
     Nop,
     // New governance-inspired opcodes
-    Match { value: Vec<Op>, cases: Vec<(f64, Vec<Op>)>, default: Option<Vec<Op>> },
+    Match {
+        value: Vec<Op>,
+        cases: Vec<(f64, Vec<Op>)>,
+        default: Option<Vec<Op>>,
+    },
     Break,
     Continue,
-    EmitEvent { category: String, message: String },
-    AssertEqualStack { depth: usize },
+    EmitEvent {
+        category: String,
+        message: String,
+    },
+    AssertEqualStack {
+        depth: usize,
+    },
     // Debug/introspection opcode
     DumpState,
 }
@@ -137,11 +167,15 @@ impl VM {
                     // For non-numeric strings, we'll store the length as a numeric value
                     // This allows parameters to be used in the stack machine
                     self.memory.insert(key.clone(), value.len() as f64);
-                    
+
                     // Also log this for debugging
                     let event = Event::info(
-                        "params", 
-                        &format!("Parameter '{}' is not numeric, storing length {}", key, value.len())
+                        "params",
+                        &format!(
+                            "Parameter '{}' is not numeric, storing length {}",
+                            key,
+                            value.len()
+                        ),
                     );
                     event.emit().map_err(|e| VMError::IOError(e.to_string()))?;
                 }
@@ -159,20 +193,20 @@ impl VM {
 
     // Helper for stack operations that need to pop one value
     fn pop_one(&mut self, op_name: &str) -> Result<f64, VMError> {
-        self.stack.pop().ok_or_else(|| VMError::StackUnderflow { 
-            op: op_name.to_string(), 
-            needed: 1, 
-            found: 0 
+        self.stack.pop().ok_or_else(|| VMError::StackUnderflow {
+            op: op_name.to_string(),
+            needed: 1,
+            found: 0,
         })
     }
 
     // Helper for stack operations that need to pop two values
     fn pop_two(&mut self, op_name: &str) -> Result<(f64, f64), VMError> {
         if self.stack.len() < 2 {
-            return Err(VMError::StackUnderflow { 
-                op: op_name.to_string(), 
-                needed: 2, 
-                found: self.stack.len() 
+            return Err(VMError::StackUnderflow {
+                op: op_name.to_string(),
+                needed: 2,
+                found: self.stack.len(),
             });
         }
         let b = self.stack.pop().unwrap();
@@ -191,7 +225,7 @@ impl VM {
             if self.loop_control != LoopControl::None {
                 break;
             }
-            
+
             let op = &ops[pc];
             match op {
                 Op::Push(value) => {
@@ -201,19 +235,19 @@ impl VM {
                     self.pop_one("Pop")?;
                 }
                 Op::Dup => {
-                    let value = self.stack.last().ok_or_else(|| VMError::StackUnderflow { 
-                        op: "Dup".to_string(), 
-                        needed: 1, 
-                        found: 0 
+                    let value = self.stack.last().ok_or_else(|| VMError::StackUnderflow {
+                        op: "Dup".to_string(),
+                        needed: 1,
+                        found: 0,
                     })?;
                     self.stack.push(*value);
                 }
                 Op::Swap => {
                     if self.stack.len() < 2 {
-                        return Err(VMError::StackUnderflow { 
-                            op: "Swap".to_string(), 
-                            needed: 2, 
-                            found: self.stack.len()
+                        return Err(VMError::StackUnderflow {
+                            op: "Swap".to_string(),
+                            needed: 2,
+                            found: self.stack.len(),
                         });
                     }
                     let len = self.stack.len();
@@ -221,10 +255,10 @@ impl VM {
                 }
                 Op::Over => {
                     if self.stack.len() < 2 {
-                        return Err(VMError::StackUnderflow { 
-                            op: "Over".to_string(), 
-                            needed: 2, 
-                            found: self.stack.len()
+                        return Err(VMError::StackUnderflow {
+                            op: "Over".to_string(),
+                            needed: 2,
+                            found: self.stack.len(),
                         });
                     }
                     let value = self.stack[self.stack.len() - 2];
@@ -262,7 +296,11 @@ impl VM {
                 }
                 Op::Eq => {
                     let (a, b) = self.pop_two("Eq")?;
-                    self.stack.push(if (a - b).abs() < f64::EPSILON { 0.0 } else { 1.0 });
+                    self.stack.push(if (a - b).abs() < f64::EPSILON {
+                        0.0
+                    } else {
+                        1.0
+                    });
                 }
                 Op::Lt => {
                     let (a, b) = self.pop_two("Lt")?;
@@ -278,19 +316,25 @@ impl VM {
                 }
                 Op::And => {
                     let (a, b) = self.pop_two("And")?;
-                    self.stack.push(if a != 0.0 && b != 0.0 { 1.0 } else { 0.0 });
+                    self.stack
+                        .push(if a != 0.0 && b != 0.0 { 1.0 } else { 0.0 });
                 }
                 Op::Or => {
                     let (a, b) = self.pop_two("Or")?;
-                    self.stack.push(if a != 0.0 || b != 0.0 { 1.0 } else { 0.0 });
+                    self.stack
+                        .push(if a != 0.0 || b != 0.0 { 1.0 } else { 0.0 });
                 }
                 Op::Store(key) => {
                     let value = self.pop_one("Store")?;
-                    
+
                     // We need to store in the current function's memory if we're in a function call
                     if !self.call_frames.is_empty() {
                         // Store in the current call frame
-                        self.call_frames.last_mut().unwrap().memory.insert(key.clone(), value);
+                        self.call_frames
+                            .last_mut()
+                            .unwrap()
+                            .memory
+                            .insert(key.clone(), value);
                     } else {
                         // Otherwise store in global memory
                         self.memory.insert(key.clone(), value);
@@ -304,13 +348,19 @@ impl VM {
                             *value
                         } else {
                             // If not found in function memory, check global memory
-                            *self.memory.get(key).ok_or_else(|| VMError::VariableNotFound(key.clone()))?
+                            *self
+                                .memory
+                                .get(key)
+                                .ok_or_else(|| VMError::VariableNotFound(key.clone()))?
                         }
                     } else {
                         // If not in a function, just use global memory
-                        *self.memory.get(key).ok_or_else(|| VMError::VariableNotFound(key.clone()))?
+                        *self
+                            .memory
+                            .get(key)
+                            .ok_or_else(|| VMError::VariableNotFound(key.clone()))?
                     };
-                    
+
                     self.stack.push(value);
                 }
                 Op::DumpStack => {
@@ -325,8 +375,8 @@ impl VM {
                     // Output the full state of the VM (stack, memory, and more)
                     let event = Event::info("vm_state", &format!(
                         "Stack: {:?}\nMemory: {:?}\nFunctions: {}\nCall Frames: {}\nRecursion Depth: {}", 
-                        self.stack, 
-                        self.memory, 
+                        self.stack,
+                        self.memory,
                         self.functions.keys().collect::<Vec<_>>().len(),
                         self.call_frames.len(),
                         self.recursion_depth
@@ -334,79 +384,91 @@ impl VM {
                     event.emit().map_err(|e| VMError::IOError(e.to_string()))?;
                 }
                 Op::Def { name, params, body } => {
-                    self.functions.insert(name.clone(), (params.clone(), body.clone()));
+                    self.functions
+                        .insert(name.clone(), (params.clone(), body.clone()));
                 }
-                
+
                 Op::Loop { count, body } => {
                     for _i in 0..*count {
                         self.execute_inner(body)?;
-                        
+
                         // Handle loop control flow
                         match self.loop_control {
                             LoopControl::Break => {
                                 self.loop_control = LoopControl::None;
                                 break;
-                            },
+                            }
                             LoopControl::Continue => {
                                 self.loop_control = LoopControl::None;
                                 continue;
-                            },
+                            }
                             LoopControl::None => {}
                         }
                     }
                 }
-                
+
                 Op::While { condition, body } => {
                     if condition.is_empty() {
                         return Err(VMError::InvalidCondition(
-                            "While condition block cannot be empty".to_string()
+                            "While condition block cannot be empty".to_string(),
                         ));
                     }
 
                     loop {
                         // Execute the condition code
                         self.execute_inner(condition)?;
-                        
+
+                        // Check if the stack is empty - if so, exit the loop safely
+                        if self.stack.is_empty() {
+                            // Emit an event indicating the missing condition
+                            let event = Event::info(
+                                "while_loop", 
+                                "Skipping while loop due to empty stack condition"
+                            );
+                            event.emit().map_err(|e| VMError::IOError(e.to_string()))?;
+                            break;
+                        }
+
                         // Get the result of the condition
                         let cond = self.pop_one("While condition")?;
-                        
-                        // If condition is true (0.0), execute the body
-                        // If condition is false (non-zero), exit the loop
+
+                        // If condition is non-zero (false), exit the loop
+                        // If condition is 0.0 (true), execute the body
                         if cond != 0.0 {
                             break;
                         }
-                        
+
                         // Execute the body code
                         self.execute_inner(body)?;
-                        
+
                         // Handle loop control flow
                         match self.loop_control {
                             LoopControl::Break => {
                                 self.loop_control = LoopControl::None;
                                 break;
-                            },
+                            }
                             LoopControl::Continue => {
                                 self.loop_control = LoopControl::None;
                                 continue;
-                            },
+                            }
                             LoopControl::None => {}
                         }
                     }
                 }
-                
+
                 Op::Break => {
                     self.loop_control = LoopControl::Break;
                 }
-                
+
                 Op::Continue => {
                     self.loop_control = LoopControl::Continue;
                 }
-                
+
                 Op::EmitEvent { category, message } => {
                     let event = Event::info(category.as_str(), message.as_str());
                     event.emit().map_err(|e| VMError::IOError(e.to_string()))?;
                 }
-                
+
                 Op::AssertEqualStack { depth } => {
                     if self.stack.len() < *depth {
                         return Err(VMError::StackUnderflow {
@@ -415,10 +477,11 @@ impl VM {
                             found: self.stack.len(),
                         });
                     }
-                    
+
                     let top_value = self.stack[self.stack.len() - 1];
                     for i in 1..*depth {
-                        if (self.stack[self.stack.len() - 1 - i] - top_value).abs() >= f64::EPSILON {
+                        if (self.stack[self.stack.len() - 1 - i] - top_value).abs() >= f64::EPSILON
+                        {
                             return Err(VMError::AssertionFailed {
                                 expected: top_value,
                                 found: self.stack[self.stack.len() - 1 - i],
@@ -427,32 +490,36 @@ impl VM {
                     }
                 }
 
-                Op::If { condition, then, else_ } => {
-                    // Get condition value 
+                Op::If {
+                    condition,
+                    then,
+                    else_,
+                } => {
+                    // Get condition value
                     let condition_value = if condition.is_empty() {
                         // If condition is empty, use the value already on the stack
                         if self.stack.is_empty() {
-                            return Err(VMError::StackUnderflow { 
-                                op: "If".to_string(), 
-                                needed: 1, 
-                                found: 0 
+                            return Err(VMError::StackUnderflow {
+                                op: "If".to_string(),
+                                needed: 1,
+                                found: 0,
                             });
                         }
                         self.pop_one("If condition")?
                     } else {
                         // Save the stack size before executing the condition
                         let stack_size_before = self.stack.len();
-                        
+
                         // Execute the condition operations
                         self.execute_inner(condition)?;
-                        
+
                         // Make sure the stack has at least one more value than before
                         if self.stack.len() <= stack_size_before {
                             return Err(VMError::InvalidCondition(
-                                "Condition block did not leave a value on the stack".to_string()
+                                "Condition block did not leave a value on the stack".to_string(),
                             ));
                         }
-                        
+
                         // Get the top value from the stack
                         self.pop_one("If condition result")?
                     };
@@ -468,23 +535,25 @@ impl VM {
                         self.stack.push(condition_value);
                     }
                 }
-                
+
                 Op::Negate => {
                     let value = self.pop_one("Negate")?;
                     self.stack.push(-value);
                 }
-                
+
                 Op::Call(name) => {
-                    let (params, body) = self.functions.get(name)
+                    let (params, body) = self
+                        .functions
+                        .get(name)
                         .ok_or_else(|| VMError::FunctionNotFound(name.clone()))?
                         .clone();
-                    
+
                     // Create a new call frame for function execution
                     let mut frame = CallFrame {
                         memory: HashMap::new(),
                         return_value: None,
                     };
-                    
+
                     // If there are named parameters, pop values for them from the stack
                     if !params.is_empty() {
                         if self.stack.len() < params.len() {
@@ -494,41 +563,41 @@ impl VM {
                                 found: self.stack.len(),
                             });
                         }
-                        
+
                         // Pop values from the stack in reverse order (last parameter first)
                         let mut param_values = Vec::with_capacity(params.len());
                         for _ in 0..params.len() {
                             param_values.push(self.stack.pop().unwrap());
                         }
                         param_values.reverse(); // Reverse to match parameter order
-                        
+
                         // Store parameters in the function's memory
                         for (param, value) in params.iter().zip(param_values.iter()) {
                             frame.memory.insert(param.clone(), *value);
                         }
                     }
-                    
+
                     // Push the call frame onto the call stack
                     self.call_frames.push(frame);
-                    
+
                     // Increment recursion depth
                     self.recursion_depth += 1;
-                    
+
                     // Execute the function body
                     self.execute_inner(&body)?;
-                    
+
                     // Decrement recursion depth
                     self.recursion_depth -= 1;
-                    
+
                     // Pop the call frame and get the return value if there is one
                     let frame = self.call_frames.pop().unwrap();
-                    
+
                     // Push the return value onto the stack if there is one
                     if let Some(return_value) = frame.return_value {
                         self.stack.push(return_value);
                     }
                 }
-                
+
                 Op::Return => {
                     // If we're in a function, set the return value
                     if !self.call_frames.is_empty() {
@@ -539,27 +608,31 @@ impl VM {
                             // If the stack is empty, default to 0.0
                             0.0
                         };
-                        
+
                         // Store the return value in the current call frame
                         let frame = self.call_frames.last_mut().unwrap();
                         frame.return_value = Some(return_value);
-                        
+
                         // Exit the current function execution
                         break;
                     }
                 }
-                
+
                 Op::Nop => {}
-                
-                Op::Match { value, cases, default } => {
+
+                Op::Match {
+                    value,
+                    cases,
+                    default,
+                } => {
                     // Execute value operations to get match value
                     if !value.is_empty() {
                         self.execute_inner(value)?;
                     }
-                    
+
                     // Get the value to match
                     let match_value = self.pop_one("Match")?;
-                    
+
                     // Find matching case
                     let mut found_match = false;
                     for (case_value, case_ops) in cases {
@@ -569,7 +642,7 @@ impl VM {
                             break;
                         }
                     }
-                    
+
                     // If no match found and there's a default block, execute it
                     if !found_match {
                         if let Some(default_block) = default {
@@ -580,7 +653,7 @@ impl VM {
                         }
                     }
                 }
-                
+
                 Op::AssertTop(expected) => {
                     let value = self.pop_one("AssertTop")?;
                     if (value - *expected).abs() >= f64::EPSILON {
@@ -590,9 +663,11 @@ impl VM {
                         });
                     }
                 }
-                
+
                 Op::AssertMemory { key, expected } => {
-                    let value = self.memory.get(key)
+                    let value = self
+                        .memory
+                        .get(key)
                         .ok_or_else(|| VMError::VariableNotFound(key.clone()))?;
                     if (value - expected).abs() >= f64::EPSILON {
                         return Err(VMError::AssertionFailed {
@@ -602,10 +677,10 @@ impl VM {
                     }
                 }
             }
-            
+
             pc += 1;
         }
-        
+
         Ok(())
     }
 
@@ -661,10 +736,10 @@ mod tests {
 
         assert_eq!(
             vm.execute(&ops),
-            Err(VMError::StackUnderflow { 
-                op: "Add".to_string(), 
-                needed: 2, 
-                found: 1 
+            Err(VMError::StackUnderflow {
+                op: "Add".to_string(),
+                needed: 2,
+                found: 1
             })
         );
     }
@@ -688,7 +763,10 @@ mod tests {
         let mut vm = VM::new();
         let ops = vec![Op::Load("nonexistent".to_string())];
 
-        assert_eq!(vm.execute(&ops), Err(VMError::VariableNotFound("nonexistent".to_string())));
+        assert_eq!(
+            vm.execute(&ops),
+            Err(VMError::VariableNotFound("nonexistent".to_string()))
+        );
     }
 
     #[test]
@@ -698,10 +776,10 @@ mod tests {
 
         assert_eq!(
             vm.execute(&ops),
-            Err(VMError::StackUnderflow { 
-                op: "Store".to_string(), 
-                needed: 1, 
-                found: 0 
+            Err(VMError::StackUnderflow {
+                op: "Store".to_string(),
+                needed: 1,
+                found: 0
             })
         );
     }
@@ -729,32 +807,32 @@ mod tests {
     fn test_if_zero_true() {
         let mut vm = VM::new();
         let ops = vec![
-            Op::Push(0.0),  // Condition value is 0.0 (true in this VM)
+            Op::Push(0.0), // Condition value is 0.0 (true in this VM)
             Op::If {
                 condition: vec![],
-                then: vec![Op::Push(42.0)],  // Should execute when condition is 0.0
+                then: vec![Op::Push(42.0)], // Should execute when condition is 0.0
                 else_: None,
             },
         ];
 
         assert!(vm.execute(&ops).is_ok());
-        assert_eq!(vm.top(), Some(42.0));  // Then block executed because condition was 0.0 (true)
+        assert_eq!(vm.top(), Some(42.0)); // Then block executed because condition was 0.0 (true)
     }
 
     #[test]
     fn test_if_zero_false() {
         let mut vm = VM::new();
         let ops = vec![
-            Op::Push(1.0),  // Condition value is non-zero (false in this VM)
+            Op::Push(1.0), // Condition value is non-zero (false in this VM)
             Op::If {
                 condition: vec![],
-                then: vec![Op::Push(42.0)],  // Should not execute
+                then: vec![Op::Push(42.0)], // Should not execute
                 else_: None,
             },
         ];
 
         assert!(vm.execute(&ops).is_ok());
-        assert_eq!(vm.top(), Some(1.0));  // Then block not executed, original value remains
+        assert_eq!(vm.top(), Some(1.0)); // Then block not executed, original value remains
     }
 
     #[test]
@@ -768,10 +846,10 @@ mod tests {
 
         assert_eq!(
             vm.execute(&ops),
-            Err(VMError::StackUnderflow { 
-                op: "If".to_string(), 
-                needed: 1, 
-                found: 0 
+            Err(VMError::StackUnderflow {
+                op: "If".to_string(),
+                needed: 1,
+                found: 0
             })
         );
     }
@@ -780,25 +858,25 @@ mod tests {
     fn test_nested_if_zero() {
         let mut vm = VM::new();
         let ops = vec![
-            Op::Push(0.0),  // Initial stack value (true)
+            Op::Push(0.0), // Initial stack value (true)
             Op::If {
                 condition: vec![
-                    Op::Push(1.0),  // Push false for outer condition
+                    Op::Push(1.0), // Push false for outer condition
                     Op::If {
-                        condition: vec![Op::Push(0.0)],  // Push true for inner condition
-                        then: vec![Op::Push(42.0)],      // Should run (condition is true/0.0)
+                        condition: vec![Op::Push(0.0)], // Push true for inner condition
+                        then: vec![Op::Push(42.0)],     // Should run (condition is true/0.0)
                         else_: None,
                     },
                 ],
-                then: vec![Op::Push(24.0)],  // This should run if the condition evaluates to 0.0
+                then: vec![Op::Push(24.0)], // This should run if the condition evaluates to 0.0
                 else_: None,
             },
         ];
 
         assert!(vm.execute(&ops).is_ok());
-        
-        // The outer condition operation pushes 1.0 and then contains a nested if 
-        // that leaves 42.0 on the stack. So the condition is 42.0, not 0.0, 
+
+        // The outer condition operation pushes 1.0 and then contains a nested if
+        // that leaves 42.0 on the stack. So the condition is 42.0, not 0.0,
         // meaning the then block should not run, leaving 42.0 as the final result.
         assert_eq!(vm.top(), Some(42.0));
     }
@@ -937,11 +1015,8 @@ mod tests {
     #[test]
     fn test_negate() {
         let mut vm = VM::new();
-        let ops = vec![
-            Op::Push(42.0),
-            Op::Negate,
-        ];
-        
+        let ops = vec![Op::Push(42.0), Op::Negate];
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.top(), Some(-42.0));
     }
@@ -949,11 +1024,8 @@ mod tests {
     #[test]
     fn test_negate_zero() {
         let mut vm = VM::new();
-        let ops = vec![
-            Op::Push(0.0),
-            Op::Negate,
-        ];
-        
+        let ops = vec![Op::Push(0.0), Op::Negate];
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.top(), Some(0.0));
     }
@@ -962,24 +1034,22 @@ mod tests {
     fn test_negate_empty_stack() {
         let mut vm = VM::new();
         let ops = vec![Op::Negate];
-        
-        assert_eq!(vm.execute(&ops), Err(VMError::StackUnderflow { 
-            op: "Negate".to_string(), 
-            needed: 1, 
-            found: 0 
-        }));
+
+        assert_eq!(
+            vm.execute(&ops),
+            Err(VMError::StackUnderflow {
+                op: "Negate".to_string(),
+                needed: 1,
+                found: 0
+            })
+        );
     }
 
     #[test]
     fn test_negate_with_arithmetic() {
         let mut vm = VM::new();
-        let ops = vec![
-            Op::Push(5.0),
-            Op::Push(3.0),
-            Op::Add,
-            Op::Negate,
-        ];
-        
+        let ops = vec![Op::Push(5.0), Op::Push(3.0), Op::Add, Op::Negate];
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.top(), Some(-8.0));
     }
@@ -987,63 +1057,53 @@ mod tests {
     #[test]
     fn test_assert_top_success() {
         let mut vm = VM::new();
-        let ops = vec![
-            Op::Push(42.0),
-            Op::AssertTop(42.0),
-        ];
-        
+        let ops = vec![Op::Push(42.0), Op::AssertTop(42.0)];
+
         assert!(vm.execute(&ops).is_ok());
     }
 
     #[test]
     fn test_assert_top_failure() {
         let mut vm = VM::new();
-        let ops = vec![
-            Op::Push(42.0),
-            Op::AssertTop(24.0),
-        ];
-        
-        assert_eq!(vm.execute(&ops), Err(VMError::AssertionFailed { 
-            expected: 24.0, 
-            found: 42.0 
-        }));
+        let ops = vec![Op::Push(42.0), Op::AssertTop(24.0)];
+
+        assert_eq!(
+            vm.execute(&ops),
+            Err(VMError::AssertionFailed {
+                expected: 24.0,
+                found: 42.0
+            })
+        );
     }
 
     #[test]
     fn test_assert_top_empty_stack() {
         let mut vm = VM::new();
         let ops = vec![Op::AssertTop(42.0)];
-        
-        assert_eq!(vm.execute(&ops), Err(VMError::StackUnderflow { 
-            op: "AssertTop".to_string(), 
-            needed: 1, 
-            found: 0 
-        }));
+
+        assert_eq!(
+            vm.execute(&ops),
+            Err(VMError::StackUnderflow {
+                op: "AssertTop".to_string(),
+                needed: 1,
+                found: 0
+            })
+        );
     }
 
     #[test]
     fn test_assert_top_with_arithmetic() {
         let mut vm = VM::new();
-        let ops = vec![
-            Op::Push(5.0),
-            Op::Push(3.0),
-            Op::Add,
-            Op::AssertTop(8.0),
-        ];
-        
+        let ops = vec![Op::Push(5.0), Op::Push(3.0), Op::Add, Op::AssertTop(8.0)];
+
         assert!(vm.execute(&ops).is_ok());
     }
 
     #[test]
     fn test_dump_stack() {
         let mut vm = VM::new();
-        let ops = vec![
-            Op::Push(1.0),
-            Op::Push(2.0),
-            Op::Push(3.0),
-            Op::DumpStack,
-        ];
-        
+        let ops = vec![Op::Push(1.0), Op::Push(2.0), Op::Push(3.0), Op::DumpStack];
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.stack, vec![1.0, 2.0, 3.0]);
     }
@@ -1058,7 +1118,7 @@ mod tests {
             Op::Store("y".to_string()),
             Op::DumpMemory,
         ];
-        
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.get_memory("x"), Some(42.0));
         assert_eq!(vm.get_memory("y"), Some(24.0));
@@ -1068,7 +1128,7 @@ mod tests {
     fn test_dump_empty_stack() {
         let mut vm = VM::new();
         let ops = vec![Op::DumpStack];
-        
+
         assert!(vm.execute(&ops).is_ok());
         assert!(vm.stack.is_empty());
     }
@@ -1077,7 +1137,7 @@ mod tests {
     fn test_dump_empty_memory() {
         let mut vm = VM::new();
         let ops = vec![Op::DumpMemory];
-        
+
         assert!(vm.execute(&ops).is_ok());
         assert!(vm.memory.is_empty());
     }
@@ -1085,11 +1145,8 @@ mod tests {
     #[test]
     fn test_logic_not_true() {
         let mut vm = VM::new();
-        let ops = vec![
-            Op::Push(42.0),
-            Op::Not,
-        ];
-        
+        let ops = vec![Op::Push(42.0), Op::Not];
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.top(), Some(0.0));
     }
@@ -1097,11 +1154,8 @@ mod tests {
     #[test]
     fn test_logic_not_false() {
         let mut vm = VM::new();
-        let ops = vec![
-            Op::Push(0.0),
-            Op::Not,
-        ];
-        
+        let ops = vec![Op::Push(0.0), Op::Not];
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.top(), Some(1.0));
     }
@@ -1110,23 +1164,22 @@ mod tests {
     fn test_logic_not_empty_stack() {
         let mut vm = VM::new();
         let ops = vec![Op::Not];
-        
-        assert_eq!(vm.execute(&ops), Err(VMError::StackUnderflow { 
-            op: "Not".to_string(), 
-            needed: 1, 
-            found: 0 
-        }));
+
+        assert_eq!(
+            vm.execute(&ops),
+            Err(VMError::StackUnderflow {
+                op: "Not".to_string(),
+                needed: 1,
+                found: 0
+            })
+        );
     }
 
     #[test]
     fn test_logic_and_true_true() {
         let mut vm = VM::new();
-        let ops = vec![
-            Op::Push(42.0),
-            Op::Push(24.0),
-            Op::And,
-        ];
-        
+        let ops = vec![Op::Push(42.0), Op::Push(24.0), Op::And];
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.top(), Some(1.0));
     }
@@ -1134,12 +1187,8 @@ mod tests {
     #[test]
     fn test_logic_and_true_false() {
         let mut vm = VM::new();
-        let ops = vec![
-            Op::Push(42.0),
-            Op::Push(0.0),
-            Op::And,
-        ];
-        
+        let ops = vec![Op::Push(42.0), Op::Push(0.0), Op::And];
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.top(), Some(0.0));
     }
@@ -1147,12 +1196,8 @@ mod tests {
     #[test]
     fn test_logic_and_false_true() {
         let mut vm = VM::new();
-        let ops = vec![
-            Op::Push(0.0),
-            Op::Push(42.0),
-            Op::And,
-        ];
-        
+        let ops = vec![Op::Push(0.0), Op::Push(42.0), Op::And];
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.top(), Some(0.0));
     }
@@ -1160,12 +1205,8 @@ mod tests {
     #[test]
     fn test_logic_and_false_false() {
         let mut vm = VM::new();
-        let ops = vec![
-            Op::Push(0.0),
-            Op::Push(0.0),
-            Op::And,
-        ];
-        
+        let ops = vec![Op::Push(0.0), Op::Push(0.0), Op::And];
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.top(), Some(0.0));
     }
@@ -1174,23 +1215,22 @@ mod tests {
     fn test_logic_and_stack_underflow() {
         let mut vm = VM::new();
         let ops = vec![Op::Push(42.0), Op::And];
-        
-        assert_eq!(vm.execute(&ops), Err(VMError::StackUnderflow { 
-            op: "And".to_string(), 
-            needed: 2, 
-            found: 1 
-        }));
+
+        assert_eq!(
+            vm.execute(&ops),
+            Err(VMError::StackUnderflow {
+                op: "And".to_string(),
+                needed: 2,
+                found: 1
+            })
+        );
     }
 
     #[test]
     fn test_logic_or_true_true() {
         let mut vm = VM::new();
-        let ops = vec![
-            Op::Push(42.0),
-            Op::Push(24.0),
-            Op::Or,
-        ];
-        
+        let ops = vec![Op::Push(42.0), Op::Push(24.0), Op::Or];
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.top(), Some(1.0));
     }
@@ -1198,12 +1238,8 @@ mod tests {
     #[test]
     fn test_logic_or_true_false() {
         let mut vm = VM::new();
-        let ops = vec![
-            Op::Push(42.0),
-            Op::Push(0.0),
-            Op::Or,
-        ];
-        
+        let ops = vec![Op::Push(42.0), Op::Push(0.0), Op::Or];
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.top(), Some(1.0));
     }
@@ -1211,12 +1247,8 @@ mod tests {
     #[test]
     fn test_logic_or_false_true() {
         let mut vm = VM::new();
-        let ops = vec![
-            Op::Push(0.0),
-            Op::Push(42.0),
-            Op::Or,
-        ];
-        
+        let ops = vec![Op::Push(0.0), Op::Push(42.0), Op::Or];
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.top(), Some(1.0));
     }
@@ -1224,12 +1256,8 @@ mod tests {
     #[test]
     fn test_logic_or_false_false() {
         let mut vm = VM::new();
-        let ops = vec![
-            Op::Push(0.0),
-            Op::Push(0.0),
-            Op::Or,
-        ];
-        
+        let ops = vec![Op::Push(0.0), Op::Push(0.0), Op::Or];
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.top(), Some(0.0));
     }
@@ -1238,12 +1266,15 @@ mod tests {
     fn test_logic_or_stack_underflow() {
         let mut vm = VM::new();
         let ops = vec![Op::Push(42.0), Op::Or];
-        
-        assert_eq!(vm.execute(&ops), Err(VMError::StackUnderflow { 
-            op: "Or".to_string(), 
-            needed: 2, 
-            found: 1 
-        }));
+
+        assert_eq!(
+            vm.execute(&ops),
+            Err(VMError::StackUnderflow {
+                op: "Or".to_string(),
+                needed: 2,
+                found: 1
+            })
+        );
     }
 
     #[test]
@@ -1253,11 +1284,7 @@ mod tests {
             Op::Push(5.0),
             Op::Store("counter".to_string()),
             Op::While {
-                condition: vec![
-                    Op::Load("counter".to_string()),
-                    Op::Push(0.0),
-                    Op::Gt,
-                ],
+                condition: vec![Op::Load("counter".to_string()), Op::Push(0.0), Op::Gt],
                 body: vec![
                     Op::Load("counter".to_string()),
                     Op::Push(1.0),
@@ -1267,7 +1294,7 @@ mod tests {
             },
             Op::Load("counter".to_string()),
         ];
-        
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.top(), Some(0.0));
     }
@@ -1275,16 +1302,16 @@ mod tests {
     #[test]
     fn test_while_empty_condition() {
         let mut vm = VM::new();
-        let ops = vec![
-            Op::While {
-                condition: vec![],
-                body: vec![Op::Push(1.0)],
-            }
-        ];
-        
+        let ops = vec![Op::While {
+            condition: vec![],
+            body: vec![Op::Push(1.0)],
+        }];
+
         assert_eq!(
             vm.execute(&ops),
-            Err(VMError::InvalidCondition("While condition block cannot be empty".to_string()))
+            Err(VMError::InvalidCondition(
+                "While condition block cannot be empty".to_string()
+            ))
         );
     }
 
@@ -1299,7 +1326,7 @@ mod tests {
                 body: vec![Op::Push(42.0)],
             },
         ];
-        
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.get_memory("counter"), Some(0.0));
     }
@@ -1307,11 +1334,8 @@ mod tests {
     #[test]
     fn test_stack_dup() {
         let mut vm = VM::new();
-        let ops = vec![
-            Op::Push(42.0),
-            Op::Dup,
-        ];
-        
+        let ops = vec![Op::Push(42.0), Op::Dup];
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.stack, vec![42.0, 42.0]);
     }
@@ -1320,23 +1344,22 @@ mod tests {
     fn test_stack_dup_empty() {
         let mut vm = VM::new();
         let ops = vec![Op::Dup];
-        
-        assert_eq!(vm.execute(&ops), Err(VMError::StackUnderflow { 
-            op: "Dup".to_string(), 
-            needed: 1, 
-            found: 0 
-        }));
+
+        assert_eq!(
+            vm.execute(&ops),
+            Err(VMError::StackUnderflow {
+                op: "Dup".to_string(),
+                needed: 1,
+                found: 0
+            })
+        );
     }
 
     #[test]
     fn test_stack_swap() {
         let mut vm = VM::new();
-        let ops = vec![
-            Op::Push(42.0),
-            Op::Push(24.0),
-            Op::Swap,
-        ];
-        
+        let ops = vec![Op::Push(42.0), Op::Push(24.0), Op::Swap];
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.stack, vec![24.0, 42.0]);
     }
@@ -1345,23 +1368,22 @@ mod tests {
     fn test_stack_swap_underflow() {
         let mut vm = VM::new();
         let ops = vec![Op::Push(42.0), Op::Swap];
-        
-        assert_eq!(vm.execute(&ops), Err(VMError::StackUnderflow { 
-            op: "Swap".to_string(), 
-            needed: 2, 
-            found: 1 
-        }));
+
+        assert_eq!(
+            vm.execute(&ops),
+            Err(VMError::StackUnderflow {
+                op: "Swap".to_string(),
+                needed: 2,
+                found: 1
+            })
+        );
     }
 
     #[test]
     fn test_stack_over() {
         let mut vm = VM::new();
-        let ops = vec![
-            Op::Push(42.0),
-            Op::Push(24.0),
-            Op::Over,
-        ];
-        
+        let ops = vec![Op::Push(42.0), Op::Push(24.0), Op::Over];
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.stack, vec![42.0, 24.0, 42.0]);
     }
@@ -1370,12 +1392,15 @@ mod tests {
     fn test_stack_over_underflow() {
         let mut vm = VM::new();
         let ops = vec![Op::Push(42.0), Op::Over];
-        
-        assert_eq!(vm.execute(&ops), Err(VMError::StackUnderflow { 
-            op: "Over".to_string(), 
-            needed: 2, 
-            found: 1 
-        }));
+
+        assert_eq!(
+            vm.execute(&ops),
+            Err(VMError::StackUnderflow {
+                op: "Over".to_string(),
+                needed: 2,
+                found: 1
+            })
+        );
     }
 
     #[test]
@@ -1385,11 +1410,11 @@ mod tests {
             Op::Push(1.0),
             Op::Push(2.0),
             Op::Push(3.0),
-            Op::Dup,   // Stack: [1, 2, 3, 3]
-            Op::Swap,  // Stack: [1, 2, 3, 3] -> [1, 2, 3, 3]
-            Op::Over,  // Stack: [1, 2, 3, 3, 3]
+            Op::Dup,  // Stack: [1, 2, 3, 3]
+            Op::Swap, // Stack: [1, 2, 3, 3] -> [1, 2, 3, 3]
+            Op::Over, // Stack: [1, 2, 3, 3, 3]
         ];
-        
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.stack, vec![1.0, 2.0, 3.0, 3.0, 3.0]);
     }
@@ -1401,15 +1426,12 @@ mod tests {
             Op::Def {
                 name: "double".to_string(),
                 params: vec![],
-                body: vec![
-                    Op::Push(2.0),
-                    Op::Mul,
-                ],
+                body: vec![Op::Push(2.0), Op::Mul],
             },
             Op::Push(21.0),
             Op::Call("double".to_string()),
         ];
-        
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.top(), Some(42.0));
     }
@@ -1418,8 +1440,11 @@ mod tests {
     fn test_function_not_found() {
         let mut vm = VM::new();
         let ops = vec![Op::Call("nonexistent".to_string())];
-        
-        assert_eq!(vm.execute(&ops), Err(VMError::FunctionNotFound("nonexistent".to_string())));
+
+        assert_eq!(
+            vm.execute(&ops),
+            Err(VMError::FunctionNotFound("nonexistent".to_string()))
+        );
     }
 
     #[test]
@@ -1429,16 +1454,12 @@ mod tests {
             Op::Def {
                 name: "add_one".to_string(),
                 params: vec![],
-                body: vec![
-                    Op::Push(1.0),
-                    Op::Add,
-                    Op::Return,
-                ],
+                body: vec![Op::Push(1.0), Op::Add, Op::Return],
             },
             Op::Push(41.0),
             Op::Call("add_one".to_string()),
         ];
-        
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.top(), Some(42.0));
     }
@@ -1459,7 +1480,7 @@ mod tests {
             Op::Push(42.0),
             Op::Call("store_and_load".to_string()),
         ];
-        
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.top(), Some(42.0));
     }
@@ -1472,28 +1493,28 @@ mod tests {
                 name: "countdown".to_string(),
                 params: vec![],
                 body: vec![
-                    Op::Dup,  // Duplicate the value for comparison
+                    Op::Dup, // Duplicate the value for comparison
                     Op::Push(0.0),
-                    Op::Eq,   // Will push 1.0 if n==0, 0.0 otherwise
+                    Op::Eq, // Will push 1.0 if n==0, 0.0 otherwise
                     Op::If {
                         condition: vec![],
                         then: vec![
                             // Already 0, just return
-                            Op::Push(0.0),  // Explicitly push 0 for the result
+                            Op::Push(0.0), // Explicitly push 0 for the result
                         ],
                         else_: Some(vec![
                             // n > 0, so decrement and recurse
                             Op::Push(1.0),
-                            Op::Sub,      // Decrement n
-                            Op::Call("countdown".to_string()),  // Recursive call
+                            Op::Sub,                           // Decrement n
+                            Op::Call("countdown".to_string()), // Recursive call
                         ]),
                     },
                 ],
             },
-            Op::Push(3.0),  // Use a smaller number to avoid stack overflow
+            Op::Push(3.0), // Use a smaller number to avoid stack overflow
             Op::Call("countdown".to_string()),
         ];
-        
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.top(), Some(0.0));
     }
@@ -1505,16 +1526,12 @@ mod tests {
             Op::Def {
                 name: "push_and_pop".to_string(),
                 params: vec![],
-                body: vec![
-                    Op::Push(42.0),
-                    Op::Pop,
-                    Op::Return,
-                ],
+                body: vec![Op::Push(42.0), Op::Pop, Op::Return],
             },
             Op::Push(24.0),
             Op::Call("push_and_pop".to_string()),
         ];
-        
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.top(), Some(24.0));
     }
@@ -1530,17 +1547,17 @@ mod tests {
                 params: vec![],
                 body: vec![
                     Op::Push(24.0),
-                    Op::Store("x".to_string()),  // This should update the function's x, not global x
+                    Op::Store("x".to_string()), // This should update the function's x, not global x
                     Op::Return,
                 ],
             },
             Op::Call("store_value".to_string()),
             // No return value, so we need to load x to verify it's unchanged
-            Op::Load("x".to_string()),  // Should be 42.0, not 24.0
+            Op::Load("x".to_string()), // Should be 42.0, not 24.0
         ];
 
         assert!(vm.execute(&ops).is_ok());
-        assert_eq!(vm.top(), Some(42.0));  // Global x should be 42.0
+        assert_eq!(vm.top(), Some(42.0)); // Global x should be 42.0
     }
 
     #[test]
@@ -1554,22 +1571,22 @@ mod tests {
                     Op::Load("x".to_string()),
                     Op::Push(5.0),
                     Op::Add,
-                    Op::Store("x".to_string()),  // Should modify the local x, not global x
-                    Op::Load("x".to_string()),   // Should get the modified local x
+                    Op::Store("x".to_string()), // Should modify the local x, not global x
+                    Op::Load("x".to_string()),  // Should get the modified local x
                     Op::Return,
                 ],
             },
             Op::Push(10.0),
-            Op::Store("x".to_string()),  // Global x = 10
-            Op::Push(20.0),              // Parameter value
-            Op::Call("add_to_param".to_string()),  // Should return 25 (20+5)
-            Op::Load("x".to_string()),   // Should still be 10 (global x unchanged)
+            Op::Store("x".to_string()),           // Global x = 10
+            Op::Push(20.0),                       // Parameter value
+            Op::Call("add_to_param".to_string()), // Should return 25 (20+5)
+            Op::Load("x".to_string()),            // Should still be 10 (global x unchanged)
         ];
-         
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.stack.len(), 2);
-        assert_eq!(vm.stack[0], 25.0);  // Return value from function (parameter + 5)
-        assert_eq!(vm.stack[1], 10.0);  // Global x value unchanged
+        assert_eq!(vm.stack[0], 25.0); // Return value from function (parameter + 5)
+        assert_eq!(vm.stack[1], 10.0); // Global x value unchanged
     }
 
     #[test]
@@ -1579,11 +1596,7 @@ mod tests {
             Op::Def {
                 name: "inner".to_string(),
                 params: vec![],
-                body: vec![
-                    Op::Push(2.0),
-                    Op::Mul,
-                    Op::Return,
-                ],
+                body: vec![Op::Push(2.0), Op::Mul, Op::Return],
             },
             Op::Def {
                 name: "outer".to_string(),
@@ -1598,7 +1611,7 @@ mod tests {
             Op::Push(7.0),
             Op::Call("outer".to_string()),
         ];
-        
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.top(), Some(42.0)); // 7 * 2 * 3
     }
@@ -1621,7 +1634,7 @@ mod tests {
             Op::Push(22.0),
             Op::Call("add".to_string()),
         ];
-        
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.top(), Some(42.0));
     }
@@ -1643,12 +1656,15 @@ mod tests {
             Op::Push(42.0),
             Op::Call("add".to_string()),
         ];
-         
-        assert_eq!(vm.execute(&ops), Err(VMError::StackUnderflow { 
-            op: "Call to function 'add'".to_string(), 
-            needed: 2, 
-            found: 1 
-        }));
+
+        assert_eq!(
+            vm.execute(&ops),
+            Err(VMError::StackUnderflow {
+                op: "Call to function 'add'".to_string(),
+                needed: 2,
+                found: 1
+            })
+        );
     }
 
     #[test]
@@ -1659,20 +1675,20 @@ mod tests {
                 name: "countdown".to_string(),
                 params: vec!["n".to_string()],
                 body: vec![
-                    Op::Load("n".to_string()),  // Load the parameter
+                    Op::Load("n".to_string()), // Load the parameter
                     Op::Push(0.0),
-                    Op::Eq,   // Will push 1.0 if n==0, 0.0 otherwise
+                    Op::Eq, // Will push 1.0 if n==0, 0.0 otherwise
                     Op::If {
                         condition: vec![],
                         then: vec![
-                            Op::Push(0.0),  // Return 0 when n==0
+                            Op::Push(0.0), // Return 0 when n==0
                         ],
                         else_: Some(vec![
                             // n > 0, so decrement and recurse
                             Op::Load("n".to_string()),
                             Op::Push(1.0),
-                            Op::Sub,                       // Compute n-1
-                            Op::Call("countdown".to_string()),  // Call countdown(n-1)
+                            Op::Sub,                           // Compute n-1
+                            Op::Call("countdown".to_string()), // Call countdown(n-1)
                         ]),
                     },
                     // Return (implicit)
@@ -1681,7 +1697,7 @@ mod tests {
             Op::Push(5.0),
             Op::Call("countdown".to_string()),
         ];
-         
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.top(), Some(0.0));
     }
@@ -1714,7 +1730,7 @@ mod tests {
             Op::Push(7.0),
             Op::Call("outer".to_string()),
         ];
-         
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.top(), Some(42.0)); // 7 * 2 * 3
     }
@@ -1744,11 +1760,11 @@ mod tests {
             },
             Op::Load("counter".to_string()),
         ];
-        
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.top(), Some(5.0)); // Loop should break at counter = 5
     }
-    
+
     #[test]
     fn test_continue_in_loop() {
         let mut vm = VM::new();
@@ -1764,7 +1780,6 @@ mod tests {
                     Op::Push(1.0),
                     Op::Add,
                     Op::Store("counter".to_string()),
-                    
                     // Skip odd numbers
                     Op::Load("counter".to_string()),
                     Op::Push(2.0),
@@ -1777,7 +1792,6 @@ mod tests {
                         then: vec![Op::Continue],
                         else_: None,
                     },
-                    
                     // Add even numbers to sum
                     Op::Load("sum".to_string()),
                     Op::Load("counter".to_string()),
@@ -1787,22 +1801,22 @@ mod tests {
             },
             Op::Load("sum".to_string()),
         ];
-        
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.top(), Some(30.0)); // Sum of even numbers from 2 to 10 = 2+4+6+8+10 = 30
     }
-    
+
     #[test]
     fn test_break_in_while() {
         let mut vm = VM::new();
-        
+
         // Create a simpler test case that's more likely to work
         let ops = vec![
             Op::Push(0.0),
             Op::Store("counter".to_string()),
             Op::While {
                 condition: vec![
-                    Op::Push(0.0),  // True condition (0.0)
+                    Op::Push(0.0), // True condition (0.0)
                 ],
                 body: vec![
                     // Increment counter
@@ -1810,7 +1824,6 @@ mod tests {
                     Op::Push(1.0),
                     Op::Add,
                     Op::Store("counter".to_string()),
-                    
                     // If counter == 5, break
                     Op::Load("counter".to_string()),
                     Op::Push(5.0),
@@ -1825,11 +1838,11 @@ mod tests {
             // Load the counter to verify
             Op::Load("counter".to_string()),
         ];
-        
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.top(), Some(5.0));
     }
-    
+
     #[test]
     fn test_continue_in_while() {
         let mut vm = VM::new();
@@ -1839,17 +1852,12 @@ mod tests {
             Op::Push(0.0),
             Op::Store("counter".to_string()),
             Op::While {
-                condition: vec![
-                    Op::Load("counter".to_string()),
-                    Op::Push(10.0),
-                    Op::Lt,
-                ],
+                condition: vec![Op::Load("counter".to_string()), Op::Push(10.0), Op::Lt],
                 body: vec![
                     Op::Load("counter".to_string()),
                     Op::Push(1.0),
                     Op::Add,
                     Op::Store("counter".to_string()),
-                    
                     // Skip odd numbers
                     Op::Load("counter".to_string()),
                     Op::Push(2.0),
@@ -1862,7 +1870,6 @@ mod tests {
                         then: vec![Op::Continue],
                         else_: None,
                     },
-                    
                     // Add even numbers to sum
                     Op::Load("sum".to_string()),
                     Op::Load("counter".to_string()),
@@ -1872,11 +1879,11 @@ mod tests {
             },
             Op::Load("sum".to_string()),
         ];
-        
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.top(), Some(30.0)); // Sum of even numbers from 2 to 10 = 2+4+6+8+10 = 30
     }
-    
+
     #[test]
     fn test_match_statement() {
         let mut vm = VM::new();
@@ -1892,11 +1899,11 @@ mod tests {
                 default: Some(vec![Op::Push(0.0)]),
             },
         ];
-        
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.top(), Some(20.0)); // Should match case 2
     }
-    
+
     #[test]
     fn test_match_with_default() {
         let mut vm = VM::new();
@@ -1912,11 +1919,11 @@ mod tests {
                 default: Some(vec![Op::Push(999.0)]),
             },
         ];
-        
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.top(), Some(999.0)); // Should execute default
     }
-    
+
     #[test]
     fn test_match_no_default() {
         let mut vm = VM::new();
@@ -1932,34 +1939,28 @@ mod tests {
                 default: None,
             },
         ];
-        
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.top(), Some(5.0)); // Should keep original value
     }
-    
+
     #[test]
     fn test_match_with_computed_value() {
         let mut vm = VM::new();
-        let ops = vec![
-            Op::Match {
-                value: vec![
-                    Op::Push(1.0),
-                    Op::Push(2.0),
-                    Op::Add,
-                ],
-                cases: vec![
-                    (1.0, vec![Op::Push(10.0)]),
-                    (3.0, vec![Op::Push(30.0)]),
-                    (4.0, vec![Op::Push(40.0)]),
-                ],
-                default: Some(vec![Op::Push(999.0)]),
-            },
-        ];
-        
+        let ops = vec![Op::Match {
+            value: vec![Op::Push(1.0), Op::Push(2.0), Op::Add],
+            cases: vec![
+                (1.0, vec![Op::Push(10.0)]),
+                (3.0, vec![Op::Push(30.0)]),
+                (4.0, vec![Op::Push(40.0)]),
+            ],
+            default: Some(vec![Op::Push(999.0)]),
+        }];
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.top(), Some(30.0)); // 1+2=3, should match case 3
     }
-    
+
     #[test]
     fn test_emit_event() {
         let mut vm = VM::new();
@@ -1970,11 +1971,11 @@ mod tests {
             },
             Op::Push(42.0), // Just to verify execution continues
         ];
-        
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.top(), Some(42.0));
     }
-    
+
     #[test]
     fn test_assert_equal_stack_success() {
         let mut vm = VM::new();
@@ -1984,11 +1985,11 @@ mod tests {
             Op::Push(42.0),
             Op::AssertEqualStack { depth: 3 },
         ];
-        
+
         assert!(vm.execute(&ops).is_ok());
         assert_eq!(vm.stack, vec![42.0, 42.0, 42.0]);
     }
-    
+
     #[test]
     fn test_assert_equal_stack_failure() {
         let mut vm = VM::new();
@@ -1998,18 +1999,15 @@ mod tests {
             Op::Push(42.0),
             Op::AssertEqualStack { depth: 3 },
         ];
-        
+
         assert!(vm.execute(&ops).is_err());
     }
-    
+
     #[test]
     fn test_assert_equal_stack_underflow() {
         let mut vm = VM::new();
-        let ops = vec![
-            Op::Push(42.0),
-            Op::AssertEqualStack { depth: 3 },
-        ];
-        
+        let ops = vec![Op::Push(42.0), Op::AssertEqualStack { depth: 3 }];
+
         assert!(vm.execute(&ops).is_err());
     }
 }

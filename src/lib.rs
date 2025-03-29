@@ -1,6 +1,6 @@
-pub mod vm;
 pub mod compiler;
 pub mod events;
-pub use vm::{Op, VM, VMError};
+pub mod vm;
 pub use compiler::{parse_dsl, parse_dsl_with_stdlib, CompilerError, SourcePosition};
-pub use events::{Event, LogFormat, set_log_format, set_log_file}; 
+pub use events::{set_log_file, set_log_format, Event, LogFormat};
+pub use vm::{Op, VMError, VM};

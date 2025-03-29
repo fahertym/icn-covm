@@ -87,5 +87,6 @@ def xor(a, b):
     or
     and
     return
-"#.to_string()
-} 
+"#
+    .to_string()
+}
