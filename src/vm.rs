@@ -75,6 +75,8 @@ pub enum Op {
     Continue,
     EmitEvent { category: String, message: String },
     AssertEqualStack { depth: usize },
+    // Debug/introspection opcode
+    DumpState,
 }
 
 #[derive(Debug)]
@@ -312,15 +314,23 @@ impl VM {
                     self.stack.push(value);
                 }
                 Op::DumpStack => {
-                    let stack_data = serde_json::to_value(&self.stack).unwrap_or(serde_json::Value::Null);
-                    let event = Event::info("stack", "Dumping stack contents")
-                        .with_data(stack_data);
+                    let event = Event::info("stack", &format!("{:?}", self.stack));
                     event.emit().map_err(|e| VMError::IOError(e.to_string()))?;
                 }
                 Op::DumpMemory => {
-                    let memory_data = serde_json::to_value(&self.memory).unwrap_or(serde_json::Value::Null);
-                    let event = Event::info("memory", "Dumping memory contents")
-                        .with_data(memory_data);
+                    let event = Event::info("memory", &format!("{:?}", self.memory));
+                    event.emit().map_err(|e| VMError::IOError(e.to_string()))?;
+                }
+                Op::DumpState => {
+                    // Output the full state of the VM (stack, memory, and more)
+                    let event = Event::info("vm_state", &format!(
+                        "Stack: {:?}\nMemory: {:?}\nFunctions: {}\nCall Frames: {}\nRecursion Depth: {}", 
+                        self.stack, 
+                        self.memory, 
+                        self.functions.keys().collect::<Vec<_>>().len(),
+                        self.call_frames.len(),
+                        self.recursion_depth
+                    ));
                     event.emit().map_err(|e| VMError::IOError(e.to_string()))?;
                 }
                 Op::Def { name, params, body } => {

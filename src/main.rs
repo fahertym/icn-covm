@@ -4,7 +4,7 @@ mod events;
 use std::fs;
 use std::path::Path;
 use vm::{Op, VM, VMError};
-use compiler::{parse_dsl, CompilerError};
+use compiler::{parse_dsl, parse_dsl_with_stdlib, CompilerError};
 use events::Event;
 use clap::{Arg, Command};
 use serde_json;
@@ -71,6 +71,14 @@ fn main() {
             .long("interactive")
             .help("Start in interactive REPL mode")
             .action(clap::ArgAction::SetTrue))
+        .arg(Arg::new("json")
+            .long("json")
+            .help("Output logs in JSON format")
+            .action(clap::ArgAction::SetTrue))
+        .arg(Arg::new("stdlib")
+            .long("stdlib")
+            .help("Include standard library functions")
+            .action(clap::ArgAction::SetTrue))
         .get_matches();
 
     // Get program file and verbosity setting
@@ -102,14 +110,15 @@ fn main() {
             process::exit(1);
         }
     } else {
-        if let Err(err) = run_program(program_path, verbose, parameters) {
+        let use_stdlib = matches.get_flag("stdlib");
+        if let Err(err) = run_program(program_path, verbose, use_stdlib, parameters) {
             eprintln!("Error: {}", err);
             process::exit(1);
         }
     }
 }
 
-fn run_program(program_path: &str, verbose: bool, parameters: HashMap<String, String>) -> Result<(), AppError> {
+fn run_program(program_path: &str, verbose: bool, use_stdlib: bool, parameters: HashMap<String, String>) -> Result<(), AppError> {
     let path = Path::new(program_path);
     
     // Check if file exists
@@ -125,7 +134,17 @@ fn run_program(program_path: &str, verbose: bool, parameters: HashMap<String, St
                     println!("Parsing DSL program from {}", program_path);
                 }
                 let program_source = fs::read_to_string(path)?;
-                parse_dsl(&program_source)?
+                
+                // Check if we should include the standard library
+                if verbose && use_stdlib {
+                    println!("Including standard library functions");
+                }
+                
+                if use_stdlib {
+                    parse_dsl_with_stdlib(&program_source)?
+                } else {
+                    parse_dsl(&program_source)?
+                }
             },
             "json" => {
                 if verbose {
