@@ -1,113 +1,68 @@
-# Nano-CVM: Cooperative Virtual Machine
+# nano-cvm
 
-A secure, stack-based virtual machine in Rust for the Intercooperative Network (ICN), featuring governance-inspired operations, memory-isolated execution, and a custom DSL parser.
+A lightweight cooperative virtual machine for executing a domain-specific language (DSL) with support for stack-based operations, memory isolation, functions, loops, conditionals, and governance-oriented extensions.
 
-## Features
+---
 
-- **Stack-based architecture**: Simple and secure execution model
-- **Memory isolation**: Each function call has isolated memory space
-- **Custom DSL**: Human-readable text format for programs
-- **JSON serialization**: Machine-readable format for program interchange
-- **Governance-inspired opcodes**: Special operations for cooperative decision processes
+## Developer Workflow
 
-## Opcodes
+Common tasks are available via `make`:
 
-### Core Operations
-- Basic arithmetic: `Add`, `Sub`, `Mul`, `Div`, `Mod`
-- Stack manipulation: `Push`, `Pop`, `Dup`, `Swap`, `Over`
-- Memory: `Store`, `Load`
-- Control flow: `If`, `Loop`, `While`, `Return`
-- Functions: `Def`, `Call`
+| Command        | Description                                       |
+|----------------|---------------------------------------------------|
+| `make all`     | Run format check, type check, tests, and dump     |
+| `make dump`    | Generate `full_project_dump.txt` for LLM usage    |
+| `make demo`    | Run all DSL files in the `demo/` folder           |
+| `make clean`   | Remove generated dumps and other temp files       |
 
-### Governance-Inspired Operations
-- **Match**: Pattern-style branching for multi-way decisions
-- **Break** and **Continue**: Fine-grained loop control
-- **EmitEvent**: Trigger governance logs with categorized messages
-- **AssertEqualStack**: Validate consensus/coordination by ensuring stack uniformity
-
-## Usage
-
-### Installation
+You can also run specific demo files manually:
 
 ```bash
-cargo build --release
+./scripts/run_demo.sh demo/stdlib/stdlib_demo.dsl
 ```
 
-### Running Programs
+---
 
-The VM supports both the DSL text format and JSON serialized programs:
+## Folder Structure
 
 ```bash
-# Run a DSL program
-./target/release/nano-cvm --program program.dsl
-
-# Run a JSON program
-./target/release/nano-cvm --program program.json
-
-# Verbose output
-./target/release/nano-cvm --program program.dsl --verbose
+.
+├── demo/                    # Example DSL programs
+│   ├── functions/
+│   ├── parser/
+│   └── stdlib/
+├── scripts/                 # Dev utility scripts
+├── src/                     # Main VM and compiler implementation
+│   └── compiler/            # Modular parser components
+├── Cargo.toml               # Rust project manifest
+├── Makefile                 # Build automation for common tasks
+└── README.md                # You're here
 ```
 
-## DSL Syntax
+---
 
-```
-# Define a function
-def function_name(param1, param2):
-    # Function body
-    load param1
-    load param2
-    add
-    return
+## Scripts
 
-# Invoke Match operation
-match:
-    value:
-        # Instructions that leave a value on the stack
-        push 1
-        push 2
-        add
-    case 3:
-        # Execute if value is 3
-        push 30
-    case 4:
-        # Execute if value is 4
-        push 40
-    default:
-        # Execute if no case matches
-        push 999
+- `scripts/generate_full_dump.sh` – Recursively dumps all project code into one file for LLM ingestion.
+- `scripts/run_demo.sh` – Run one or more `.dsl` files through the VM with optional standard library support.
 
-# Break and Continue
-while:
-    push 1  # Infinite loop
-    if:
-        # Condition to break
-        break
-    if:
-        # Condition to skip to next iteration
-        continue
+---
 
-# Emit governance events
-emitevent "category" "message"
+## Quickstart
 
-# Validate stack consensus
-push 42
-push 42
-push 42
-assertequalstack 3  # Verify last 3 values are equal
+```bash
+# Clone and build
+git clone https://github.com/your-user/nano-cvm
+cd nano-cvm
+cargo build
+
+# Run a demo program
+cargo run -- -p demo/stdlib/stdlib_demo.dsl --stdlib
 ```
 
-## Security Features
-
-- No `unsafe` Rust code
-- Memory isolation between function calls
-- Comprehensive stack underflow checks
-- Detailed error messages
-- Limited recursion depth protection
-
-## Example
-
-See `program.dsl` and `program.json` for example programs demonstrating the governance-inspired opcodes.
+---
 
 ## License
 
-MIT License 
+MIT © Matt Faherty and contributors
+
