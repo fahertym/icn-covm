@@ -7,10 +7,12 @@ pub use compiler::{parse_dsl, CompilerError};
 pub use events::{Event, LogFormat, set_log_format, set_log_file}; --- FILE: ./src/main.rs ---
 mod vm;
 mod compiler;
+mod events;
 use std::fs;
 use std::path::Path;
-use vm::{Op, VM, VMError, Event};
+use vm::{Op, VM, VMError};
 use compiler::{parse_dsl, CompilerError};
+use events::Event;
 use clap::{Arg, Command};
 use serde_json;
 use std::process;
@@ -90,10 +92,10 @@ fn main() {
             if let Some(equals_pos) = param_str.find('=') {
                 let key = param_str[0..equals_pos].to_string();
                 let value = param_str[equals_pos+1..].to_string();
-                parameters.insert(key, value);
                 if verbose {
                     println!("Parameter: {} = {}", key, value);
                 }
+                parameters.insert(key, value);
             } else {
                 eprintln!("Warning: Invalid parameter format '{}', expected KEY=VALUE", param_str);
             }
@@ -299,7 +301,7 @@ static LOG_FORMAT: Lazy<Mutex<LogFormat>> = Lazy::new(|| Mutex::new(LogFormat::P
 static LOG_FILE: Lazy<Mutex<Option<String>>> = Lazy::new(|| Mutex::new(None));
 
 impl Event {
-    pub fn new<S: Into<String>>(level: S, tag: S, message: S) -> Self {
+    pub fn new<S1: Into<String>, S2: Into<String>, S3: Into<String>>(level: S1, tag: S2, message: S3) -> Self {
         let now: DateTime<Utc> = Utc::now();
         
         Self {
@@ -316,15 +318,15 @@ impl Event {
         self
     }
     
-    pub fn info<S: Into<String>>(tag: S, message: S) -> Self {
+    pub fn info<S1: Into<String>, S2: Into<String>>(tag: S1, message: S2) -> Self {
         Self::new("info", tag, message)
     }
     
-    pub fn warn<S: Into<String>>(tag: S, message: S) -> Self {
+    pub fn warn<S1: Into<String>, S2: Into<String>>(tag: S1, message: S2) -> Self {
         Self::new("warn", tag, message)
     }
     
-    pub fn error<S: Into<String>>(tag: S, message: S) -> Self {
+    pub fn error<S1: Into<String>, S2: Into<String>>(tag: S1, message: S2) -> Self {
         Self::new("error", tag, message)
     }
     
@@ -423,7 +425,6 @@ fn append_to_file(file_path: &str, content: &str) -> io::Result<()> {
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use thiserror::Error;
-use std::io;
 use crate::events::Event;
 
 #[derive(Debug, Clone, PartialEq, Error)]
@@ -667,7 +668,7 @@ impl VM {
                     self.stack.push(value);
                 }
                 Op::Emit(msg) => {
-                    let event = Event::info("emit", &msg);
+                    let event = Event::info("emit", msg);
                     event.emit().map_err(|e| VMError::IOError(e.to_string()))?;
                 }
                 Op::DumpStack => {

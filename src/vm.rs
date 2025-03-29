@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use thiserror::Error;
-use std::io;
 use crate::events::Event;
 
 #[derive(Debug, Clone, PartialEq, Error)]
@@ -245,7 +244,7 @@ impl VM {
                     self.stack.push(value);
                 }
                 Op::Emit(msg) => {
-                    let event = Event::info("emit", &msg);
+                    let event = Event::info("emit", msg);
                     event.emit().map_err(|e| VMError::IOError(e.to_string()))?;
                 }
                 Op::DumpStack => {

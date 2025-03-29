@@ -1,9 +1,11 @@
 mod vm;
 mod compiler;
+mod events;
 use std::fs;
 use std::path::Path;
-use vm::{Op, VM, VMError, Event};
+use vm::{Op, VM, VMError};
 use compiler::{parse_dsl, CompilerError};
+use events::Event;
 use clap::{Arg, Command};
 use serde_json;
 use std::process;
@@ -83,10 +85,10 @@ fn main() {
             if let Some(equals_pos) = param_str.find('=') {
                 let key = param_str[0..equals_pos].to_string();
                 let value = param_str[equals_pos+1..].to_string();
-                parameters.insert(key, value);
                 if verbose {
                     println!("Parameter: {} = {}", key, value);
                 }
+                parameters.insert(key, value);
             } else {
                 eprintln!("Warning: Invalid parameter format '{}', expected KEY=VALUE", param_str);
             }

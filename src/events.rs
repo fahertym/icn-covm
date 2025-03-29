@@ -26,7 +26,7 @@ static LOG_FORMAT: Lazy<Mutex<LogFormat>> = Lazy::new(|| Mutex::new(LogFormat::P
 static LOG_FILE: Lazy<Mutex<Option<String>>> = Lazy::new(|| Mutex::new(None));
 
 impl Event {
-    pub fn new<S: Into<String>>(level: S, tag: S, message: S) -> Self {
+    pub fn new<S1: Into<String>, S2: Into<String>, S3: Into<String>>(level: S1, tag: S2, message: S3) -> Self {
         let now: DateTime<Utc> = Utc::now();
         
         Self {
@@ -43,15 +43,15 @@ impl Event {
         self
     }
     
-    pub fn info<S: Into<String>>(tag: S, message: S) -> Self {
+    pub fn info<S1: Into<String>, S2: Into<String>>(tag: S1, message: S2) -> Self {
         Self::new("info", tag, message)
     }
     
-    pub fn warn<S: Into<String>>(tag: S, message: S) -> Self {
+    pub fn warn<S1: Into<String>, S2: Into<String>>(tag: S1, message: S2) -> Self {
         Self::new("warn", tag, message)
     }
     
-    pub fn error<S: Into<String>>(tag: S, message: S) -> Self {
+    pub fn error<S1: Into<String>, S2: Into<String>>(tag: S1, message: S2) -> Self {
         Self::new("error", tag, message)
     }
     
