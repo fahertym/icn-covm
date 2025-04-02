@@ -2,10 +2,11 @@
 emit "COOPERATIVE GOVERNANCE SYSTEM DEMO"
 emit "==================================="
 emit ""
-emit "This demo demonstrates three governance primitives:"
+emit "This demo demonstrates four governance primitives:"
 emit "1. Liquid Democracy (delegation)"
 emit "2. Ranked-Choice Voting"
 emit "3. Vote Thresholds"
+emit "4. Quorum Requirements"
 emit ""
 
 # Set up initial voting power for all members
@@ -72,24 +73,42 @@ store "winning_proposal"
 emit "RESULT: Proposal 0 (Expand operations) wins!"
 emit ""
 
-# PHASE 3: THRESHOLD CHECK FOR EXECUTION
-emit "PHASE 3: EXECUTION THRESHOLD CHECK"
-emit "=================================="
-emit "Checking if threshold of 3.0 votes is met..."
+# PHASE 3: QUORUM CHECK FOR VOTE VALIDITY
+emit "PHASE 3: QUORUM CHECK"
+emit "====================="
+emit "Checking if minimum participation requirement of 60% is met..."
 
-# Calculate first-choice support (Bob + Eve = 3.0 votes)
-push 3.0
-push 3.0
-votethreshold 3.0
+# Check if enough members participated (quorum)
+# Total possible votes = 5 members x 1 vote each = 5 votes
+# Total votes cast = Bob (2) + Carol (2) + Eve (1) = 5 votes
+push 5.0  # Total possible votes
+push 5.0  # Total votes cast
+quorumthreshold 0.6  # 60% minimum participation
 
 if:
-    emit "✓ Threshold met! First-choice support equals 3.0 votes."
-    emit "Executing Proposal 0: Expand operations to a new location"
-    emit "- Budget allocated: 45,000 credits"
-    emit "- Timeline: 6 months"
-    emit "- Team assigned: Bob (lead), Carol, Eve"
+    emit "✓ Quorum met! 5 out of 5 possible votes cast (100% participation)."
+    emit ""
+    
+    # PHASE 4: THRESHOLD CHECK FOR EXECUTION
+    emit "PHASE 4: EXECUTION THRESHOLD CHECK"
+    emit "=================================="
+    emit "Checking if threshold of 3.0 votes is met for the winning proposal..."
+    
+    # Calculate first-choice support (Bob + Eve = 3.0 votes)
+    push 3.0  # Support for winning proposal
+    push 5.0  # Total votes cast
+    votethreshold 0.5  # 50% support required
+    
+    if:
+        emit "✓ Threshold met! Support equals 3.0 votes (60% of votes cast)."
+        emit "Executing Proposal 0: Expand operations to a new location"
+        emit "- Budget allocated: 45,000 credits"
+        emit "- Timeline: 6 months"
+        emit "- Team assigned: Bob (lead), Carol, Eve"
+    else:
+        emit "✗ Threshold not met! Proposal cannot be executed."
 else:
-    emit "✗ Threshold not met! Proposal cannot be executed."
+    emit "✗ Quorum not met! Vote is invalid due to insufficient participation."
 
 emit ""
 emit "GOVERNANCE FLOW COMPLETE"
@@ -97,4 +116,5 @@ emit ""
 emit "This demo showed a complete democratic process:"
 emit "1. Members delegated voting power (liquid democracy)"
 emit "2. Ranked-choice voting selected the best option"
-emit "3. Threshold check verified sufficient support" 
+emit "3. Quorum check verified sufficient participation"
+emit "4. Threshold check verified sufficient support" 

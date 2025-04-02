@@ -57,6 +57,7 @@ pub enum BytecodeOp {
     RankedVote(usize, usize),
     LiquidDelegate(String, String),
     VoteThreshold(f64),
+    QuorumThreshold(f64),
 }
 
 /// The bytecode program with flattened instructions and a function lookup table
@@ -291,6 +292,10 @@ impl BytecodeCompiler {
                     .program
                     .instructions
                     .push(BytecodeOp::VoteThreshold(*threshold)),
+                Op::QuorumThreshold(threshold) => self
+                    .program
+                    .instructions
+                    .push(BytecodeOp::QuorumThreshold(*threshold)),
 
                 // Handle more complex operations
                 Op::If {
@@ -939,6 +944,23 @@ impl BytecodeInterpreter {
             VoteThreshold(threshold) => {
                 let total_voting_power = self.vm.pop_one("votethreshold")?;
                 if total_voting_power >= *threshold {
+                    self.vm.stack.push(0.0); // Truthy value for if statements
+                } else {
+                    self.vm.stack.push(1.0); // Falsey value for if statements
+                }
+            }
+            QuorumThreshold(threshold) => {
+                let total_votes_cast = self.vm.pop_one("quorumthreshold")?;
+                let total_possible_votes = self.vm.pop_one("quorumthreshold")?;
+                
+                // Avoid division by zero
+                if total_possible_votes == 0.0 {
+                    return Err(VMError::DivisionByZero);
+                }
+                
+                // Calculate participation ratio and compare with threshold
+                let participation_ratio = total_votes_cast / total_possible_votes;
+                if participation_ratio >= *threshold {
                     self.vm.stack.push(0.0); // Truthy value for if statements
                 } else {
                     self.vm.stack.push(1.0); // Falsey value for if statements

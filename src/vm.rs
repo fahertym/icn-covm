@@ -239,6 +239,21 @@ pub enum Op {
     /// This is typically used for conditional execution in governance systems
     /// to ensure sufficient support before taking action.
     VoteThreshold(f64),
+
+    /// Check if the participation meets a required quorum threshold
+    ///
+    /// This operation takes two values from the stack:
+    /// 1. The top value is the total possible votes (from all eligible voters)
+    /// 2. The second value is the total votes cast (actual participation)
+    ///
+    /// It compares the ratio of votes cast to possible votes against the
+    /// specified threshold. If the participation ratio is greater than or equal to
+    /// the threshold, it pushes 0.0 (truthy) onto the stack; otherwise it pushes
+    /// 1.0 (falsey).
+    ///
+    /// This is typically used to ensure sufficient participation in governance
+    /// decisions before accepting the results.
+    QuorumThreshold(f64),
 }
 
 #[derive(Debug)]
@@ -711,6 +726,23 @@ impl VM {
                 Op::VoteThreshold(threshold) => {
                     let total_voting_power = self.pop_one("VoteThreshold")?;
                     if total_voting_power >= *threshold {
+                        self.stack.push(0.0); // Truthy value for if statements
+                    } else {
+                        self.stack.push(1.0); // Falsey value for if statements
+                    }
+                },
+                Op::QuorumThreshold(threshold) => {
+                    let total_votes_cast = self.pop_one("QuorumThreshold")?;
+                    let total_possible_votes = self.pop_one("QuorumThreshold")?;
+                    
+                    // Avoid division by zero
+                    if total_possible_votes == 0.0 {
+                        return Err(VMError::DivisionByZero);
+                    }
+                    
+                    // Calculate participation ratio and compare with threshold
+                    let participation_ratio = total_votes_cast / total_possible_votes;
+                    if participation_ratio >= *threshold {
                         self.stack.push(0.0); // Truthy value for if statements
                     } else {
                         self.stack.push(1.0); // Falsey value for if statements
@@ -2553,6 +2585,74 @@ mod tests {
         let ops = vec![
             Op::Push(5.0),  // Total voting power
             Op::VoteThreshold(3.0),  // Threshold of 3.0
+            Op::If {
+                condition: vec![],
+                then: vec![Op::Push(42.0)],
+                else_: Some(vec![Op::Push(24.0)]),
+            },
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
+        assert_eq!(vm.top(), Some(42.0));  // Should execute the 'then' branch
+    }
+    
+    #[test]
+    fn test_quorum_threshold_pass() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Push(10.0),  // Total possible votes
+            Op::Push(6.0),   // Total votes cast
+            Op::QuorumThreshold(0.5),  // Threshold of 50%
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
+        assert_eq!(vm.top(), Some(0.0));  // 0.0 means threshold met (truthy)
+    }
+    
+    #[test]
+    fn test_quorum_threshold_fail() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Push(10.0),  // Total possible votes
+            Op::Push(4.0),   // Total votes cast
+            Op::QuorumThreshold(0.5),  // Threshold of 50%
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
+        assert_eq!(vm.top(), Some(1.0));  // 1.0 means threshold not met (falsey)
+    }
+    
+    #[test]
+    fn test_quorum_threshold_exact() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Push(10.0),  // Total possible votes
+            Op::Push(5.0),   // Total votes cast
+            Op::QuorumThreshold(0.5),  // Threshold of 50%
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
+        assert_eq!(vm.top(), Some(0.0));  // 0.0 means threshold met (truthy)
+    }
+    
+    #[test]
+    fn test_quorum_threshold_empty_stack() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::QuorumThreshold(0.5),  // Threshold of 50%
+        ];
+        
+        assert!(vm.execute(&ops).is_err());
+        assert!(matches!(vm.execute(&ops), Err(VMError::StackUnderflow { .. })));
+    }
+    
+    #[test]
+    fn test_quorum_threshold_in_conditional() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Push(100.0),  // Total possible votes
+            Op::Push(75.0),   // Total votes cast
+            Op::QuorumThreshold(0.6),  // Threshold of 60%
             Op::If {
                 condition: vec![],
                 then: vec![Op::Push(42.0)],
