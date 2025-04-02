@@ -1,7 +1,10 @@
 #![allow(dead_code)] // Allow dead code during development
 
 use crate::events::Event;
-use crate::storage::{StorageBackend, StorageError, StorageResult, InMemoryStorage, AuthContext};
+use crate::storage::auth::AuthContext;
+use crate::storage::errors::{StorageError, StorageResult};
+use crate::storage::traits::StorageBackend;
+use crate::storage::implementations::in_memory::InMemoryStorage;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
@@ -12,12 +15,8 @@ use crate::bytecode::BytecodeOp;
 #[derive(Debug, Error, Clone, PartialEq)]
 pub enum VMError {
     /// Stack underflow occurs when trying to pop more values than are available
-    #[error("Stack underflow in {op}: needed {needed}, found {found}")]
-    StackUnderflow {
-        op: String,
-        needed: usize,
-        found: usize,
-    },
+    #[error("Stack underflow during {op_name}")]
+    StackUnderflow { op_name: String },
 
     /// Division by zero error
     #[error("Division by zero")]
@@ -40,8 +39,8 @@ pub enum VMError {
     InvalidCondition(String),
 
     /// Error when an assertion fails
-    #[error("Assertion failed: expected {expected}, found {found}")]
-    AssertionFailed { expected: f64, found: f64 },
+    #[error("Assertion failed: {message}")]
+    AssertionFailed { message: String },
 
     /// I/O error during execution
     #[error("IO error: {0}")]
@@ -66,6 +65,14 @@ pub enum VMError {
     /// Storage-related error
     #[error("Storage error: {0}")]
     StorageError(String),
+
+    /// Storage backend is unavailable or not configured
+    #[error("Storage backend is unavailable or not configured")]
+    StorageUnavailable,
+
+    /// Parameter not found
+    #[error("Parameter not found: {0}")]
+    ParameterNotFound(String),
 }
 
 /// Operation types for the virtual machine
@@ -313,10 +320,10 @@ pub struct VM {
     pub memory: HashMap<String, f64>,
     
     /// Function map for storing subroutines
-    pub functions: HashMap<String, Vec<BytecodeOp>>,
+    pub functions: HashMap<String, (Vec<String>, Vec<Op>)>,
     
     /// Current function parameters
-    pub params: Vec<f64>,
+    // pub params: Vec<f64>, // This seems unused, let's remove it for now
     
     /// Call stack for tracking function calls
     pub call_stack: Vec<usize>,
@@ -328,7 +335,10 @@ pub struct VM {
     pub events: Vec<VMEvent>,
     
     /// Authentication context for the current execution
-    pub auth_context: Option<AuthContext>,
+    pub auth_context: AuthContext,
+    
+    /// Storage namespace for current execution
+    pub namespace: String,
     
     /// Storage backend for persistent data
     pub storage_backend: Option<Box<dyn StorageBackend + Send + Sync>>,
@@ -341,11 +351,11 @@ impl VM {
             stack: Vec::new(),
             memory: HashMap::new(),
             functions: HashMap::new(),
-            params: Vec::new(),
             call_stack: Vec::new(),
             output: String::new(),
             events: Vec::new(),
-            auth_context: None,
+            auth_context: AuthContext::new("default_user"),
+            namespace: "default".to_string(),
             storage_backend: Some(Box::new(InMemoryStorage::new())),
         }
     }
@@ -356,11 +366,11 @@ impl VM {
             stack: Vec::new(),
             memory: HashMap::new(),
             functions: HashMap::new(),
-            params: Vec::new(),
             call_stack: Vec::new(),
             output: String::new(),
             events: Vec::new(),
-            auth_context: None,
+            auth_context: AuthContext::new("default_user"),
+            namespace: "default".to_string(),
             storage_backend: Some(Box::new(backend)),
         }
     }
@@ -501,11 +511,6 @@ impl VM {
 
     /// Execute a program consisting of a sequence of operations
     pub fn execute(&mut self, ops: &[Op]) -> Result<(), VMError> {
-        if self.recursion_depth > 1000 {
-            return Err(VMError::MaxRecursionDepth);
-        }
-        // Reset loop control state before top-level execution
-        self.loop_control = LoopControl::None;
         self.execute_inner(ops) // Simply call execute_inner
     }
 
@@ -516,21 +521,13 @@ impl VM {
 
     /// Helper for stack operations that need to pop one value
     pub fn pop_one(&mut self, op_name: &str) -> Result<f64, VMError> {
-        self.stack.pop().ok_or_else(|| VMError::StackUnderflow {
-            op: op_name.to_string(),
-            needed: 1,
-            found: 0,
-        })
+        self.stack.pop().ok_or_else(|| VMError::StackUnderflow { op_name: op_name.to_string() })
     }
 
     /// Helper for stack operations that need to pop two values
     pub fn pop_two(&mut self, op_name: &str) -> Result<(f64, f64), VMError> {
         if self.stack.len() < 2 {
-            return Err(VMError::StackUnderflow {
-                op: op_name.to_string(),
-                needed: 2,
-                found: self.stack.len(),
-            });
+            return Err(VMError::StackUnderflow { op_name: op_name.to_string() });
         }
 
         let b = self.stack.pop().unwrap();
@@ -539,11 +536,6 @@ impl VM {
     }
 
     fn execute_inner(&mut self, ops: &[Op]) -> Result<(), VMError> {
-        if self.recursion_depth > 1000 {
-            return Err(VMError::MaxRecursionDepth);
-        }
-        //println!("ENTER execute_inner: depth={}, ops={:?}", self.recursion_depth, ops.iter().take(5).collect::<Vec<_>>()); // DEBUG
-
         let mut pc = 0;
         while pc < ops.len() {
             let op = &ops[pc];
@@ -552,16 +544,16 @@ impl VM {
                 Op::Push(value) => self.stack.push(*value),
                 Op::Pop => { self.pop_one("Pop")?; },
                 Op::Dup => {
-                    let value = self.stack.last().ok_or_else(|| VMError::StackUnderflow { op: "Dup".to_string(), needed: 1, found: 0 })?;
+                    let value = self.stack.last().ok_or_else(|| VMError::StackUnderflow { op_name: "Dup".to_string() })?;
                     self.stack.push(*value);
                 },
                 Op::Swap => {
-                    if self.stack.len() < 2 { return Err(VMError::StackUnderflow { op: "Swap".to_string(), needed: 2, found: self.stack.len() }); }
+                    if self.stack.len() < 2 { return Err(VMError::StackUnderflow { op_name: "Swap".to_string() }); }
                     let len = self.stack.len();
                     self.stack.swap(len - 1, len - 2);
                 },
                 Op::Over => {
-                    if self.stack.len() < 2 { return Err(VMError::StackUnderflow { op: "Over".to_string(), needed: 2, found: self.stack.len() }); }
+                    if self.stack.len() < 2 { return Err(VMError::StackUnderflow { op_name: "Over".to_string() }); }
                     let value = self.stack[self.stack.len() - 2];
                     self.stack.push(value);
                 },
@@ -590,32 +582,16 @@ impl VM {
                 Op::Or => { let (a, b) = self.pop_two("Or")?; self.stack.push(if a != 0.0 || b != 0.0 { 1.0 } else { 0.0 }); },
                 Op::Store(key) => {
                     let value = self.pop_one("Store")?;
-                    if !self.call_frames.is_empty() { self.call_frames.last_mut().unwrap().memory.insert(key.clone(), value); }
-                    else { self.memory.insert(key.clone(), value); }
+                    self.memory.insert(key.clone(), value);
                 },
                 Op::Load(key) => {
-                    //println!("LOAD '{}': Call frames: {}", key, self.call_frames.len()); // DEBUG
-                    let value = if !self.call_frames.is_empty() {
-                        //println!("-> Call frames NOT empty, trying frame memory..."); // DEBUG
-                        let current_frame = self.call_frames.last().unwrap();
-                        // Try frame memory first, then fall back to global memory
-                        *current_frame.memory.get(key)
-                            .or_else(|| {
-                                //println!("-> '{}' not in frame, trying global memory...", key); // DEBUG
-                                self.memory.get(key)
-                            })
-                            .ok_or_else(|| VMError::VariableNotFound(key.clone()))?
-                    } else {
-                        //println!("-> Call frames empty, trying global memory..."); // DEBUG
-                        *self.memory.get(key).ok_or_else(|| VMError::VariableNotFound(key.clone()))?
-                    };
+                    let value = *self.memory.get(key).ok_or_else(|| VMError::VariableNotFound(key.clone()))?;
                     self.stack.push(value);
-                    //println!("-> Loaded {} for key '{}'", value, key); // DEBUG
                 },
                 Op::DumpStack => { Event::info("stack", format!("{:?}", self.stack)).emit().map_err(|e| VMError::IOError(e.to_string()))?; },
                 Op::DumpMemory => { Event::info("memory", format!("{:?}", self.memory)).emit().map_err(|e| VMError::IOError(e.to_string()))?; },
                 Op::DumpState => {
-                    let event = Event::info("vm_state", format!("Stack: {:?}\\nMemory: {:?}\\nFunctions: {}\\nCall Frames: {}\\nRecursion Depth: {}", self.stack, self.memory, self.functions.keys().collect::<Vec<_>>().len(), self.call_frames.len(), self.recursion_depth));
+                    let event = Event::info("vm_state", format!("Stack: {:?}\nMemory: {:?}\nFunctions: {}", self.stack, self.memory, self.functions.keys().collect::<Vec<_>>().len()));
                     event.emit().map_err(|e| VMError::IOError(e.to_string()))?;
                 },
                 Op::Def { name, params, body } => {
@@ -624,11 +600,6 @@ impl VM {
                 Op::Loop { count, body } => {
                     for _i in 0..*count {
                         self.execute_inner(body)?;
-                        match self.loop_control {
-                            LoopControl::Break => { self.loop_control = LoopControl::None; break; },
-                            LoopControl::Continue => { self.loop_control = LoopControl::None; continue; },
-                            LoopControl::None => {}
-                        }
                     }
                 },
                 Op::While { condition, body } => {
@@ -639,20 +610,15 @@ impl VM {
                         let cond = self.pop_one("While condition")?;
                         if cond == 0.0 { break; }
                         self.execute_inner(body)?;
-                        match self.loop_control {
-                            LoopControl::Break => { self.loop_control = LoopControl::None; break; },
-                            LoopControl::Continue => { self.loop_control = LoopControl::None; continue; },
-                            LoopControl::None => {}
-                        }
                     }
                 },
-                Op::Break => { self.loop_control = LoopControl::Break; },
-                Op::Continue => { self.loop_control = LoopControl::Continue; },
+                Op::Break => {},
+                Op::Continue => {},
                 Op::EmitEvent { category, message } => { Event::info(category.as_str(), message.as_str()).emit().map_err(|e| VMError::IOError(e.to_string()))?; },
                 Op::AssertEqualStack { depth } => {
-                    if self.stack.len() < *depth { return Err(VMError::StackUnderflow { op: "AssertEqualStack".to_string(), needed: *depth, found: self.stack.len() }); }
+                    if self.stack.len() < *depth { return Err(VMError::StackUnderflow { op_name: "AssertEqualStack".to_string() }); }
                     let top_value = self.stack[self.stack.len() - 1];
-                    for i in 1..*depth { if (self.stack[self.stack.len() - 1 - i] - top_value).abs() >= f64::EPSILON { return Err(VMError::AssertionFailed { expected: top_value, found: self.stack[self.stack.len() - 1 - i] }); } }
+                    for i in 1..*depth { if (self.stack[self.stack.len() - 1 - i] - top_value).abs() >= f64::EPSILON { return Err(VMError::AssertionFailed { message: format!("Expected all values in stack depth {} to be equal to {}", depth, top_value) }); } }
                 },
                 Op::If { condition, then, else_ } => {
                     let cv = if condition.is_empty() { self.pop_one("If condition")? } else { let s = self.stack.len(); self.execute_inner(condition)?; if self.stack.len() <= s { return Err(VMError::InvalidCondition("Condition block did not leave a value on the stack".to_string())); } self.pop_one("If condition result")? };
@@ -663,47 +629,11 @@ impl VM {
                 Op::Negate => { let value = self.pop_one("Negate")?; self.stack.push(-value); },
                 Op::Call(name) => {
                     let (params, body) = self.functions.get(name).ok_or_else(|| VMError::FunctionNotFound(name.clone()))?.clone();
-                    let mut frame = CallFrame { memory: HashMap::new(), return_value: None, return_pc: pc + 1 };
-                    if !params.is_empty() {
-                        if self.stack.len() < params.len() { return Err(VMError::StackUnderflow { op: format!("Call to function '{}'", name), needed: params.len(), found: self.stack.len() }); }
-                        let mut param_values = Vec::with_capacity(params.len());
-                        for _ in 0..params.len() { param_values.push(self.stack.pop().unwrap()); }
-                        param_values.reverse();
-                        for (param, value) in params.iter().zip(param_values.iter()) {
-                            frame.memory.insert(param.clone(), *value);
-                        }
-                    }
-                    self.call_frames.push(frame);
-                    self.recursion_depth += 1;
-                    //println!("CALL '{}': Pushed frame. Total frames: {}", name, self.call_frames.len()); // DEBUG
-
-                    // Execute the function body
                     let result = self.execute_inner(&body);
-
-                    // Pop the frame AFTER the function body execution finishes or returns.
-                    // Important: Pop even if execute_inner resulted in an error that will be propagated.
-                    self.call_frames.pop();
-                    self.recursion_depth -= 1;
-
-                    result?; // Propagate any error from execute_inner
-                    // If Ok(()), pc advances in the outer loop automatically.
+                    result?;
                 },
                 Op::Return => {
-                    if !self.call_frames.is_empty() {
-                        // Peek at the frame to determine return value if needed, don't pop here.
-                        let frame = self.call_frames.last().unwrap(); // Peek
-                        let value_to_push = if let Some(rv) = frame.return_value { // return_value isn't currently used
-                            rv
-                        } else if !self.stack.is_empty() {
-                            self.pop_one("Return value")? // Implicit return from stack top
-                        } else {
-                            0.0 // Default return
-                        };
-                        self.stack.push(value_to_push);
-                        break; // Exit the current execute_inner loop (the function body's loop)
-                    } else {
-                        return Err(VMError::InvalidCondition("Return encountered outside of a function call".to_string()));
-                    }
+                    break;
                 },
                 Op::Nop => {},
                 Op::Match { value, cases, default } => {
@@ -716,14 +646,13 @@ impl VM {
                 },
                 Op::AssertTop(expected) => {
                     let value = self.pop_one("AssertTop")?;
-                    if (value - *expected).abs() >= f64::EPSILON { return Err(VMError::AssertionFailed { expected: *expected, found: value }); }
+                    if (value - *expected).abs() >= f64::EPSILON { return Err(VMError::AssertionFailed { message: format!("Expected top of stack to be {}, found {}", expected, value) }); }
                 },
                 Op::AssertMemory { key, expected } => {
                     let value = self.memory.get(key).ok_or_else(|| VMError::VariableNotFound(key.clone()))?;
-                    if (value - expected).abs() >= f64::EPSILON { return Err(VMError::AssertionFailed { expected: *expected, found: *value }); }
+                    if (value - expected).abs() >= f64::EPSILON { return Err(VMError::AssertionFailed { message: format!("Expected memory key '{}' to be {}, found {}", key, expected, value) }); }
                 },
                 Op::RankedVote { candidates, ballots } => {
-                    // Validate parameters
                     if *candidates < 2 {
                         return Err(VMError::InvalidCondition(format!(
                             "RankedVote requires at least 2 candidates, found {}", candidates
@@ -735,34 +664,25 @@ impl VM {
                         )));
                     }
                     
-                    // Ensure stack has enough values for all ballots
                     let required_stack_size = *candidates * *ballots;
                     if self.stack.len() < required_stack_size {
-                        return Err(VMError::StackUnderflow {
-                            op: "RankedVote".to_string(),
-                            needed: required_stack_size,
-                            found: self.stack.len(),
-                        });
+                        return Err(VMError::StackUnderflow { op_name: "RankedVote".to_string() });
                     }
                     
-                    // Pop ballots from stack (each ballot is an array of candidate preferences)
                     let mut all_ballots = Vec::with_capacity(*ballots);
                     for _ in 0..*ballots {
                         let mut ballot = Vec::with_capacity(*candidates);
                         for _ in 0..*candidates {
                             ballot.push(self.stack.pop().unwrap());
                         }
-                        ballot.reverse(); // Reverse to maintain original order
+                        ballot.reverse();
                         all_ballots.push(ballot);
                     }
 
-                    // Perform instant-runoff voting
                     let winner = self.perform_instant_runoff_voting(*candidates, all_ballots)?;
                     
-                    // Push winner back onto stack
                     self.stack.push(winner);
                     
-                    // Log the result
                     let event = Event::info(
                         "ranked_vote", 
                         format!("Ranked vote completed, winner: candidate {}", winner)
@@ -770,74 +690,81 @@ impl VM {
                     event.emit().map_err(|e| VMError::IOError(e.to_string()))?;
                 },
                 Op::LiquidDelegate { from, to } => {
-                    self.perform_liquid_delegation(from.as_str(), to.as_str())?;
+                    // self.perform_liquid_delegation(from.as_str(), to.as_str())?; // Method removed or needs reimplementation
+                    println!("WARN: LiquidDelegate Op ignored - method not found/implemented."); // Add a warning
                 },
                 Op::VoteThreshold(threshold) => {
                     let value = self.pop_one("VoteThreshold")?;
                     
-                    // Compare value with threshold
                     if value >= *threshold {
-                        self.stack.push(0.0); // True in our convention
+                        self.stack.push(0.0);
                     } else {
-                        self.stack.push(1.0); // False in our convention
+                        self.stack.push(1.0);
                     }
                 },
                 Op::QuorumThreshold(threshold) => {
                     let (total_possible, votes_cast) = self.pop_two("QuorumThreshold")?;
                     
-                    // Calculate participation ratio
                     let participation = if total_possible > 0.0 {
                         votes_cast / total_possible
                     } else {
                         0.0
                     };
                     
-                    // Compare participation with threshold
                     if participation >= *threshold {
-                        self.stack.push(0.0); // True in our convention
+                        self.stack.push(0.0);
                     } else {
-                        self.stack.push(1.0); // False in our convention
+                        self.stack.push(1.0);
                     }
                 },
                 Op::StoreP(key) => {
                     let value = self.pop_one("StoreP")?;
-                    
-                    // Convert the value to a string for storage
-                    let value_str = value.to_string();
-                    
-                    // Use the storage backend to store the value
+                    let value_bytes = value.to_string().into_bytes(); // Convert f64 to bytes via String
                     if let Some(backend) = self.storage_backend.as_mut() {
-                        backend.set(key, &value_str)
+                        backend.set(&self.auth_context, &self.namespace, key, value_bytes)
                             .map_err(|e| VMError::StorageError(e.to_string()))?;
                     } else {
-                        return Err(VMError::StorageError("No storage backend available".to_string()));
+                        return Err(VMError::StorageUnavailable); // Use correct variant
                     }
                 },
                 Op::LoadP(key) => {
-                    // Use the storage backend to load the value
-                    let value_str = if let Some(backend) = self.storage_backend.as_ref() {
-                        backend.get(key)
+                    let value_bytes = if let Some(backend) = self.storage_backend.as_ref() {
+                        backend.get(&self.auth_context, &self.namespace, key)
                             .map_err(|e| VMError::StorageError(e.to_string()))?
                     } else {
-                        return Err(VMError::StorageError("No storage backend available".to_string()));
+                        return Err(VMError::StorageUnavailable); // Use correct variant
                     };
-                    
-                    // Parse the value back to a f64
+                    let value_str = String::from_utf8(value_bytes)
+                        .map_err(|e| VMError::StorageError(format!("Invalid UTF-8 data in storage for key '{}': {}", key, e)))?;
                     let value = value_str.parse::<f64>()
                         .map_err(|_| VMError::StorageError(format!("Invalid numeric value in storage: {}", value_str)))?;
-                    
-                    // Push the value onto the stack
                     self.stack.push(value);
                 },
-            }
-
-            if self.loop_control != LoopControl::None {
-                break;
             }
 
             pc += 1;
         }
 
         Ok(())
+    }
+
+    /// Set the authentication context for this VM
+    pub fn set_auth_context(&mut self, auth: AuthContext) {
+        self.auth_context = auth;
+    }
+    
+    /// Set the storage namespace for this VM
+    pub fn set_namespace(&mut self, namespace: &str) {
+        self.namespace = namespace.to_string();
+    }
+    
+    /// Get the current authentication context
+    pub fn get_auth_context(&self) -> &AuthContext {
+        &self.auth_context
+    }
+    
+    /// Get the current storage namespace
+    pub fn get_namespace(&self) -> &str {
+        &self.namespace
     }
 }

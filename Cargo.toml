@@ -1,4 +1,4 @@
-workspace = { members = ["storage-demo"] }
+# workspace = { members = ["storage-demo"] }
 [package]
 name = "icn-covm"
 version = "0.5.1"

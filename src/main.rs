@@ -1,17 +1,17 @@
-mod bytecode;
-mod compiler;
-mod events;
-mod vm;
-use bytecode::{BytecodeCompiler, BytecodeInterpreter};
+// pub mod storage;
+
+use icn_covm::bytecode::{BytecodeCompiler, BytecodeExecutor};
+use icn_covm::compiler::{parse_dsl, parse_dsl_with_stdlib, CompilerError};
+use icn_covm::storage::auth::AuthContext;
+use icn_covm::vm::{VM, VMError};
+
 use clap::{Arg, Command};
-use compiler::{parse_dsl, parse_dsl_with_stdlib, CompilerError};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::process;
 use std::time::Instant;
 use thiserror::Error;
-use vm::{VMError, VM};
 
 #[derive(Debug, Error)]
 enum AppError {
@@ -207,43 +207,45 @@ fn run_program(
     }
 
     if use_bytecode {
-        // Compile operations to bytecode
         let mut compiler = BytecodeCompiler::new();
         let program = compiler.compile(&ops);
-
+        
         if verbose {
-            println!(
-                "Program compiled to {} bytecode instructions",
-                program.instructions.len()
-            );
-            println!("{}", program.dump());
+            println!("Compiled bytecode program:\n{}", program.dump());
         }
-
+        
         // Create bytecode interpreter
-        let mut interpreter = BytecodeInterpreter::new(program);
-
+        let mut interpreter = BytecodeExecutor::new(VM::new(), program.instructions);
+        
         // Set parameters
-        interpreter.set_parameters(parameters)?;
-
+        interpreter.vm.set_parameters(parameters)?;
+        
+        // Execute
+        let start = Instant::now();
+        let result = interpreter.execute();
+        let duration = start.elapsed();
+        
         if verbose {
-            println!("Executing bytecode program...");
-            println!("-----------------------------------");
+            println!("Execution completed in {:?}", duration);
         }
-
-        // Execute the bytecode program
-        interpreter.execute()?;
-
+        
+        if let Err(err) = result {
+            return Err(err.into());
+        }
+        
         if verbose {
-            println!("-----------------------------------");
-            println!("Bytecode program execution completed successfully");
-
-            // Print final stack state
-            if let Some(top) = interpreter.vm().top() {
-                println!("Final top of stack: {}", top);
+            println!("Final stack: {:?}", interpreter.vm.stack);
+            
+            if let Some(top) = interpreter.vm.top() {
+                println!("Top of stack: {}", top);
             } else {
                 println!("Stack is empty");
             }
+            
+            println!("Final memory: {:?}", interpreter.vm.memory);
         }
+        
+        return Ok(());
     } else {
         // Create and execute the VM
         let mut vm = VM::new();
@@ -337,8 +339,8 @@ fn run_benchmark(
     println!("Bytecode compilation time: {:?}", compiler_duration);
     println!("Bytecode size: {} instructions", program.instructions.len());
 
-    let mut interpreter = BytecodeInterpreter::new(program);
-    interpreter.set_parameters(parameters)?;
+    let mut interpreter = BytecodeExecutor::new(VM::new(), program.instructions);
+    interpreter.vm.set_parameters(parameters)?;
 
     let bytecode_start = Instant::now();
     interpreter.execute()?;
@@ -538,26 +540,27 @@ fn run_interactive(
                                 println!("{}", program.dump());
                             }
 
-                            let mut interpreter = BytecodeInterpreter::new(program);
+                            let mut interpreter = BytecodeExecutor::new(VM::new(), program.instructions);
 
                             // Copy VM state to interpreter
-                            for (key, &value) in vm.get_memory_map() {
-                                interpreter.vm_mut().memory.insert(key.clone(), value);
+                            for (key, value) in vm.memory.iter() {
+                                interpreter.vm.memory.insert(key.clone(), *value);
                             }
 
-                            // Execute
-                            match interpreter.execute() {
-                                Ok(()) => {
-                                    // Copy the stack state back to the main VM for the next loop
-                                    vm.stack = interpreter.vm().stack.clone();
-                                    vm.memory = interpreter.vm().memory.clone();
+                            // Execute with bytecode
+                            let bytecode_start = Instant::now();
+                            interpreter.execute()?;
+                            let bytecode_duration = bytecode_start.elapsed();
 
-                                    // Show result
-                                    if let Some(result) = interpreter.vm().top() {
-                                        println!("Result: {}", result);
-                                    }
-                                }
-                                Err(e) => println!("Error: {}", e),
+                            println!("Bytecode: {:?}", bytecode_duration);
+
+                            // Copy results back to REPL VM
+                            vm.stack = interpreter.vm.stack.clone();
+                            vm.memory = interpreter.vm.memory.clone();
+
+                            // Print result (if any)
+                            if let Some(result) = interpreter.vm.top() {
+                                println!("Result: {}", result);
                             }
                         } else {
                             // Execute directly with AST interpreter

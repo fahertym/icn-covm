@@ -340,7 +340,7 @@ impl InMemoryStorage {
     }
     
     /// Get a value with authorization check
-    pub fn get_with_auth(&self, auth: &AuthContext, key: &str) -> StorageResult<String> {
+    pub fn get_with_auth(&mut self, auth: &AuthContext, key: &str) -> StorageResult<String> {
         // Implement RBAC checks
         if key.starts_with("governance/") {
             // Governance data requires admin or member role
