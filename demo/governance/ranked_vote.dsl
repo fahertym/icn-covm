@@ -72,18 +72,20 @@ push 0.0
 eq
 if:
     emit "Candidate 0: Cooperative Sustainability Initiative"
-
-load "winner"
-push 1.0
-eq
-if:
-    emit "Candidate 1: Community Resource Allocation Plan"
-
-load "winner"
-push 2.0
-eq
-if:
-    emit "Candidate 2: Solidarity Economy Framework"
+else:
+    load "winner"
+    push 1.0
+    eq
+    if:
+        emit "Candidate 1: Community Resource Allocation Plan"
+    else:
+        load "winner"
+        push 2.0
+        eq
+        if:
+            emit "Candidate 2: Solidarity Economy Framework"
+        else:
+            emit "Error: Unknown candidate!"
 
 emit ""
 emit "This demonstrates how ranked-choice voting can be used"
