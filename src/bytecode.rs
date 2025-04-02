@@ -56,6 +56,7 @@ pub enum BytecodeOp {
     AssertEqualStack(usize),
     RankedVote(usize, usize),
     LiquidDelegate(String, String),
+    VoteThreshold(f64),
 }
 
 /// The bytecode program with flattened instructions and a function lookup table
@@ -286,6 +287,10 @@ impl BytecodeCompiler {
                     .program
                     .instructions
                     .push(BytecodeOp::LiquidDelegate(from.clone(), to.clone())),
+                Op::VoteThreshold(threshold) => self
+                    .program
+                    .instructions
+                    .push(BytecodeOp::VoteThreshold(*threshold)),
 
                 // Handle more complex operations
                 Op::If {
@@ -929,8 +934,15 @@ impl BytecodeInterpreter {
                 event.emit().map_err(|e| VMError::IOError(e.to_string()))?;
             }
             LiquidDelegate(from, to) => {
-                // Use the VM's perform_liquid_delegation method to handle the operation
-                self.vm.perform_liquid_delegation(from, to)?;
+                self.vm.perform_liquid_delegation(&from, &to)?;
+            }
+            VoteThreshold(threshold) => {
+                let total_voting_power = self.vm.pop_one("votethreshold")?;
+                if total_voting_power >= *threshold {
+                    self.vm.stack.push(0.0); // Truthy value for if statements
+                } else {
+                    self.vm.stack.push(1.0); // Falsey value for if statements
+                }
             }
             Nop => {
                 // Do nothing

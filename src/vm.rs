@@ -228,6 +228,17 @@ pub enum Op {
         /// The member receiving the delegation (or empty string to revoke)
         to: String,
     },
+
+    /// Check if the total voting power meets a required threshold
+    ///
+    /// This operation compares the top value on the stack (total voting power)
+    /// with the specified threshold. If the value is greater than or equal to
+    /// the threshold, it pushes 0.0 (truthy) onto the stack; otherwise it pushes
+    /// 1.0 (falsey).
+    ///
+    /// This is typically used for conditional execution in governance systems
+    /// to ensure sufficient support before taking action.
+    VoteThreshold(f64),
 }
 
 #[derive(Debug)]
@@ -696,6 +707,14 @@ impl VM {
                 },
                 Op::LiquidDelegate { from, to } => {
                     self.perform_liquid_delegation(from.as_str(), to.as_str())?;
+                },
+                Op::VoteThreshold(threshold) => {
+                    let total_voting_power = self.pop_one("VoteThreshold")?;
+                    if total_voting_power >= *threshold {
+                        self.stack.push(0.0); // Truthy value for if statements
+                    } else {
+                        self.stack.push(1.0); // Falsey value for if statements
+                    }
                 },
             }
 
@@ -2454,5 +2473,94 @@ mod tests {
         assert_eq!(alice_power, 0.0); // Alice delegated her power
         assert_eq!(carol_power, 0.0); // Carol delegated her power
         assert_eq!(bob_power, 3.0);   // Bob has his own power plus Alice's and Carol's
+    }
+
+    #[test]
+    fn test_vote_threshold_pass() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Push(5.0),  // Total voting power
+            Op::VoteThreshold(3.0),  // Threshold of 3.0
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
+        assert_eq!(vm.top(), Some(0.0));  // 0.0 means threshold met (truthy)
+    }
+    
+    #[test]
+    fn test_vote_threshold_fail() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Push(2.0),  // Total voting power
+            Op::VoteThreshold(3.0),  // Threshold of 3.0
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
+        assert_eq!(vm.top(), Some(1.0));  // 1.0 means threshold not met (falsey)
+    }
+    
+    #[test]
+    fn test_vote_threshold_exact() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Push(3.0),  // Total voting power
+            Op::VoteThreshold(3.0),  // Threshold of 3.0
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
+        assert_eq!(vm.top(), Some(0.0));  // 0.0 means threshold met (truthy)
+    }
+    
+    #[test]
+    fn test_vote_threshold_empty_stack() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::VoteThreshold(3.0),  // Threshold of 3.0
+        ];
+        
+        assert!(vm.execute(&ops).is_err());
+        assert!(matches!(vm.execute(&ops), Err(VMError::StackUnderflow { .. })));
+    }
+    
+    #[test]
+    fn test_vote_threshold_with_delegation() {
+        let mut vm = VM::new();
+        
+        // Set up initial voting powers
+        vm.memory.insert("alice_power".to_string(), 1.0);
+        vm.memory.insert("bob_power".to_string(), 1.0);
+        vm.memory.insert("carol_power".to_string(), 1.0);
+        
+        // Alice delegates to Bob
+        vm.perform_liquid_delegation("alice", "bob").unwrap();
+        
+        // Calculate Bob's voting power
+        let bob_power = vm.get_effective_voting_power("bob").unwrap();
+        
+        // Test threshold check with effective voting power
+        let ops = vec![
+            Op::Push(bob_power),  // Bob's effective voting power (should be 2.0)
+            Op::VoteThreshold(1.5),  // Threshold of 1.5
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
+        assert_eq!(vm.top(), Some(0.0));  // 0.0 means threshold met (truthy)
+    }
+    
+    #[test]
+    fn test_vote_threshold_in_conditional() {
+        let mut vm = VM::new();
+        let ops = vec![
+            Op::Push(5.0),  // Total voting power
+            Op::VoteThreshold(3.0),  // Threshold of 3.0
+            Op::If {
+                condition: vec![],
+                then: vec![Op::Push(42.0)],
+                else_: Some(vec![Op::Push(24.0)]),
+            },
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
+        assert_eq!(vm.top(), Some(42.0));  // Should execute the 'then' branch
     }
 }

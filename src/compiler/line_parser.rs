@@ -166,6 +166,26 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
                 to: to_str.to_string() 
             })
         },
+        "votethreshold" => {
+            // Parse votethreshold command with required threshold parameter
+            let threshold_str = parts.next().ok_or(CompilerError::InvalidFunctionFormat(
+                "votethreshold requires threshold parameter".to_string(),
+                pos.line,
+                pos.column,
+            ))?;
+
+            // Parse threshold parameter
+            let threshold = threshold_str.parse::<f64>().map_err(|_| {
+                CompilerError::InvalidFunctionFormat(
+                    format!("Invalid threshold value: {}", threshold_str),
+                    pos.line,
+                    pos.column,
+                )
+            })?;
+
+            // Create VoteThreshold operation
+            Ok(Op::VoteThreshold(threshold))
+        },
         _ => Err(CompilerError::UnknownCommand(
             command.to_string(),
             pos.line,

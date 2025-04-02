@@ -6,6 +6,7 @@ This document describes the governance primitives available in the ICN Cooperati
 
 1. [RankedVote](#rankedvote)
 2. [LiquidDelegate](#liquiddelegate)
+3. [VoteThreshold](#votethreshold)
 
 ## RankedVote
 
@@ -131,11 +132,107 @@ The operation will fail with an error if:
 - Inclusive governance that accommodates varying levels of involvement
 - Dynamic representation that can adapt to changing circumstances
 
+## VoteThreshold
+
+The `VoteThreshold` operation checks if the total voting power in favor of a proposal meets a specified threshold for execution.
+
+### Signature
+
+```
+votethreshold <threshold>
+```
+
+- `threshold`: Minimum voting power required for the proposal to pass
+
+### Description
+
+The `VoteThreshold` operation acts as a governance gatekeeper, ensuring that proposals only execute when they have sufficient support. It compares the total voting power in favor (from the top of the stack) with the specified threshold, then pushes a truthy or falsey value to be used in conditional execution.
+
+This operation is typically used after calculating total support, often in conjunction with `LiquidDelegate` to account for delegated voting power.
+
+### Stack Behavior
+
+**Before operation**:
+```
+[total_support]
+```
+
+**After operation**:
+```
+[result]
+```
+
+Where `result` is:
+- `0.0` (truthy) if `total_support >= threshold`
+- `1.0` (falsey) if `total_support < threshold`
+
+### Example
+
+```
+# Calculate total supporting voting power
+# (in a real scenario, this would come from actual votes)
+push 3.5  # Example: 3.5 votes in favor
+
+# Check against a threshold of 3.0
+push 3.0
+votethreshold
+
+# Conditional execution based on the result
+if:
+    emit "Proposal approved! Executing..."
+    # Execution logic here
+else:
+    emit "Proposal rejected. Insufficient support."
+```
+
+### Error Handling
+
+The operation will fail with an error if:
+- There are no values on the stack
+
+### Real-world Applications
+
+- Policy approval with minimum support requirements
+- Fund distribution requiring sufficient stakeholder backing
+- Constitutional changes needing super-majority support
+- Quorum validation for vote legitimacy
+
 ## Combining Governance Operations
 
-These governance primitives can be combined to create sophisticated democratic systems. For example:
+These governance primitives can be combined to create sophisticated democratic systems:
 
 1. Use `LiquidDelegate` to establish a delegation network
 2. Use `RankedVote` to conduct an election, with delegates casting votes according to their delegated voting power
+3. Use `VoteThreshold` to ensure the winning proposal has sufficient support before execution
+
+### Complete Governance Flow Example
+
+```
+# 1. Set up delegations
+liquiddelegate "alice" "bob"      # Alice delegates to Bob
+liquiddelegate "dave" "carol"     # Dave delegates to Carol
+
+# 2. Conduct ranked-choice vote with 3 candidates
+# (Ballots are pushed onto the stack)
+rankedvote 3 3
+
+# 3. Store the winner
+store "winning_proposal"
+
+# 4. Calculate support for the winning proposal
+push 4.0  # Example: 4.0 votes in favor
+
+# 5. Check against threshold
+push 3.0  # Require at least 3.0 votes
+votethreshold
+
+# 6. Conditionally execute the winning proposal
+if:
+    emit "Executing winning proposal..."
+    # Implementation logic here
+else:
+    emit "Winning proposal lacks sufficient support."
+    # Rejection handling here
+```
 
 Additional governance operations will be added in future releases to further enhance the cooperative governance capabilities of ICN-COVM. 
