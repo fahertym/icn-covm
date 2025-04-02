@@ -55,6 +55,7 @@ pub enum BytecodeOp {
     AssertMemory(String, f64),
     AssertEqualStack(usize),
     RankedVote(usize, usize),
+    LiquidDelegate(String, String),
 }
 
 /// The bytecode program with flattened instructions and a function lookup table
@@ -281,6 +282,10 @@ impl BytecodeCompiler {
                     .program
                     .instructions
                     .push(BytecodeOp::RankedVote(*candidates, *ballots)),
+                Op::LiquidDelegate { from, to } => self
+                    .program
+                    .instructions
+                    .push(BytecodeOp::LiquidDelegate(from.clone(), to.clone())),
 
                 // Handle more complex operations
                 Op::If {
@@ -922,6 +927,10 @@ impl BytecodeInterpreter {
                     format!("Ranked vote completed, winner: candidate {}", winner)
                 );
                 event.emit().map_err(|e| VMError::IOError(e.to_string()))?;
+            }
+            LiquidDelegate(from, to) => {
+                // Use the VM's perform_liquid_delegation method to handle the operation
+                self.vm.perform_liquid_delegation(from, to)?;
             }
             Nop => {
                 // Do nothing

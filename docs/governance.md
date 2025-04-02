@@ -1,133 +1,141 @@
-# Governance Primitives in ICN-COVM
+# Governance Operations
 
-ICN-COVM provides specialized operations for cooperative governance and democratic decision-making. These primitives enable cooperatives to implement various governance models directly within the virtual machine.
+This document describes the governance primitives available in the ICN Cooperative Virtual Machine (ICN-COVM). These operations provide building blocks for implementing democratic decision-making processes within cooperatives.
+
+## Table of Contents
+
+1. [RankedVote](#rankedvote)
+2. [LiquidDelegate](#liquiddelegate)
 
 ## RankedVote
 
-The `RankedVote` operation implements instant-runoff voting (IRV), also known as ranked-choice voting, which allows voters to rank candidates in order of preference.
+The `RankedVote` operation implements instant-runoff voting (also known as ranked-choice voting) for democratic elections with multiple candidates.
 
-### Operation Signature
+### Signature
 
 ```
-RankedVote {
-    candidates: usize,
-    ballots: usize
-}
+rankedvote <candidates> <ballots>
 ```
 
-- `candidates`: The number of candidates in the election
-- `ballots`: The number of ballots to process
+- `candidates`: Number of candidates in the election (minimum 2)
+- `ballots`: Number of ballots to process (minimum 1)
 
 ### Description
 
-The `RankedVote` operation:
+Ranked-choice voting allows voters to rank candidates in order of preference. The algorithm works as follows:
 
-1. Pops `candidates × ballots` values from the stack, representing all ballot data
-2. Each ballot contains ranked preferences for each candidate (ordered from first to last choice)
-3. Implements instant-runoff voting to determine a winner
-4. Pushes the winner's ID (candidate number) onto the stack
+1. First-choice votes are counted for each candidate
+2. If a candidate has a majority (>50%), they win
+3. Otherwise, the candidate with the fewest votes is eliminated
+4. Votes for the eliminated candidate are redistributed to the voters' next choices
+5. This process repeats until a candidate has a majority
 
-### Algorithm
+The `RankedVote` operation expects ballots to be pushed onto the stack before it is called. Each ballot consists of `candidates` number of values representing the voter's ranked preferences.
 
-The instant-runoff voting algorithm implemented by `RankedVote` works as follows:
+### Stack Behavior
 
-1. Count first-preference votes for each candidate
-2. If a candidate has a majority (>50%), they win immediately
-3. Otherwise, eliminate the candidate with the fewest first-preference votes
-4. Redistribute votes from the eliminated candidate to each ballot's next preferred choice
-5. Repeat until a candidate achieves a majority
-
-### Usage in DSL
-
+**Before operation**:
 ```
-# Push ballots onto stack (each a series of candidate IDs in preference order)
-# For 3 candidates (0, 1, 2) and 5 ballots:
-
-# Ballot 1: Preferences [0, 1, 2]
-push 2.0  # Third choice
-push 1.0  # Second choice
-push 0.0  # First choice
-
-# Ballot 2: Preferences [1, 0, 2]
-push 2.0  # Third choice
-push 0.0  # Second choice
-push 1.0  # First choice
-
-# ... more ballots ...
-
-# Run the ranked vote with 3 candidates and 5 ballots
-rankedvote 3 5
-
-# Store the result
-store winner
+[ballot1_pref1, ballot1_pref2, ..., ballot1_prefN, ballot2_pref1, ..., ballotM_prefN]
 ```
 
-### Stack Effects
-
-Before:
+**After operation**:
 ```
-[... ballot1_pref1, ballot1_pref2, ..., ballot1_prefN, ballot2_pref1, ... ballotM_prefN]
+[winner]
 ```
 
-After:
-```
-[... winner_id]
-```
+Where `winner` is the candidate ID of the winning candidate (0-indexed).
 
 ### Example
 
-The following example demonstrates a ranked-choice vote with 3 candidates and 5 ballots:
-
 ```
-# Push 5 ballots (3 candidates each)
-# Ballot 1 [0, 1, 2] - Candidate 0 is first choice
-push 2.0
-push 1.0
-push 0.0
+# Push 3 ballots for an election with 3 candidates
+# Each line is one ballot with ordered preferences (first-choice last)
+push 2.0 push 1.0 push 0.0  # Ballot 1: Prefers candidate 0, then 1, then 2
+push 2.0 push 1.0 push 0.0  # Ballot 2: Prefers candidate 0, then 1, then 2
+push 0.0 push 1.0 push 2.0  # Ballot 3: Prefers candidate 2, then 1, then 0
 
-# Ballot 2 [0, 1, 2] - Candidate 0 is first choice
-push 2.0
-push 1.0
-push 0.0
+# Run the ranked vote with 3 candidates and 3 ballots
+rankedvote 3 3
 
-# Ballot 3 [0, 1, 2] - Candidate 0 is first choice
-push 2.0
-push 1.0
-push 0.0
-
-# Ballot 4 [1, 0, 2] - Candidate 1 is first choice
-push 2.0
-push 0.0
-push 1.0
-
-# Ballot 5 [2, 0, 1] - Candidate 2 is first choice
-push 1.0
-push 0.0
-push 2.0
-
-# Run ranked vote
-rankedvote 3 5
-
-# At this point, candidate 0 wins with 3 first-choice votes (majority)
-# The result (0.0) is now on top of the stack
+# The winning candidate ID is now on top of the stack
+store "winner"
 ```
 
 ### Error Handling
 
-The `RankedVote` operation will fail with an error if:
-
+The operation will fail with an error if:
 - There are fewer than 2 candidates
-- There are fewer than 1 ballot
-- The stack doesn't contain enough values to satisfy `candidates × ballots`
+- There are fewer than 1 ballots
+- There aren't enough values on the stack for all ballots
 
-### Practical Applications
+### Real-world Applications
 
-Ranked-choice voting is particularly valuable for cooperative governance because it:
+- Board member elections in cooperatives
+- Policy proposal selection where multiple options exist
+- Budget allocation decisions among competing priorities
 
-1. Eliminates the "spoiler effect" in elections with multiple candidates
-2. Ensures the winner has broader support (majority vs. plurality)
-3. Allows members to express nuanced preferences
-4. Reduces strategic voting and encourages honest preference expression
-5. Helps build consensus by considering secondary preferences
+## LiquidDelegate
 
-A complete working example can be found in `demo/governance/ranked_vote.dsl`. 
+The `LiquidDelegate` operation implements liquid democracy by allowing members to delegate their voting power to others.
+
+### Signature
+
+```
+liquiddelegate "from" "to"
+```
+
+- `from`: The member delegating their voting power
+- `to`: The member receiving the delegation (or empty string to revoke)
+
+### Description
+
+Liquid democracy combines direct and representative democracy by allowing members to:
+1. Vote directly on issues themselves, or
+2. Delegate their voting power to a trusted representative, or
+3. Revoke their delegation at any time
+
+The `LiquidDelegate` operation creates a delegation relationship between two members. If a member has already delegated their voting power, they must revoke that delegation before delegating to someone else.
+
+### Stack Behavior
+
+This operation doesn't affect the stack directly.
+
+### Example
+
+```
+# Alice delegates her voting power to Bob
+liquiddelegate "alice" "bob"
+
+# Dave delegates to Carol
+liquiddelegate "dave" "carol"
+
+# Carol delegates to Bob (creating a delegation chain)
+liquiddelegate "carol" "bob"
+
+# Alice revokes her delegation
+liquiddelegate "alice" ""
+```
+
+### Error Handling
+
+The operation will fail with an error if:
+- The `from` parameter is empty
+- The delegation would create a cycle (e.g., A→B→C→A)
+- A member tries to delegate to themselves
+
+### Real-world Applications
+
+- Cooperative decision-making where not all members can participate directly
+- Expert delegation for specialized decisions
+- Inclusive governance that accommodates varying levels of involvement
+- Dynamic representation that can adapt to changing circumstances
+
+## Combining Governance Operations
+
+These governance primitives can be combined to create sophisticated democratic systems. For example:
+
+1. Use `LiquidDelegate` to establish a delegation network
+2. Use `RankedVote` to conduct an election, with delegates casting votes according to their delegated voting power
+
+Additional governance operations will be added in future releases to further enhance the cooperative governance capabilities of ICN-COVM. 

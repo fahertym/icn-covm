@@ -55,6 +55,10 @@ pub enum VMError {
     /// Loop control signal (break/continue)
     #[error("Loop control: {0}")]
     LoopControl(String),
+
+    /// Feature not implemented
+    #[error("Not implemented: {0}")]
+    NotImplemented(String),
 }
 
 /// Operation types for the virtual machine
@@ -209,6 +213,21 @@ pub enum Op {
         /// Number of ballots to process
         ballots: usize,
     },
+
+    /// Delegate voting power from one member to another
+    ///
+    /// This operation creates a delegation relationship where the 'from' member
+    /// delegates their voting rights to the 'to' member. The VM maintains a
+    /// delegation graph and ensures there are no cycles.
+    ///
+    /// The delegation can be revoked by calling with an empty 'to' string.
+    LiquidDelegate {
+        /// The member delegating their vote
+        from: String,
+        
+        /// The member receiving the delegation (or empty string to revoke)
+        to: String,
+    },
 }
 
 #[derive(Debug)]
@@ -251,6 +270,9 @@ pub struct VM {
 
     /// Stack to store return addresses (program counters) for function calls
     return_stack: Vec<usize>,
+
+    /// Map of member delegations for liquid democracy
+    delegations: HashMap<String, String>,
 }
 
 impl VM {
@@ -264,6 +286,7 @@ impl VM {
             recursion_depth: 0,
             loop_control: LoopControl::None,
             return_stack: Vec::new(), // Initialize return stack
+            delegations: HashMap::new(), // Initialize delegations map
         }
     }
 
@@ -671,6 +694,9 @@ impl VM {
                     );
                     event.emit().map_err(|e| VMError::IOError(e.to_string()))?;
                 },
+                Op::LiquidDelegate { from, to } => {
+                    self.perform_liquid_delegation(from.as_str(), to.as_str())?;
+                },
             }
 
             if self.loop_control != LoopControl::None {
@@ -681,6 +707,154 @@ impl VM {
         }
 
         Ok(())
+    }
+
+    /// Perform liquid delegation between members
+    ///
+    /// Establishes a delegation relationship where the 'from' member delegates
+    /// their voting power to the 'to' member. If 'to' is empty, any existing
+    /// delegation from 'from' is revoked.
+    ///
+    /// # Arguments
+    ///
+    /// * `from` - The member delegating their vote
+    /// * `to` - The member receiving the delegation (or empty string to revoke)
+    ///
+    /// # Returns
+    ///
+    /// * `Result<(), VMError>` - Success or error
+    pub fn perform_liquid_delegation(&mut self, from: &str, to: &str) -> Result<(), VMError> {
+        if from.is_empty() {
+            return Err(VMError::InvalidCondition("Delegator ('from') cannot be empty".to_string()));
+        }
+
+        // Check for delegation to self
+        if from == to {
+            return Err(VMError::InvalidCondition("Cannot delegate to self".to_string()));
+        }
+
+        // Revocation case
+        if to.is_empty() {
+            self.delegations.remove(from);
+            
+            let event = Event::info(
+                "delegate", 
+                format!("Delegation from '{}' has been revoked", from)
+            );
+            event.emit().map_err(|e| VMError::IOError(e.to_string()))?;
+            
+            return Ok(());
+        }
+
+        // Check for cycles in delegation chain
+        let mut visited = std::collections::HashSet::new();
+        visited.insert(from.to_string());
+        
+        let mut current = to;
+        while !current.is_empty() {
+            // If we've seen this member before, we have a cycle
+            if !visited.insert(current.to_string()) {
+                return Err(VMError::InvalidCondition(
+                    format!("Delegation from '{}' to '{}' would create a cycle", from, to)
+                ));
+            }
+            
+            // Move to the next member in the chain
+            current = self.delegations.get(current).map_or("", String::as_str);
+        }
+        
+        // Store the delegation
+        self.delegations.insert(from.to_string(), to.to_string());
+        
+        let event = Event::info(
+            "delegate", 
+            format!("'{}' has delegated to '{}'", from, to)
+        );
+        event.emit().map_err(|e| VMError::IOError(e.to_string()))?;
+        
+        Ok(())
+    }
+
+    /// Get the effective voting power of a member, including delegations
+    ///
+    /// This method calculates the total voting power a member has, including
+    /// any power delegated to them by other members. The calculation follows
+    /// the delegation chain to its conclusion.
+    ///
+    /// # Arguments
+    ///
+    /// * `member` - The member whose effective voting power is being calculated
+    ///
+    /// # Returns
+    ///
+    /// * `Result<f64, VMError>` - The effective voting power
+    pub fn get_effective_voting_power(&self, member: &str) -> Result<f64, VMError> {
+        if member.is_empty() {
+            return Err(VMError::InvalidCondition("Member name cannot be empty".to_string()));
+        }
+        
+        // Check if this member has delegated to someone else
+        if let Some(delegate) = self.delegations.get(member) {
+            if !delegate.is_empty() {
+                // If member has delegated, they have no effective voting power
+                return Ok(0.0);
+            }
+        }
+        
+        // Start with the member's own voting power (default to 1.0 if not specified)
+        let own_power = self.memory.get(&format!("{}_power", member)).copied().unwrap_or(1.0);
+        
+        // Add power from those who delegated to this member
+        let mut total_power = own_power;
+        
+        for (delegator, delegate) in &self.delegations {
+            if delegate == member {
+                // Follow the delegation chain to calculate the total power
+                total_power += self.calculate_delegated_power(delegator)?;
+            }
+        }
+        
+        Ok(total_power)
+    }
+    
+    /// Calculate the power delegated by a member
+    ///
+    /// This is a helper method for get_effective_voting_power that calculates
+    /// how much voting power a member brings through delegation.
+    ///
+    /// # Arguments
+    ///
+    /// * `member` - The member whose delegated power is being calculated
+    ///
+    /// # Returns
+    ///
+    /// * `Result<f64, VMError>` - The delegated power
+    fn calculate_delegated_power(&self, member: &str) -> Result<f64, VMError> {
+        // Get the member's own power
+        let own_power = self.memory.get(&format!("{}_power", member)).copied().unwrap_or(1.0);
+        
+        // Add power from those who delegated to this member
+        let mut delegated_power = own_power;
+        
+        for (delegator, delegate) in &self.delegations {
+            if delegate == member {
+                // Recursively add power from members who delegated to this one
+                delegated_power += self.calculate_delegated_power(delegator)?;
+            }
+        }
+        
+        Ok(delegated_power)
+    }
+
+    /// Get a view of the delegation map
+    ///
+    /// Returns a reference to the internal delegation map for inspection.
+    ///
+    /// # Returns
+    ///
+    /// * `&HashMap<String, String>` - The delegation map
+    pub fn get_delegations(&self) -> &HashMap<String, String> {
+        &self.delegations
     }
 }
 
@@ -2179,5 +2353,106 @@ mod tests {
         let result = vm.execute(&ops);
         assert!(result.is_err());
         assert!(matches!(result, Err(VMError::StackUnderflow { .. })));
+    }
+    
+    #[test]
+    fn test_liquid_delegate_basic() {
+        let mut vm = VM::new();
+        
+        // Setup with basic delegations: Alice → Bob, Carol → Dave
+        let ops = vec![
+            Op::LiquidDelegate { 
+                from: "alice".to_string(), 
+                to: "bob".to_string() 
+            },
+            Op::LiquidDelegate { 
+                from: "carol".to_string(), 
+                to: "dave".to_string() 
+            },
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
+        
+        // Verify delegations
+        let delegations = vm.get_delegations();
+        assert_eq!(delegations.get("alice"), Some(&"bob".to_string()));
+        assert_eq!(delegations.get("carol"), Some(&"dave".to_string()));
+    }
+    
+    #[test]
+    fn test_liquid_delegate_revocation() {
+        let mut vm = VM::new();
+        
+        // Setup a delegation and then revoke it
+        let ops = vec![
+            Op::LiquidDelegate { 
+                from: "alice".to_string(), 
+                to: "bob".to_string() 
+            },
+            Op::LiquidDelegate { 
+                from: "alice".to_string(), 
+                to: "".to_string() 
+            },
+        ];
+        
+        assert!(vm.execute(&ops).is_ok());
+        
+        // Verify delegation was revoked
+        let delegations = vm.get_delegations();
+        assert_eq!(delegations.get("alice"), None);
+    }
+    
+    #[test]
+    fn test_liquid_delegate_cycle_detection() {
+        let mut vm = VM::new();
+        
+        // Setup delegations that would create a cycle: Alice → Bob → Carol → Alice
+        let ops = vec![
+            Op::LiquidDelegate { 
+                from: "alice".to_string(), 
+                to: "bob".to_string() 
+            },
+            Op::LiquidDelegate { 
+                from: "bob".to_string(), 
+                to: "carol".to_string() 
+            },
+            Op::LiquidDelegate { 
+                from: "carol".to_string(), 
+                to: "alice".to_string() 
+            },
+        ];
+        
+        // Last operation should fail
+        let result = vm.execute(&ops);
+        assert!(result.is_err());
+        
+        if let Err(VMError::InvalidCondition(msg)) = result {
+            assert!(msg.contains("cycle"));
+        } else {
+            panic!("Expected VMError::InvalidCondition with cycle message");
+        }
+    }
+    
+    #[test]
+    fn test_voting_power_calculation() {
+        let mut vm = VM::new();
+        
+        // Set up initial voting powers
+        vm.memory.insert("alice_power".to_string(), 1.0);
+        vm.memory.insert("bob_power".to_string(), 1.0);
+        vm.memory.insert("carol_power".to_string(), 1.0);
+        
+        // Create delegations: Alice → Bob, Carol → Bob
+        vm.perform_liquid_delegation("alice", "bob").unwrap();
+        vm.perform_liquid_delegation("carol", "bob").unwrap();
+        
+        // Calculate voting powers
+        let alice_power = vm.get_effective_voting_power("alice").unwrap();
+        let bob_power = vm.get_effective_voting_power("bob").unwrap();
+        let carol_power = vm.get_effective_voting_power("carol").unwrap();
+        
+        assert_eq!(alice_power, 0.0); // Alice delegated her power
+        assert_eq!(carol_power, 0.0); // Carol delegated her power
+        assert_eq!(bob_power, 3.0);   // Bob has his own power plus Alice's and Carol's
     }
 }

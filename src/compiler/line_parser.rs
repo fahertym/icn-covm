@@ -146,6 +146,26 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
             // Create RankedVote operation
             Ok(Op::RankedVote { candidates, ballots })
         },
+        "liquiddelegate" => {
+            // Parse liquiddelegate command with required parameters: from and to
+            let from_str = parts.next().ok_or(CompilerError::InvalidFunctionFormat(
+                "liquiddelegate requires 'from' parameter".to_string(),
+                pos.line,
+                pos.column,
+            ))?;
+
+            let to_str = parts.next().ok_or(CompilerError::InvalidFunctionFormat(
+                "liquiddelegate requires 'to' parameter".to_string(),
+                pos.line, 
+                pos.column,
+            ))?;
+
+            // Create LiquidDelegate operation
+            Ok(Op::LiquidDelegate { 
+                from: from_str.to_string(), 
+                to: to_str.to_string() 
+            })
+        },
         _ => Err(CompilerError::UnknownCommand(
             command.to_string(),
             pos.line,
