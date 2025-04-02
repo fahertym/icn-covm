@@ -40,7 +40,7 @@ pub mod stdlib;
 /// # Example
 ///
 /// ```
-/// use nano_cvm::compiler::parse_dsl_with_stdlib;
+/// use icn_covm::compiler::parse_dsl_with_stdlib;
 ///
 /// let source = "
 ///     call abs  # Call standard library function
@@ -185,7 +185,7 @@ impl SourcePosition {
 /// # Example
 ///
 /// ```
-/// use nano_cvm::compiler::parse_dsl;
+/// use icn_covm::compiler::parse_dsl;
 ///
 /// let source = "
 ///     push 10
