@@ -1,4 +1,4 @@
-# nano-cvm
+# icn-covm
 
 A lightweight cooperative virtual machine for executing a domain-specific language (DSL) with support for stack-based operations, memory isolation, functions, loops, conditionals, and governance-oriented extensions.
 
@@ -150,4 +150,8 @@ REPL commands:
 ## License
 
 MIT © Matt Faherty and contributors
+
+---
+
+> **Note:** This project was formerly called `nano-cvm`. The rename reflects its expanded role as the core virtual machine of the Intercooperative Network (ICN).
 

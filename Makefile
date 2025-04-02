@@ -5,7 +5,7 @@ all: build test clippy fmt
 
 # Build the project
 build:
-	@echo "Building nano-cvm..."
+	@echo "Building icn-covm..."
 	cargo build
 
 # Clean build artifacts
@@ -47,5 +47,5 @@ benchmark:
 
 # Run all
 run_all: all
-	@echo "Running nano-cvm..."
+	@echo "Running icn-covm..."
 	cargo run -- --program program.dsl

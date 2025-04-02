@@ -1,6 +1,6 @@
-# nano-cvm Standard Library
+# icn-covm Standard Library
 
-The nano-cvm standard library provides common utility functions that can be used in your DSL programs. To use the standard library, run your program with the `--stdlib` flag.
+The icn-covm standard library provides common utility functions that can be used in your DSL programs. To use the standard library, run your program with the `--stdlib` flag.
 
 ## Usage
 

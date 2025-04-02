@@ -45,7 +45,7 @@ impl From<String> for AppError {
 
 fn main() {
     // Parse command line arguments
-    let matches = Command::new("nano-cvm")
+    let matches = Command::new("icn-covm")
         .version("0.2.0")
         .author("Intercooperative Network")
         .about("Secure stack-based virtual machine with governance-inspired opcodes")
@@ -369,7 +369,7 @@ fn run_benchmark(
 fn run_interactive(verbose: bool, parameters: HashMap<String, String>, use_bytecode: bool) -> Result<(), AppError> {
     use std::io::{self, Write};
 
-    println!("nano-cvm interactive REPL");
+    println!("icn-covm interactive REPL");
     println!("Type DSL code to execute, 'help' for commands, or 'exit' to quit");
     if use_bytecode {
         println!("Running in bytecode mode");

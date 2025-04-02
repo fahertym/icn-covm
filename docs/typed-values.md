@@ -1,10 +1,10 @@
-# nano-cvm Typed Value System
+# icn-covm Typed Value System
 
-This document describes the typed value system in nano-cvm, an optional feature that extends the VM with a richer type system beyond simple floating-point numbers.
+This document describes the typed value system in icn-covm, an optional feature that extends the VM with a richer type system beyond simple floating-point numbers.
 
 ## Overview
 
-By default, nano-cvm operates with a simple stack of 64-bit floating-point numbers (`f64`). The typed value system extends this to support multiple data types, including:
+By default, icn-covm operates with a simple stack of 64-bit floating-point numbers (`f64`). The typed value system extends this to support multiple data types, including:
 
 - Numbers (f64)
 - Booleans (true/false)
@@ -26,7 +26,7 @@ The typed value system is available behind a feature flag to maintain backward c
 cargo build --features typed-values
 ```
 
-When running nano-cvm with the typed value system enabled, the VM automatically uses the typed execution model.
+When running icn-covm with the typed value system enabled, the VM automatically uses the typed execution model.
 
 ## Type Semantics
 

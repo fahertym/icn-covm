@@ -1,10 +1,10 @@
-# nano-cvm Bytecode System
+# icn-covm Bytecode System
 
-This document explains the bytecode system in nano-cvm, including its design, instruction set, and usage.
+This document explains the bytecode system in icn-covm, including its design, instruction set, and usage.
 
 ## Overview
 
-The bytecode system provides an optimized execution layer for nano-cvm programs. Instead of directly interpreting the Abstract Syntax Tree (AST) representation, the bytecode compiler translates operations into a more compact, sequential form that can be executed more efficiently.
+The bytecode system provides an optimized execution layer for icn-covm programs. Instead of directly interpreting the Abstract Syntax Tree (AST) representation, the bytecode compiler translates operations into a more compact, sequential form that can be executed more efficiently.
 
 Benefits of the bytecode system include:
 - Faster execution for repeated program runs

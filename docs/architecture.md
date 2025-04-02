@@ -1,10 +1,10 @@
-# nano-cvm Architecture
+# icn-covm Architecture
 
-This document provides an overview of the nano-cvm architecture, including its execution flow, compiler phases, and governance operations.
+This document provides an overview of the icn-covm architecture, including its execution flow, compiler phases, and governance operations.
 
 ## System Overview
 
-nano-cvm is a stack-based virtual machine that executes a Domain-Specific Language (DSL) with governance-oriented operations. The system is designed to be modular, secure, and predictable, with features like memory isolation, recursion protection, and error propagation.
+icn-covm is a stack-based virtual machine that executes a Domain-Specific Language (DSL) with governance-oriented operations. The system is designed to be modular, secure, and predictable, with features like memory isolation, recursion protection, and error propagation.
 
 Key components include:
 - **Modular compiler** that transforms DSL code into operations
@@ -15,7 +15,7 @@ Key components include:
 
 ## Execution Flow
 
-The execution flow of nano-cvm consists of the following steps:
+The execution flow of icn-covm consists of the following steps:
 
 1. **Parsing**: The source code is parsed into operations using the compiler module
 2. **Execution Mode Selection**: The system chooses between:
@@ -217,7 +217,7 @@ Each instruction includes:
 
 ## Benchmarking and Performance
 
-nano-cvm provides tools for performance measurement:
+icn-covm provides tools for performance measurement:
 
 1. **Execution Mode Comparison**: Compare AST and bytecode execution times
 2. **Memory Usage Tracking**: Monitor stack and memory usage
@@ -230,7 +230,7 @@ Bytecode execution generally offers better performance for:
 
 ## Security and Safety Features
 
-nano-cvm includes several security features:
+icn-covm includes several security features:
 
 1. **Memory Isolation**: Function calls have isolated memory frames
 2. **Recursion Protection**: Prevents stack overflow from excessive recursion
