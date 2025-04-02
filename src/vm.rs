@@ -428,7 +428,7 @@ impl VM {
                         self.execute_inner(condition)?;
                         if self.stack.is_empty() { Event::info("while_loop", "Skipping while loop due to empty stack condition").emit().map_err(|e| VMError::IOError(e.to_string()))?; break; }
                         let cond = self.pop_one("While condition")?;
-                        if cond != 0.0 { break; }
+                        if cond == 0.0 { break; }
                         self.execute_inner(body)?;
                         match self.loop_control {
                             LoopControl::Break => { self.loop_control = LoopControl::None; break; },
@@ -686,7 +686,7 @@ mod tests {
         assert_eq!(
             vm.execute(&ops),
             Err(VMError::StackUnderflow {
-                op: "If".to_string(),
+                op: "If condition".to_string(),
                 needed: 1,
                 found: 0
             })
@@ -1119,22 +1119,42 @@ mod tests {
     #[test]
     fn test_while_countdown() {
         let mut vm = VM::new();
+        
+        // Create a very simple countdown program (from 3 to 0)
         let ops = vec![
-            Op::Push(5.0),
+            // Set up counter
+            Op::Push(3.0),
             Op::Store("counter".to_string()),
+            
+            // While loop: continue as long as counter > 0
+            // This is tricky because:
+            // 1. Gt returns 0.0 for true, 1.0 for false
+            // 2. While loop breaks when condition is 0.0, continues when non-zero
+            // So we need to invert the Gt result with Not to make the loop work
             Op::While {
-                condition: vec![Op::Load("counter".to_string()), Op::Push(0.0), Op::Gt],
+                condition: vec![
+                    Op::Push(0.0),
+                    Op::Load("counter".to_string()),
+                    Op::Gt,   // counter > 0? Returns 0.0 for true, 1.0 for false
+                    Op::Not,  // Invert result: 0.0 -> 1.0 (true -> continue), 1.0 -> 0.0 (false -> break)
+                ],
                 body: vec![
+                    // Decrement counter
                     Op::Load("counter".to_string()),
                     Op::Push(1.0),
                     Op::Sub,
                     Op::Store("counter".to_string()),
                 ],
             },
+            
+            // Load counter for verification
             Op::Load("counter".to_string()),
         ];
 
+        // Execute program
         assert!(vm.execute(&ops).is_ok());
+        
+        // Verify counter ended at 0
         assert_eq!(vm.top(), Some(0.0));
     }
 
@@ -1655,7 +1675,7 @@ mod tests {
             Op::Store("counter".to_string()),
             Op::While {
                 condition: vec![
-                    Op::Push(0.0), // True condition (0.0)
+                    Op::Push(1.0), // Continue condition (non-zero means continue)
                 ],
                 body: vec![
                     // Increment counter
