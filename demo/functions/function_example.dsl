@@ -12,6 +12,7 @@ def add_five(x):
 
 # Define a function with multiple parameters
 def max_of_three(a, b, c):
+    dumpstack # DEBUG: Check stack on entry
     # First compare a and b
     load a
     load b
@@ -28,17 +29,17 @@ def max_of_three(a, b, c):
     
     # Now we have the max of a and b on the stack
     # Compare with c
-    load c
-    dup
-    over
-    lt
+    load c  # Stack: [..., max(a,b), c]
+    dup     # Stack: [..., max(a,b), c, c]
+    over    # Stack: [..., max(a,b), c, c, max(a,b)]
+    lt      # pops max(a,b), c; compares max(a,b) < c; pushes 0.0(true) or 1.0(false). Stack: [..., max(a,b), c, result]
     if:
-        # If c < max(a,b), keep max(a,b)
-        pop
+        # result is 0.0 (true), max(a,b) < c. We want c. Stack was [..., max(a,b), c].
+        swap # Stack: [..., c, max(a,b)]
+        pop  # Stack: [..., c]
     else:
-        # If max(a,b) <= c, keep c
-        swap
-        pop
+        # result is 1.0 (false), c <= max(a,b). We want max(a,b). Stack was [..., max(a,b), c].
+        pop  # Stack: [..., max(a,b)]
     
     return
 

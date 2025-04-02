@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Allow dead code during development
+
 use chrono::{DateTime, Utc};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};

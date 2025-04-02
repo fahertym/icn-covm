@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Allow dead code during development
+
 use super::SourcePosition;
 
 /// Get the indentation level of a line (number of leading spaces)

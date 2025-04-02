@@ -1,7 +1,7 @@
+pub mod bytecode;
 pub mod compiler;
 pub mod events;
 pub mod vm;
-pub mod bytecode;
 
 #[cfg(feature = "typed-values")]
 pub mod typed;

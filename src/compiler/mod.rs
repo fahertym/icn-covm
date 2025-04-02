@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Allow dead code during development
+
 use crate::vm::Op;
 use thiserror::Error;
 
@@ -148,7 +150,7 @@ pub enum CompilerError {
 pub struct SourcePosition {
     /// Line number (1-indexed)
     pub line: usize,
-    
+
     /// Column number (1-indexed)
     pub column: usize,
 }

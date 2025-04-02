@@ -131,10 +131,17 @@ pub fn parse_block(
     while *start_line < lines.len() {
         let line = &lines[*start_line];
         let indent = common::get_indent(line);
+        //println!("  parse_block LOOP: line={}, indent={}, base_indent={}", *start_line, indent, base_indent); // DEBUG
 
-        // If we've dedented, we're done with this block
-        if indent <= base_indent || line.trim().is_empty() {
+        // If we've hit a non-empty line that is dedented, we're done with this block.
+        // Skip empty lines entirely.
+        if !line.trim().is_empty() && indent <= base_indent {
+            //println!("  parse_block BREAK: Dedented non-empty line."); // DEBUG
             break;
+        } else if line.trim().is_empty() {
+            //println!("  parse_block SKIP: Empty line."); // DEBUG
+            *start_line += 1; // Skip the empty line
+            continue; // Continue to the next line
         }
 
         let current_pos = SourcePosition::new(pos.line + *start_line, indent + 1);
@@ -173,6 +180,7 @@ pub fn parse_block(
             *start_line += 1;
         }
     }
+    //println!("  parse_block END: block_ops count={}", block_ops.len()); // DEBUG
 
     Ok(block_ops)
 }

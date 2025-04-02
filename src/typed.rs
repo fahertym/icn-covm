@@ -38,7 +38,7 @@ impl TypedValue {
             TypedValue::Null => "Null",
         }
     }
-    
+
     /// Try to convert the value to a number
     pub fn as_number(&self) -> Result<f64, TypedValueError> {
         match self {
@@ -53,7 +53,7 @@ impl TypedValue {
             TypedValue::Null => Ok(0.0),
         }
     }
-    
+
     /// Try to convert the value to a boolean
     pub fn as_boolean(&self) -> Result<bool, TypedValueError> {
         match self {
@@ -63,7 +63,7 @@ impl TypedValue {
             TypedValue::Null => Ok(false),
         }
     }
-    
+
     /// Try to convert the value to a string
     pub fn as_string(&self) -> Result<String, TypedValueError> {
         match self {
@@ -73,7 +73,7 @@ impl TypedValue {
             TypedValue::Null => Ok("null".to_string()),
         }
     }
-    
+
     /// Add two values, with type coercion
     pub fn add(&self, other: &TypedValue) -> Result<TypedValue, TypedValueError> {
         match (self, other) {
@@ -97,7 +97,7 @@ impl TypedValue {
             }
         }
     }
-    
+
     /// Subtract two values, with type coercion
     pub fn sub(&self, other: &TypedValue) -> Result<TypedValue, TypedValueError> {
         // Subtraction requires numeric coercion
@@ -105,12 +105,13 @@ impl TypedValue {
         let b_num = other.as_number()?;
         Ok(TypedValue::Number(a_num - b_num))
     }
-    
+
     /// Multiply two values, with type coercion
     pub fn mul(&self, other: &TypedValue) -> Result<TypedValue, TypedValueError> {
         match (self, other) {
             (TypedValue::Number(a), TypedValue::Number(b)) => Ok(TypedValue::Number(a * b)),
-            (TypedValue::String(s), TypedValue::Number(n)) | (TypedValue::Number(n), TypedValue::String(s)) => {
+            (TypedValue::String(s), TypedValue::Number(n))
+            | (TypedValue::Number(n), TypedValue::String(s)) => {
                 // String repetition
                 let repeat = *n as usize;
                 if repeat > 1000 {
@@ -127,39 +128,39 @@ impl TypedValue {
             }
         }
     }
-    
+
     /// Divide two values, with type coercion
     pub fn div(&self, other: &TypedValue) -> Result<TypedValue, TypedValueError> {
         // Division requires numeric coercion
         let a_num = self.as_number()?;
         let b_num = other.as_number()?;
-        
+
         if b_num == 0.0 {
             return Err(TypedValueError::InvalidOperationForType {
                 op: "division".to_string(),
                 types: "by zero".to_string(),
             });
         }
-        
+
         Ok(TypedValue::Number(a_num / b_num))
     }
-    
+
     /// Modulo operation, with type coercion
     pub fn modulo(&self, other: &TypedValue) -> Result<TypedValue, TypedValueError> {
         // Modulo requires numeric coercion
         let a_num = self.as_number()?;
         let b_num = other.as_number()?;
-        
+
         if b_num == 0.0 {
             return Err(TypedValueError::InvalidOperationForType {
                 op: "modulo".to_string(),
                 types: "by zero".to_string(),
             });
         }
-        
+
         Ok(TypedValue::Number(a_num % b_num))
     }
-    
+
     /// Compare two values for equality
     pub fn equals(&self, other: &TypedValue) -> Result<TypedValue, TypedValueError> {
         match (self, other) {
@@ -178,7 +179,7 @@ impl TypedValue {
             }
         }
     }
-    
+
     /// Greater than comparison
     pub fn greater_than(&self, other: &TypedValue) -> Result<TypedValue, TypedValueError> {
         match (self, other) {
@@ -192,7 +193,7 @@ impl TypedValue {
             }
         }
     }
-    
+
     /// Less than comparison
     pub fn less_than(&self, other: &TypedValue) -> Result<TypedValue, TypedValueError> {
         match (self, other) {
@@ -206,20 +207,20 @@ impl TypedValue {
             }
         }
     }
-    
+
     /// Logical NOT operation
     pub fn logical_not(&self) -> Result<TypedValue, TypedValueError> {
         let b = self.as_boolean()?;
         Ok(TypedValue::Boolean(!b))
     }
-    
+
     /// Logical AND operation
     pub fn logical_and(&self, other: &TypedValue) -> Result<TypedValue, TypedValueError> {
         let a = self.as_boolean()?;
         let b = other.as_boolean()?;
         Ok(TypedValue::Boolean(a && b))
     }
-    
+
     /// Logical OR operation
     pub fn logical_or(&self, other: &TypedValue) -> Result<TypedValue, TypedValueError> {
         let a = self.as_boolean()?;
@@ -275,24 +276,27 @@ impl TypedVM {
             loop_control: TypedLoopControl::None,
         }
     }
-    
+
     /// Get a reference to the stack
     pub fn get_stack(&self) -> &[TypedValue] {
         &self.stack
     }
-    
+
     /// Get a value from memory
     pub fn get_memory(&self, key: &str) -> Option<&TypedValue> {
         self.memory.get(key)
     }
-    
+
     /// Get a reference to the memory map
     pub fn get_memory_map(&self) -> &HashMap<String, TypedValue> {
         &self.memory
     }
-    
+
     /// Set parameters for the VM
-    pub fn set_parameters(&mut self, params: HashMap<String, String>) -> Result<(), crate::vm::VMError> {
+    pub fn set_parameters(
+        &mut self,
+        params: HashMap<String, String>,
+    ) -> Result<(), crate::vm::VMError> {
         for (key, value) in params {
             // Try to parse as f64 first
             if let Ok(num) = value.parse::<f64>() {
@@ -307,21 +311,23 @@ impl TypedVM {
         }
         Ok(())
     }
-    
+
     /// Get the top value from the stack without removing it
     pub fn top(&self) -> Option<&TypedValue> {
         self.stack.last()
     }
-    
+
     /// Helper for stack operations that need to pop one value
     fn pop_one(&mut self, op_name: &str) -> Result<TypedValue, crate::vm::VMError> {
-        self.stack.pop().ok_or_else(|| crate::vm::VMError::StackUnderflow {
-            op: op_name.to_string(),
-            needed: 1,
-            found: 0,
-        })
+        self.stack
+            .pop()
+            .ok_or_else(|| crate::vm::VMError::StackUnderflow {
+                op: op_name.to_string(),
+                needed: 1,
+                found: 0,
+            })
     }
-    
+
     /// Helper for stack operations that need to pop two values
     fn pop_two(&mut self, op_name: &str) -> Result<(TypedValue, TypedValue), crate::vm::VMError> {
         if self.stack.len() < 2 {
@@ -331,22 +337,22 @@ impl TypedVM {
                 found: self.stack.len(),
             });
         }
-        
+
         let b = self.stack.pop().unwrap();
         let a = self.stack.pop().unwrap();
         Ok((b, a))
     }
-    
+
     /// Execute a list of operations
     pub fn execute(&mut self, ops: &[crate::vm::Op]) -> Result<(), crate::vm::VMError> {
         if self.recursion_depth > 1000 {
             return Err(crate::vm::VMError::MaxRecursionDepth);
         }
-        
+
         // Implementation will be similar to VM::execute_inner but with typed values
         // This would be a much longer implementation, but for brevity we'll just
         // show the high-level structure
-        
+
         for op in ops {
             match op {
                 crate::vm::Op::Push(val) => {
@@ -366,18 +372,24 @@ impl TypedVM {
                 }
             }
         }
-        
+
         Ok(())
     }
-    
+
     /// Convert a typed value error to a VM error
     fn type_error_to_vm_error(&self, error: TypedValueError) -> crate::vm::VMError {
         match error {
             TypedValueError::TypeMismatch { expected, found } => {
-                crate::vm::VMError::ParameterError(format!("Type mismatch: expected {}, found {}", expected, found))
+                crate::vm::VMError::ParameterError(format!(
+                    "Type mismatch: expected {}, found {}",
+                    expected, found
+                ))
             }
             TypedValueError::InvalidOperationForType { op, types } => {
-                crate::vm::VMError::ParameterError(format!("Invalid operation {} for types {}", op, types))
+                crate::vm::VMError::ParameterError(format!(
+                    "Invalid operation {} for types {}",
+                    op, types
+                ))
             }
             TypedValueError::CoercionError { from, to } => {
                 crate::vm::VMError::ParameterError(format!("Cannot coerce from {} to {}", from, to))
@@ -398,30 +410,36 @@ impl Default for TypedVM {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_typed_basic_arithmetic() {
         // Addition
         let a = TypedValue::Number(5.0);
         let b = TypedValue::Number(3.0);
         assert_eq!(a.add(&b).unwrap(), TypedValue::Number(8.0));
-        
+
         // String concatenation
         let a = TypedValue::String("Hello, ".to_string());
         let b = TypedValue::String("World!".to_string());
-        assert_eq!(a.add(&b).unwrap(), TypedValue::String("Hello, World!".to_string()));
-        
+        assert_eq!(
+            a.add(&b).unwrap(),
+            TypedValue::String("Hello, World!".to_string())
+        );
+
         // Mixed type addition
         let a = TypedValue::String("Count: ".to_string());
         let b = TypedValue::Number(42.0);
-        assert_eq!(a.add(&b).unwrap(), TypedValue::String("Count: 42".to_string()));
+        assert_eq!(
+            a.add(&b).unwrap(),
+            TypedValue::String("Count: 42".to_string())
+        );
     }
-    
+
     #[test]
     fn test_typed_boolean_operations() {
         let t = TypedValue::Boolean(true);
         let f = TypedValue::Boolean(false);
-        
+
         // Logical operations
         assert_eq!(t.logical_and(&t).unwrap(), TypedValue::Boolean(true));
         assert_eq!(t.logical_and(&f).unwrap(), TypedValue::Boolean(false));
@@ -430,46 +448,56 @@ mod tests {
         assert_eq!(t.logical_not().unwrap(), TypedValue::Boolean(false));
         assert_eq!(f.logical_not().unwrap(), TypedValue::Boolean(true));
     }
-    
+
     #[test]
     fn test_typed_comparisons() {
         let a = TypedValue::Number(5.0);
         let b = TypedValue::Number(3.0);
-        
+
         assert_eq!(a.greater_than(&b).unwrap(), TypedValue::Boolean(true));
         assert_eq!(a.less_than(&b).unwrap(), TypedValue::Boolean(false));
-        
+
         let a = TypedValue::String("abc".to_string());
         let b = TypedValue::String("def".to_string());
-        
+
         assert_eq!(a.less_than(&b).unwrap(), TypedValue::Boolean(true));
         assert_eq!(a.greater_than(&b).unwrap(), TypedValue::Boolean(false));
     }
-    
+
     #[test]
     fn test_typed_equality() {
         // Same types
         assert_eq!(
-            TypedValue::Number(5.0).equals(&TypedValue::Number(5.0)).unwrap(),
+            TypedValue::Number(5.0)
+                .equals(&TypedValue::Number(5.0))
+                .unwrap(),
             TypedValue::Boolean(true)
         );
         assert_eq!(
-            TypedValue::String("abc".to_string()).equals(&TypedValue::String("abc".to_string())).unwrap(),
+            TypedValue::String("abc".to_string())
+                .equals(&TypedValue::String("abc".to_string()))
+                .unwrap(),
             TypedValue::Boolean(true)
         );
         assert_eq!(
-            TypedValue::Boolean(true).equals(&TypedValue::Boolean(true)).unwrap(),
+            TypedValue::Boolean(true)
+                .equals(&TypedValue::Boolean(true))
+                .unwrap(),
             TypedValue::Boolean(true)
         );
-        
+
         // Different types
         assert_eq!(
-            TypedValue::Number(1.0).equals(&TypedValue::Boolean(true)).unwrap(),
+            TypedValue::Number(1.0)
+                .equals(&TypedValue::Boolean(true))
+                .unwrap(),
             TypedValue::Boolean(true)
         );
         assert_eq!(
-            TypedValue::Number(0.0).equals(&TypedValue::Boolean(false)).unwrap(),
+            TypedValue::Number(0.0)
+                .equals(&TypedValue::Boolean(false))
+                .unwrap(),
             TypedValue::Boolean(true)
         );
     }
-} 
+}

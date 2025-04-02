@@ -1,4 +1,4 @@
-use nano_cvm::{Op, VM};
+use icn_covm::{Op, VM};
 use std::fs;
 use std::path::Path;
 

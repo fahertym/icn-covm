@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Allow dead code during development
+
 use crate::events::Event;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -52,37 +54,37 @@ pub enum VMError {
 }
 
 /// Operation types for the virtual machine
-/// 
+///
 /// The VM executes these operations in sequence, manipulating the stack,
 /// memory, and control flow according to each operation's semantics.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum Op {
     /// Push a numeric value onto the stack
     Push(f64),
-    
+
     /// Pop two values, add them, and push the result
     Add,
-    
+
     /// Pop two values, subtract the top from the second, and push the result
     Sub,
-    
+
     /// Pop two values, multiply them, and push the result
     Mul,
-    
+
     /// Pop two values, divide the second by the top, and push the result
     Div,
-    
+
     /// Pop two values, compute the modulo of the second by the top, and push the result
     Mod,
-    
+
     /// Pop a value and store it in memory with the given name
     Store(String),
-    
+
     /// Load a value from memory and push it onto the stack
     Load(String),
-    
+
     /// Conditional execution based on a condition
-    /// 
+    ///
     /// The condition is evaluated, and if it's non-zero, the 'then' branch
     /// is executed. Otherwise, the 'else_' branch is executed if present.
     If {
@@ -90,88 +92,79 @@ pub enum Op {
         then: Vec<Op>,
         else_: Option<Vec<Op>>,
     },
-    
+
     /// Execute a block of operations a fixed number of times
-    Loop {
-        count: usize,
-        body: Vec<Op>,
-    },
-    
+    Loop { count: usize, body: Vec<Op> },
+
     /// Execute a block of operations while a condition is true
-    While {
-        condition: Vec<Op>,
-        body: Vec<Op>,
-    },
-    
+    While { condition: Vec<Op>, body: Vec<Op> },
+
     /// Emit a message to the output
     Emit(String),
-    
+
     /// Negate the top value on the stack
     Negate,
-    
+
     /// Assert that the top value on the stack equals the expected value
     AssertTop(f64),
-    
+
     /// Display the current stack contents
     DumpStack,
-    
+
     /// Display the current memory contents
     DumpMemory,
-    
+
     /// Assert that a value in memory equals the expected value
-    AssertMemory {
-        key: String,
-        expected: f64,
-    },
-    
+    AssertMemory { key: String, expected: f64 },
+
     /// Pop a value from the stack
     Pop,
-    
+
     /// Compare the top two values for equality
     Eq,
-    
+
     /// Compare if the second value is greater than the top value
     Gt,
-    
+
     /// Compare if the second value is less than the top value
     Lt,
-    
+
     /// Logical NOT of the top value
     Not,
-    
+
     /// Logical AND of the top two values
     And,
-    
+
     /// Logical OR of the top two values
     Or,
-    
+
     /// Duplicate the top value on the stack
     Dup,
-    
+
     /// Swap the top two values on the stack
     Swap,
-    
+
     /// Copy the second value to the top of the stack
     Over,
-    
+
     /// Define a function with a name, parameters, and body
     Def {
         name: String,
         params: Vec<String>,
         body: Vec<Op>,
     },
-    
+
     /// Call a named function
     Call(String),
-    
+
     /// Return from a function
     Return,
-    
+
     /// No operation, does nothing
     Nop,
-    
+
     /// Match a value against several cases
-    /// 
+    ///
     /// Evaluates 'value', then checks it against each case.
     /// If a match is found, executes the corresponding operations.
     /// If no match is found and a default is provided, executes the default.
@@ -180,24 +173,19 @@ pub enum Op {
         cases: Vec<(f64, Vec<Op>)>,
         default: Option<Vec<Op>>,
     },
-    
+
     /// Break out of the innermost loop
     Break,
-    
+
     /// Continue to the next iteration of the innermost loop
     Continue,
-    
+
     /// Emit an event with a category and message
-    EmitEvent {
-        category: String,
-        message: String,
-    },
-    
+    EmitEvent { category: String, message: String },
+
     /// Assert that all values in a depth of the stack are equal
-    AssertEqualStack {
-        depth: usize,
-    },
-    
+    AssertEqualStack { depth: usize },
+
     /// Display the entire VM state
     DumpState,
 }
@@ -206,6 +194,7 @@ pub enum Op {
 struct CallFrame {
     memory: HashMap<String, f64>,
     return_value: Option<f64>,
+    return_pc: usize, // PC in the caller's context to return to
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -216,28 +205,31 @@ enum LoopControl {
 }
 
 /// The stack-based virtual machine
-/// 
+///
 /// This VM executes operations on a stack, with memory for variables,
 /// function definitions, and call frames for function invocation.
 #[derive(Debug)]
 pub struct VM {
     /// The stack of values being operated on
     pub stack: Vec<f64>,
-    
+
     /// Memory for storing variables
     pub memory: HashMap<String, f64>,
-    
+
     /// Storage for function definitions
     functions: HashMap<String, (Vec<String>, Vec<Op>)>,
-    
+
     /// Call stack for function invocation
     call_frames: Vec<CallFrame>,
-    
+
     /// Current recursion depth
     recursion_depth: usize,
-    
+
     /// Control flow for loops
     loop_control: LoopControl,
+
+    /// Stack to store return addresses (program counters) for function calls
+    return_stack: Vec<usize>,
 }
 
 impl VM {
@@ -250,6 +242,7 @@ impl VM {
             call_frames: Vec::new(),
             recursion_depth: 0,
             loop_control: LoopControl::None,
+            return_stack: Vec::new(), // Initialize return stack
         }
     }
 
@@ -302,7 +295,9 @@ impl VM {
         if self.recursion_depth > 1000 {
             return Err(VMError::MaxRecursionDepth);
         }
-        self.execute_inner(ops)
+        // Reset loop control state before top-level execution
+        self.loop_control = LoopControl::None;
+        self.execute_inner(ops) // Simply call execute_inner
     }
 
     /// Get the top value on the stack without removing it
@@ -338,464 +333,190 @@ impl VM {
         if self.recursion_depth > 1000 {
             return Err(VMError::MaxRecursionDepth);
         }
+        //println!("ENTER execute_inner: depth={}, ops={:?}", self.recursion_depth, ops.iter().take(5).collect::<Vec<_>>()); // DEBUG
 
         let mut pc = 0;
         while pc < ops.len() {
-            // Check for loop control flow
-            if self.loop_control != LoopControl::None {
-                break;
-            }
-
             let op = &ops[pc];
+
             match op {
-                Op::Push(value) => {
-                    self.stack.push(*value);
-                }
-                Op::Pop => {
-                    self.pop_one("Pop")?;
-                }
+                Op::Push(value) => self.stack.push(*value),
+                Op::Pop => { self.pop_one("Pop")?; },
                 Op::Dup => {
-                    let value = self.stack.last().ok_or_else(|| VMError::StackUnderflow {
-                        op: "Dup".to_string(),
-                        needed: 1,
-                        found: 0,
-                    })?;
+                    let value = self.stack.last().ok_or_else(|| VMError::StackUnderflow { op: "Dup".to_string(), needed: 1, found: 0 })?;
                     self.stack.push(*value);
-                }
+                },
                 Op::Swap => {
-                    if self.stack.len() < 2 {
-                        return Err(VMError::StackUnderflow {
-                            op: "Swap".to_string(),
-                            needed: 2,
-                            found: self.stack.len(),
-                        });
-                    }
+                    if self.stack.len() < 2 { return Err(VMError::StackUnderflow { op: "Swap".to_string(), needed: 2, found: self.stack.len() }); }
                     let len = self.stack.len();
                     self.stack.swap(len - 1, len - 2);
-                }
+                },
                 Op::Over => {
-                    if self.stack.len() < 2 {
-                        return Err(VMError::StackUnderflow {
-                            op: "Over".to_string(),
-                            needed: 2,
-                            found: self.stack.len(),
-                        });
-                    }
+                    if self.stack.len() < 2 { return Err(VMError::StackUnderflow { op: "Over".to_string(), needed: 2, found: self.stack.len() }); }
                     let value = self.stack[self.stack.len() - 2];
                     self.stack.push(value);
-                }
+                },
                 Op::Emit(msg) => {
                     let event = Event::info("emit", msg);
                     event.emit().map_err(|e| VMError::IOError(e.to_string()))?;
-                }
-                Op::Add => {
-                    let (a, b) = self.pop_two("Add")?;
-                    self.stack.push(a + b);
-                }
-                Op::Sub => {
-                    let (a, b) = self.pop_two("Sub")?;
-                    self.stack.push(a - b);
-                }
-                Op::Mul => {
-                    let (a, b) = self.pop_two("Mul")?;
-                    self.stack.push(a * b);
-                }
+                },
+                Op::Add => { let (a, b) = self.pop_two("Add")?; self.stack.push(a + b); },
+                Op::Sub => { let (a, b) = self.pop_two("Sub")?; self.stack.push(b - a); },
+                Op::Mul => { let (a, b) = self.pop_two("Mul")?; self.stack.push(a * b); },
                 Op::Div => {
                     let (a, b) = self.pop_two("Div")?;
-                    if b == 0.0 {
-                        return Err(VMError::DivisionByZero);
-                    }
-                    self.stack.push(a / b);
-                }
+                    if a == 0.0 { return Err(VMError::DivisionByZero); }
+                    self.stack.push(b / a);
+                },
                 Op::Mod => {
                     let (a, b) = self.pop_two("Mod")?;
-                    if b == 0.0 {
-                        return Err(VMError::DivisionByZero);
-                    }
-                    self.stack.push(a % b);
-                }
-                Op::Eq => {
-                    let (a, b) = self.pop_two("Eq")?;
-                    self.stack.push(if (a - b).abs() < f64::EPSILON {
-                        0.0
-                    } else {
-                        1.0
-                    });
-                }
-                Op::Lt => {
-                    let (a, b) = self.pop_two("Lt")?;
-                    self.stack.push(if a < b { 0.0 } else { 1.0 });
-                }
-                Op::Gt => {
-                    let (a, b) = self.pop_two("Gt")?;
-                    self.stack.push(if a > b { 0.0 } else { 1.0 });
-                }
-                Op::Not => {
-                    let value = self.pop_one("Not")?;
-                    self.stack.push(if value == 0.0 { 1.0 } else { 0.0 });
-                }
-                Op::And => {
-                    let (a, b) = self.pop_two("And")?;
-                    self.stack
-                        .push(if a != 0.0 && b != 0.0 { 1.0 } else { 0.0 });
-                }
-                Op::Or => {
-                    let (a, b) = self.pop_two("Or")?;
-                    self.stack
-                        .push(if a != 0.0 || b != 0.0 { 1.0 } else { 0.0 });
-                }
+                    if a == 0.0 { return Err(VMError::DivisionByZero); }
+                    self.stack.push(b % a);
+                },
+                Op::Eq => { let (a, b) = self.pop_two("Eq")?; self.stack.push(if (a - b).abs() < f64::EPSILON { 0.0 } else { 1.0 }); },
+                Op::Lt => { let (a, b) = self.pop_two("Lt")?; self.stack.push(if a < b { 0.0 } else { 1.0 }); },
+                Op::Gt => { let (a, b) = self.pop_two("Gt")?; self.stack.push(if a > b { 0.0 } else { 1.0 }); },
+                Op::Not => { let value = self.pop_one("Not")?; self.stack.push(if value == 0.0 { 1.0 } else { 0.0 }); },
+                Op::And => { let (a, b) = self.pop_two("And")?; self.stack.push(if a != 0.0 && b != 0.0 { 1.0 } else { 0.0 }); },
+                Op::Or => { let (a, b) = self.pop_two("Or")?; self.stack.push(if a != 0.0 || b != 0.0 { 1.0 } else { 0.0 }); },
                 Op::Store(key) => {
                     let value = self.pop_one("Store")?;
-
-                    // We need to store in the current function's memory if we're in a function call
-                    if !self.call_frames.is_empty() {
-                        // Store in the current call frame
-                        self.call_frames
-                            .last_mut()
-                            .unwrap()
-                            .memory
-                            .insert(key.clone(), value);
-                    } else {
-                        // Otherwise store in global memory
-                        self.memory.insert(key.clone(), value);
-                    }
-                }
+                    if !self.call_frames.is_empty() { self.call_frames.last_mut().unwrap().memory.insert(key.clone(), value); }
+                    else { self.memory.insert(key.clone(), value); }
+                },
                 Op::Load(key) => {
-                    // First check the current function's memory if we're in a function
+                    //println!("LOAD '{}': Call frames: {}", key, self.call_frames.len()); // DEBUG
                     let value = if !self.call_frames.is_empty() {
-                        // Check the current call frame first
-                        if let Some(value) = self.call_frames.last().unwrap().memory.get(key) {
-                            *value
-                        } else {
-                            // If not found in function memory, check global memory
-                            *self
-                                .memory
-                                .get(key)
-                                .ok_or_else(|| VMError::VariableNotFound(key.clone()))?
-                        }
-                    } else {
-                        // If not in a function, just use global memory
-                        *self
-                            .memory
-                            .get(key)
+                        //println!("-> Call frames NOT empty, trying frame memory..."); // DEBUG
+                        let current_frame = self.call_frames.last().unwrap();
+                        // Try frame memory first, then fall back to global memory
+                        *current_frame.memory.get(key)
+                            .or_else(|| {
+                                //println!("-> '{}' not in frame, trying global memory...", key); // DEBUG
+                                self.memory.get(key)
+                            })
                             .ok_or_else(|| VMError::VariableNotFound(key.clone()))?
+                    } else {
+                        //println!("-> Call frames empty, trying global memory..."); // DEBUG
+                        *self.memory.get(key).ok_or_else(|| VMError::VariableNotFound(key.clone()))?
                     };
-
                     self.stack.push(value);
-                }
-                Op::DumpStack => {
-                    let event = Event::info("stack", format!("{:?}", self.stack));
-                    event.emit().map_err(|e| VMError::IOError(e.to_string()))?;
-                }
-                Op::DumpMemory => {
-                    let event = Event::info("memory", format!("{:?}", self.memory));
-                    event.emit().map_err(|e| VMError::IOError(e.to_string()))?;
-                }
+                    //println!("-> Loaded {} for key '{}'", value, key); // DEBUG
+                },
+                Op::DumpStack => { Event::info("stack", format!("{:?}", self.stack)).emit().map_err(|e| VMError::IOError(e.to_string()))?; },
+                Op::DumpMemory => { Event::info("memory", format!("{:?}", self.memory)).emit().map_err(|e| VMError::IOError(e.to_string()))?; },
                 Op::DumpState => {
-                    // Output the full state of the VM (stack, memory, and more)
-                    let event = Event::info("vm_state", format!(
-                        "Stack: {:?}\nMemory: {:?}\nFunctions: {}\nCall Frames: {}\nRecursion Depth: {}", 
-                        self.stack,
-                        self.memory,
-                        self.functions.keys().collect::<Vec<_>>().len(),
-                        self.call_frames.len(),
-                        self.recursion_depth
-                    ));
+                    let event = Event::info("vm_state", format!("Stack: {:?}\\nMemory: {:?}\\nFunctions: {}\\nCall Frames: {}\\nRecursion Depth: {}", self.stack, self.memory, self.functions.keys().collect::<Vec<_>>().len(), self.call_frames.len(), self.recursion_depth));
                     event.emit().map_err(|e| VMError::IOError(e.to_string()))?;
-                }
+                },
                 Op::Def { name, params, body } => {
-                    self.functions
-                        .insert(name.clone(), (params.clone(), body.clone()));
-                }
-
+                    self.functions.insert(name.clone(), (params.clone(), body.clone()));
+                },
                 Op::Loop { count, body } => {
                     for _i in 0..*count {
                         self.execute_inner(body)?;
-
-                        // Handle loop control flow
                         match self.loop_control {
-                            LoopControl::Break => {
-                                self.loop_control = LoopControl::None;
-                                break;
-                            }
-                            LoopControl::Continue => {
-                                self.loop_control = LoopControl::None;
-                                continue;
-                            }
+                            LoopControl::Break => { self.loop_control = LoopControl::None; break; },
+                            LoopControl::Continue => { self.loop_control = LoopControl::None; continue; },
                             LoopControl::None => {}
                         }
                     }
-                }
-
+                },
                 Op::While { condition, body } => {
-                    if condition.is_empty() {
-                        return Err(VMError::InvalidCondition(
-                            "While condition block cannot be empty".to_string(),
-                        ));
-                    }
-
+                    if condition.is_empty() { return Err(VMError::InvalidCondition("While condition block cannot be empty".to_string())); }
                     loop {
-                        // Execute the condition code
                         self.execute_inner(condition)?;
-
-                        // Check if the stack is empty - if so, exit the loop safely
-                        if self.stack.is_empty() {
-                            // Emit an event indicating the missing condition
-                            let event = Event::info(
-                                "while_loop",
-                                "Skipping while loop due to empty stack condition",
-                            );
-                            event.emit().map_err(|e| VMError::IOError(e.to_string()))?;
-                            break;
-                        }
-
-                        // Get the result of the condition
+                        if self.stack.is_empty() { Event::info("while_loop", "Skipping while loop due to empty stack condition").emit().map_err(|e| VMError::IOError(e.to_string()))?; break; }
                         let cond = self.pop_one("While condition")?;
-
-                        // If condition is non-zero (false), exit the loop
-                        // If condition is 0.0 (true), execute the body
-                        if cond != 0.0 {
-                            break;
-                        }
-
-                        // Execute the body code
+                        if cond != 0.0 { break; }
                         self.execute_inner(body)?;
-
-                        // Handle loop control flow
                         match self.loop_control {
-                            LoopControl::Break => {
-                                self.loop_control = LoopControl::None;
-                                break;
-                            }
-                            LoopControl::Continue => {
-                                self.loop_control = LoopControl::None;
-                                continue;
-                            }
+                            LoopControl::Break => { self.loop_control = LoopControl::None; break; },
+                            LoopControl::Continue => { self.loop_control = LoopControl::None; continue; },
                             LoopControl::None => {}
                         }
                     }
-                }
-
-                Op::Break => {
-                    self.loop_control = LoopControl::Break;
-                }
-
-                Op::Continue => {
-                    self.loop_control = LoopControl::Continue;
-                }
-
-                Op::EmitEvent { category, message } => {
-                    let event = Event::info(category.as_str(), message.as_str());
-                    event.emit().map_err(|e| VMError::IOError(e.to_string()))?;
-                }
-
+                },
+                Op::Break => { self.loop_control = LoopControl::Break; },
+                Op::Continue => { self.loop_control = LoopControl::Continue; },
+                Op::EmitEvent { category, message } => { Event::info(category.as_str(), message.as_str()).emit().map_err(|e| VMError::IOError(e.to_string()))?; },
                 Op::AssertEqualStack { depth } => {
-                    if self.stack.len() < *depth {
-                        return Err(VMError::StackUnderflow {
-                            op: "AssertEqualStack".to_string(),
-                            needed: *depth,
-                            found: self.stack.len(),
-                        });
-                    }
-
+                    if self.stack.len() < *depth { return Err(VMError::StackUnderflow { op: "AssertEqualStack".to_string(), needed: *depth, found: self.stack.len() }); }
                     let top_value = self.stack[self.stack.len() - 1];
-                    for i in 1..*depth {
-                        if (self.stack[self.stack.len() - 1 - i] - top_value).abs() >= f64::EPSILON
-                        {
-                            return Err(VMError::AssertionFailed {
-                                expected: top_value,
-                                found: self.stack[self.stack.len() - 1 - i],
-                            });
-                        }
-                    }
-                }
-
-                Op::If {
-                    condition,
-                    then,
-                    else_,
-                } => {
-                    // Get condition value
-                    let condition_value = if condition.is_empty() {
-                        // If condition is empty, use the value already on the stack
-                        if self.stack.is_empty() {
-                            return Err(VMError::StackUnderflow {
-                                op: "If".to_string(),
-                                needed: 1,
-                                found: 0,
-                            });
-                        }
-                        self.pop_one("If condition")?
-                    } else {
-                        // Save the stack size before executing the condition
-                        let stack_size_before = self.stack.len();
-
-                        // Execute the condition operations
-                        self.execute_inner(condition)?;
-
-                        // Make sure the stack has at least one more value than before
-                        if self.stack.len() <= stack_size_before {
-                            return Err(VMError::InvalidCondition(
-                                "Condition block did not leave a value on the stack".to_string(),
-                            ));
-                        }
-
-                        // Get the top value from the stack
-                        self.pop_one("If condition result")?
-                    };
-
-                    // Execute the then block when condition is 0.0 (true)
-                    // or the else block when condition is non-zero (false)
-                    if condition_value == 0.0 {
-                        self.execute_inner(then)?;
-                    } else if let Some(else_block) = else_ {
-                        self.execute_inner(else_block)?;
-                    } else {
-                        // If condition is non-zero (false) and no else block, preserve the condition value
-                        self.stack.push(condition_value);
-                    }
-                }
-
-                Op::Negate => {
-                    let value = self.pop_one("Negate")?;
-                    self.stack.push(-value);
-                }
-
+                    for i in 1..*depth { if (self.stack[self.stack.len() - 1 - i] - top_value).abs() >= f64::EPSILON { return Err(VMError::AssertionFailed { expected: top_value, found: self.stack[self.stack.len() - 1 - i] }); } }
+                },
+                Op::If { condition, then, else_ } => {
+                    let cv = if condition.is_empty() { self.pop_one("If condition")? } else { let s = self.stack.len(); self.execute_inner(condition)?; if self.stack.len() <= s { return Err(VMError::InvalidCondition("Condition block did not leave a value on the stack".to_string())); } self.pop_one("If condition result")? };
+                    if cv == 0.0 { self.execute_inner(then)?; } 
+                    else if let Some(eb) = else_ { self.execute_inner(eb)?; } 
+                    else { self.stack.push(cv); }
+                },
+                Op::Negate => { let value = self.pop_one("Negate")?; self.stack.push(-value); },
                 Op::Call(name) => {
-                    let (params, body) = self
-                        .functions
-                        .get(name)
-                        .ok_or_else(|| VMError::FunctionNotFound(name.clone()))?
-                        .clone();
-
-                    // Create a new call frame for function execution
-                    let mut frame = CallFrame {
-                        memory: HashMap::new(),
-                        return_value: None,
-                    };
-
-                    // If there are named parameters, pop values for them from the stack
+                    let (params, body) = self.functions.get(name).ok_or_else(|| VMError::FunctionNotFound(name.clone()))?.clone();
+                    let mut frame = CallFrame { memory: HashMap::new(), return_value: None, return_pc: pc + 1 };
                     if !params.is_empty() {
-                        if self.stack.len() < params.len() {
-                            return Err(VMError::StackUnderflow {
-                                op: format!("Call to function '{}'", name),
-                                needed: params.len(),
-                                found: self.stack.len(),
-                            });
-                        }
-
-                        // Pop values from the stack in reverse order (last parameter first)
+                        if self.stack.len() < params.len() { return Err(VMError::StackUnderflow { op: format!("Call to function '{}'", name), needed: params.len(), found: self.stack.len() }); }
                         let mut param_values = Vec::with_capacity(params.len());
-                        for _ in 0..params.len() {
-                            param_values.push(self.stack.pop().unwrap());
-                        }
-                        param_values.reverse(); // Reverse to match parameter order
-
-                        // Store parameters in the function's memory
+                        for _ in 0..params.len() { param_values.push(self.stack.pop().unwrap()); }
+                        param_values.reverse();
                         for (param, value) in params.iter().zip(param_values.iter()) {
                             frame.memory.insert(param.clone(), *value);
                         }
                     }
-
-                    // Push the call frame onto the call stack
                     self.call_frames.push(frame);
-
-                    // Increment recursion depth
                     self.recursion_depth += 1;
+                    //println!("CALL '{}': Pushed frame. Total frames: {}", name, self.call_frames.len()); // DEBUG
 
                     // Execute the function body
-                    self.execute_inner(&body)?;
+                    let result = self.execute_inner(&body);
 
-                    // Decrement recursion depth
+                    // Pop the frame AFTER the function body execution finishes or returns.
+                    // Important: Pop even if execute_inner resulted in an error that will be propagated.
+                    self.call_frames.pop();
                     self.recursion_depth -= 1;
 
-                    // Pop the call frame and get the return value if there is one
-                    let frame = self.call_frames.pop().unwrap();
-
-                    // Push the return value onto the stack if there is one
-                    if let Some(return_value) = frame.return_value {
-                        self.stack.push(return_value);
-                    }
-                }
-
+                    result?; // Propagate any error from execute_inner
+                    // If Ok(()), pc advances in the outer loop automatically.
+                },
                 Op::Return => {
-                    // If we're in a function, set the return value
                     if !self.call_frames.is_empty() {
-                        // Return takes the top value from the stack as the return value
-                        let return_value = if !self.stack.is_empty() {
-                            self.pop_one("Return")?
+                        // Peek at the frame to determine return value if needed, don't pop here.
+                        let frame = self.call_frames.last().unwrap(); // Peek
+                        let value_to_push = if let Some(rv) = frame.return_value { // return_value isn't currently used
+                            rv
+                        } else if !self.stack.is_empty() {
+                            self.pop_one("Return value")? // Implicit return from stack top
                         } else {
-                            // If the stack is empty, default to 0.0
-                            0.0
+                            0.0 // Default return
                         };
-
-                        // Store the return value in the current call frame
-                        let frame = self.call_frames.last_mut().unwrap();
-                        frame.return_value = Some(return_value);
-
-                        // Exit the current function execution
-                        break;
+                        self.stack.push(value_to_push);
+                        break; // Exit the current execute_inner loop (the function body's loop)
+                    } else {
+                        return Err(VMError::InvalidCondition("Return encountered outside of a function call".to_string()));
                     }
-                }
-
-                Op::Nop => {}
-
-                Op::Match {
-                    value,
-                    cases,
-                    default,
-                } => {
-                    // Execute value operations to get match value
-                    if !value.is_empty() {
-                        self.execute_inner(value)?;
-                    }
-
-                    // Get the value to match
+                },
+                Op::Nop => {},
+                Op::Match { value, cases, default } => {
+                    if !value.is_empty() { self.execute_inner(value)?; }
                     let match_value = self.pop_one("Match")?;
-
-                    // Find matching case
-                    let mut found_match = false;
-                    for (case_value, case_ops) in cases {
-                        if (match_value - *case_value).abs() < f64::EPSILON {
-                            self.execute_inner(case_ops)?;
-                            found_match = true;
-                            break;
-                        }
-                    }
-
-                    // If no match found and there's a default block, execute it
-                    if !found_match {
-                        if let Some(default_block) = default {
-                            self.execute_inner(default_block)?;
-                        } else {
-                            // If no default, push the value back
-                            self.stack.push(match_value);
-                        }
-                    }
-                }
-
+                    let mut executed = false;
+                    for (cv, co) in cases { if (match_value - *cv).abs() < f64::EPSILON { self.execute_inner(co)?; executed = true; break; } }
+                    if !executed { if let Some(db) = default { self.execute_inner(db)?; executed = true; } }
+                    if !executed { self.stack.push(match_value); }
+                },
                 Op::AssertTop(expected) => {
                     let value = self.pop_one("AssertTop")?;
-                    if (value - *expected).abs() >= f64::EPSILON {
-                        return Err(VMError::AssertionFailed {
-                            expected: *expected,
-                            found: value,
-                        });
-                    }
-                }
-
+                    if (value - *expected).abs() >= f64::EPSILON { return Err(VMError::AssertionFailed { expected: *expected, found: value }); }
+                },
                 Op::AssertMemory { key, expected } => {
-                    let value = self
-                        .memory
-                        .get(key)
-                        .ok_or_else(|| VMError::VariableNotFound(key.clone()))?;
-                    if (value - expected).abs() >= f64::EPSILON {
-                        return Err(VMError::AssertionFailed {
-                            expected: *expected,
-                            found: *value,
-                        });
-                    }
-                }
+                    let value = self.memory.get(key).ok_or_else(|| VMError::VariableNotFound(key.clone()))?;
+                    if (value - expected).abs() >= f64::EPSILON { return Err(VMError::AssertionFailed { expected: *expected, found: *value }); }
+                },
+            }
+
+            if self.loop_control != LoopControl::None {
+                break;
             }
 
             pc += 1;

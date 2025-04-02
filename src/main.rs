@@ -1,7 +1,7 @@
+mod bytecode;
 mod compiler;
 mod events;
 mod vm;
-mod bytecode;
 use bytecode::{BytecodeCompiler, BytecodeInterpreter};
 use clap::{Arg, Command};
 use compiler::{parse_dsl, parse_dsl_with_stdlib, CompilerError};
@@ -146,11 +146,11 @@ fn main() {
                 eprintln!("Error: {}", err);
                 process::exit(1);
             }
-        } else {
-            if let Err(err) = run_program(program_path, verbose, use_stdlib, parameters, use_bytecode) {
-                eprintln!("Error: {}", err);
-                process::exit(1);
-            }
+        } else if let Err(err) =
+            run_program(program_path, verbose, use_stdlib, parameters, use_bytecode)
+        {
+            eprintln!("Error: {}", err);
+            process::exit(1);
         }
     }
 }
@@ -210,15 +210,18 @@ fn run_program(
         // Compile operations to bytecode
         let mut compiler = BytecodeCompiler::new();
         let program = compiler.compile(&ops);
-        
+
         if verbose {
-            println!("Program compiled to {} bytecode instructions", program.instructions.len());
+            println!(
+                "Program compiled to {} bytecode instructions",
+                program.instructions.len()
+            );
             println!("{}", program.dump());
         }
 
         // Create bytecode interpreter
         let mut interpreter = BytecodeInterpreter::new(program);
-        
+
         // Set parameters
         interpreter.set_parameters(parameters)?;
 
@@ -233,7 +236,7 @@ fn run_program(
         if verbose {
             println!("-----------------------------------");
             println!("Bytecode program execution completed successfully");
-            
+
             // Print final stack state
             if let Some(top) = interpreter.vm().top() {
                 println!("Final top of stack: {}", top);
@@ -258,7 +261,7 @@ fn run_program(
         if verbose {
             println!("-----------------------------------");
             println!("Program execution completed successfully");
-            
+
             // Print final stack state
             if let Some(top) = vm.top() {
                 println!("Final top of stack: {}", top);
@@ -273,7 +276,7 @@ fn run_program(
 
 fn run_benchmark(
     program_path: &str,
-    verbose: bool,
+    _verbose: bool,
     use_stdlib: bool,
     parameters: HashMap<String, String>,
 ) -> Result<(), AppError> {
@@ -313,60 +316,79 @@ fn run_benchmark(
 
     // Run AST interpreter
     println!("\n1. Running AST interpreter...");
-    
+
     let mut vm = VM::new();
     vm.set_parameters(parameters.clone())?;
-    
+
     let ast_start = Instant::now();
     vm.execute(&ops)?;
     let ast_duration = ast_start.elapsed();
-    
+
     println!("AST execution time: {:?}", ast_duration);
-    
+
     // Run bytecode compilation and execution
     println!("\n2. Running bytecode compiler and interpreter...");
-    
+
     let compiler_start = Instant::now();
     let mut compiler = BytecodeCompiler::new();
     let program = compiler.compile(&ops);
     let compiler_duration = compiler_start.elapsed();
-    
+
     println!("Bytecode compilation time: {:?}", compiler_duration);
     println!("Bytecode size: {} instructions", program.instructions.len());
-    
+
     let mut interpreter = BytecodeInterpreter::new(program);
     interpreter.set_parameters(parameters)?;
-    
+
     let bytecode_start = Instant::now();
     interpreter.execute()?;
     let bytecode_duration = bytecode_start.elapsed();
-    
+
     println!("Bytecode execution time: {:?}", bytecode_duration);
-    
+
     // Calculate speedup
     let total_bytecode_time = compiler_duration + bytecode_duration;
-    println!("\nTotal bytecode time (compilation + execution): {:?}", total_bytecode_time);
-    
+    println!(
+        "\nTotal bytecode time (compilation + execution): {:?}",
+        total_bytecode_time
+    );
+
     if ast_duration > bytecode_duration {
         let speedup = ast_duration.as_secs_f64() / bytecode_duration.as_secs_f64();
-        println!("Bytecode execution is {:.2}x faster than AST interpretation", speedup);
+        println!(
+            "Bytecode execution is {:.2}x faster than AST interpretation",
+            speedup
+        );
     } else {
         let slowdown = bytecode_duration.as_secs_f64() / ast_duration.as_secs_f64();
-        println!("Bytecode execution is {:.2}x slower than AST interpretation", slowdown);
+        println!(
+            "Bytecode execution is {:.2}x slower than AST interpretation",
+            slowdown
+        );
     }
-    
+
     if ast_duration > total_bytecode_time {
         let speedup = ast_duration.as_secs_f64() / total_bytecode_time.as_secs_f64();
-        println!("Bytecode (including compilation) is {:.2}x faster than AST interpretation", speedup);
+        println!(
+            "Bytecode (including compilation) is {:.2}x faster than AST interpretation",
+            speedup
+        );
     } else {
         let slowdown = total_bytecode_time.as_secs_f64() / ast_duration.as_secs_f64();
-        println!("Bytecode (including compilation) is {:.2}x slower than AST interpretation", slowdown);
+        println!(
+            "Bytecode (including compilation) is {:.2}x slower than AST interpretation",
+            slowdown
+        );
     }
-    
+
     Ok(())
 }
 
-fn run_interactive(verbose: bool, parameters: HashMap<String, String>, use_bytecode: bool) -> Result<(), AppError> {
+fn run_interactive(
+    verbose: bool,
+    parameters: HashMap<String, String>,
+    use_bytecode: bool,
+) -> Result<(), AppError> {
     use std::io::{self, Write};
 
     println!("icn-covm interactive REPL");
@@ -376,12 +398,12 @@ fn run_interactive(verbose: bool, parameters: HashMap<String, String>, use_bytec
     } else {
         println!("Running in AST interpreter mode");
     }
-    
+
     // Show verbose setting if enabled
     if verbose {
         println!("Verbose mode: enabled");
     }
-    
+
     let mut vm = VM::new();
     vm.set_parameters(parameters)?;
 
@@ -440,46 +462,24 @@ fn run_interactive(verbose: bool, parameters: HashMap<String, String>, use_bytec
             }
             "stack" => {
                 println!("Stack:");
-                if use_bytecode {
-                    let stack = vm.get_stack();
-                    for (i, &value) in stack.iter().enumerate() {
-                        println!("  {}: {}", i, value);
-                    }
-                    if stack.is_empty() {
-                        println!("  (empty)");
-                    }
-                } else {
-                    let stack = vm.get_stack();
-                    for (i, &value) in stack.iter().enumerate() {
-                        println!("  {}: {}", i, value);
-                    }
-                    if stack.is_empty() {
-                        println!("  (empty)");
-                    }
+                let stack = vm.get_stack();
+                for (i, &value) in stack.iter().enumerate() {
+                    println!("  {}: {}", i, value);
+                }
+                if stack.is_empty() {
+                    println!("  (empty)");
                 }
             }
             "memory" => {
                 println!("Memory:");
-                if use_bytecode {
-                    let memory = vm.get_memory_map();
-                    let mut keys: Vec<_> = memory.keys().collect();
-                    keys.sort();
-                    for key in keys {
-                        println!("  {}: {}", key, memory.get(key).unwrap());
-                    }
-                    if memory.is_empty() {
-                        println!("  (empty)");
-                    }
-                } else {
-                    let memory = vm.get_memory_map();
-                    let mut keys: Vec<_> = memory.keys().collect();
-                    keys.sort();
-                    for key in keys {
-                        println!("  {}: {}", key, memory.get(key).unwrap());
-                    }
-                    if memory.is_empty() {
-                        println!("  (empty)");
-                    }
+                let memory = vm.get_memory_map();
+                let mut keys: Vec<_> = memory.keys().collect();
+                keys.sort();
+                for key in keys {
+                    println!("  {}: {}", key, memory.get(key).unwrap());
+                }
+                if memory.is_empty() {
+                    println!("  (empty)");
                 }
             }
             "reset" => {
@@ -487,10 +487,24 @@ fn run_interactive(verbose: bool, parameters: HashMap<String, String>, use_bytec
                 println!("VM reset");
             }
             "mode ast" => {
-                return run_interactive(verbose, vm.get_memory_map().iter().map(|(k, v)| (k.clone(), v.to_string())).collect(), false);
+                return run_interactive(
+                    verbose,
+                    vm.get_memory_map()
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.to_string()))
+                        .collect(),
+                    false,
+                );
             }
             "mode bytecode" => {
-                return run_interactive(verbose, vm.get_memory_map().iter().map(|(k, v)| (k.clone(), v.to_string())).collect(), true);
+                return run_interactive(
+                    verbose,
+                    vm.get_memory_map()
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.to_string()))
+                        .collect(),
+                    true,
+                );
             }
             _ if trimmed.starts_with("save ") => {
                 let file_name = trimmed[5..].trim();
@@ -518,26 +532,26 @@ fn run_interactive(verbose: bool, parameters: HashMap<String, String>, use_bytec
                             // Compile to bytecode and execute
                             let mut compiler = BytecodeCompiler::new();
                             let program = compiler.compile(&ops);
-                            
+
                             if verbose {
                                 println!("Compiled to bytecode:");
                                 println!("{}", program.dump());
                             }
-                            
+
                             let mut interpreter = BytecodeInterpreter::new(program);
-                            
+
                             // Copy VM state to interpreter
                             for (key, &value) in vm.get_memory_map() {
                                 interpreter.vm_mut().memory.insert(key.clone(), value);
                             }
-                            
+
                             // Execute
                             match interpreter.execute() {
                                 Ok(()) => {
                                     // Copy the stack state back to the main VM for the next loop
                                     vm.stack = interpreter.vm().stack.clone();
                                     vm.memory = interpreter.vm().memory.clone();
-                                    
+
                                     // Show result
                                     if let Some(result) = interpreter.vm().top() {
                                         println!("Result: {}", result);
