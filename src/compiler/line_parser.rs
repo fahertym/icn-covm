@@ -110,7 +110,42 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
         }
         "dumpstack" => Ok(Op::DumpStack),
         "dumpmemory" => Ok(Op::DumpMemory),
-        "dumpstate" => Ok(Op::DumpState), // New debug/introspection opcode
+        "dumpstate" => Ok(Op::DumpState), // Debug/introspection opcode
+        "rankedvote" => {
+            // Parse rankedvote command with required parameters: candidates and ballots
+            let candidates_str = parts.next().ok_or(CompilerError::InvalidFunctionFormat(
+                "rankedvote requires 'candidates' parameter".to_string(),
+                pos.line,
+                pos.column,
+            ))?;
+
+            let ballots_str = parts.next().ok_or(CompilerError::InvalidFunctionFormat(
+                "rankedvote requires 'ballots' parameter".to_string(),
+                pos.line, 
+                pos.column,
+            ))?;
+
+            // Parse candidates parameter
+            let candidates = candidates_str.parse::<usize>().map_err(|_| {
+                CompilerError::InvalidFunctionFormat(
+                    format!("Invalid candidates count: {}", candidates_str),
+                    pos.line,
+                    pos.column,
+                )
+            })?;
+
+            // Parse ballots parameter
+            let ballots = ballots_str.parse::<usize>().map_err(|_| {
+                CompilerError::InvalidFunctionFormat(
+                    format!("Invalid ballots count: {}", ballots_str),
+                    pos.line,
+                    pos.column,
+                )
+            })?;
+
+            // Create RankedVote operation
+            Ok(Op::RankedVote { candidates, ballots })
+        },
         _ => Err(CompilerError::UnknownCommand(
             command.to_string(),
             pos.line,

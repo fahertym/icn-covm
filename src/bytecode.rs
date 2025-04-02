@@ -54,6 +54,7 @@ pub enum BytecodeOp {
     AssertTop(f64),
     AssertMemory(String, f64),
     AssertEqualStack(usize),
+    RankedVote(usize, usize),
 }
 
 /// The bytecode program with flattened instructions and a function lookup table
@@ -276,6 +277,10 @@ impl BytecodeCompiler {
                     .program
                     .instructions
                     .push(BytecodeOp::AssertEqualStack(*depth)),
+                Op::RankedVote { candidates, ballots } => self
+                    .program
+                    .instructions
+                    .push(BytecodeOp::RankedVote(*candidates, *ballots)),
 
                 // Handle more complex operations
                 Op::If {
@@ -843,52 +848,91 @@ impl BytecodeInterpreter {
                 }
             }
             AssertMemory(key, expected) => {
-                let val = self
-                    .vm
-                    .get_memory(key)
-                    .ok_or_else(|| VMError::VariableNotFound(key.clone()))?;
-                if (val - expected).abs() >= f64::EPSILON {
-                    return Err(VMError::AssertionFailed {
-                        expected: *expected,
-                        found: val,
-                    });
+                let value = self.vm.get_memory(key).ok_or_else(|| VMError::VariableNotFound(key.clone()))?;
+                if (value - expected).abs() >= f64::EPSILON { 
+                    return Err(VMError::AssertionFailed { 
+                        expected: *expected, 
+                        found: value 
+                    }); 
                 }
             }
             AssertEqualStack(depth) => {
                 if self.vm.stack.len() < *depth {
                     return Err(VMError::StackUnderflow {
-                        op: "assertequalstack".to_string(),
+                        op: "assert_equal_stack".to_string(),
                         needed: *depth,
                         found: self.vm.stack.len(),
                     });
                 }
-
-                // Check that all elements are equal
-                let idx = self.vm.stack.len() - *depth;
-                let val = self.vm.stack[idx];
-                for i in (self.vm.stack.len() - *depth)..self.vm.stack.len() {
-                    if (self.vm.stack[i] - val).abs() >= f64::EPSILON {
+                let top = self.vm.stack[self.vm.stack.len() - 1];
+                for i in 2..=*depth {
+                    let value = self.vm.stack[self.vm.stack.len() - i];
+                    if (value - top).abs() >= f64::EPSILON {
                         return Err(VMError::AssertionFailed {
-                            expected: val,
-                            found: self.vm.stack[i],
+                            expected: top,
+                            found: value,
                         });
                     }
                 }
             }
-            Break => {
-                // Handle break by jumping to the end of the current loop
-                if let Some((_, loop_end)) = self.loop_stack.last() {
-                    self.pc = *loop_end;
+            RankedVote(candidates, ballots) => {
+                // Validate parameters
+                if *candidates < 2 {
+                    return Err(VMError::InvalidCondition(format!(
+                        "RankedVote requires at least 2 candidates, found {}", candidates
+                    )));
                 }
-            }
-            Continue => {
-                // Handle continue by jumping to the start of the current loop
-                if let Some((loop_start, _)) = self.loop_stack.last() {
-                    self.pc = *loop_start;
+                if *ballots < 1 {
+                    return Err(VMError::InvalidCondition(format!(
+                        "RankedVote requires at least 1 ballot, found {}", ballots
+                    )));
                 }
+                
+                // Ensure stack has enough values for all ballots
+                let required_stack_size = *candidates * *ballots;
+                if self.vm.stack.len() < required_stack_size {
+                    return Err(VMError::StackUnderflow {
+                        op: "RankedVote".to_string(),
+                        needed: required_stack_size,
+                        found: self.vm.stack.len(),
+                    });
+                }
+                
+                // Pop ballots from stack (each ballot is an array of candidate preferences)
+                let mut all_ballots = Vec::with_capacity(*ballots);
+                for _ in 0..*ballots {
+                    let mut ballot = Vec::with_capacity(*candidates);
+                    for _ in 0..*candidates {
+                        ballot.push(self.vm.stack.pop().unwrap());
+                    }
+                    ballot.reverse(); // Reverse to maintain original order
+                    all_ballots.push(ballot);
+                }
+
+                // Perform instant-runoff voting
+                let winner = self.vm.perform_instant_runoff_voting(*candidates, all_ballots)?;
+                
+                // Push winner back onto stack
+                self.vm.stack.push(winner);
+                
+                // Log the result
+                use crate::events::Event;
+                let event = Event::info(
+                    "ranked_vote", 
+                    format!("Ranked vote completed, winner: candidate {}", winner)
+                );
+                event.emit().map_err(|e| VMError::IOError(e.to_string()))?;
             }
             Nop => {
                 // Do nothing
+            }
+            Break => {
+                // Signal a loop break, the outer interpreter will handle this
+                return Err(VMError::LoopControl("break".to_string()));
+            }
+            Continue => {
+                // Signal a loop continue, the outer interpreter will handle this
+                return Err(VMError::LoopControl("continue".to_string()));
             }
         }
 
