@@ -1,11 +1,18 @@
-# Ignore Cargo.lock for libraries (keep it if this is a binary project)
+# Backup and archive files
+backup_*.bundle
+z_archive_*
+storage_test*
+
+# Rust
+/target/
+**/*.rs.bk
 Cargo.lock
 
-# IDE/editor-specific
+# IDE and editor files
 .vscode/
 .idea/
 *.swp
-*.swo
+*~
 
 # Logs
 *.log
@@ -20,3 +27,6 @@ target/
 # Ignore all files in the .cargo directory
 .cargo/
 full_project_dump.txt
+
+# Binary directory
+/src/bin/
