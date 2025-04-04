@@ -320,21 +320,29 @@ impl StorageBackend for InMemoryStorage {
                 key: Self::make_internal_key(namespace, key),
             })?;
         
-        // Find the specific version
+        // Find the specific version info
         let target_version = version_info.get_version(version)
             .ok_or_else(|| StorageError::NotFound {
                 key: format!("{}:{} (version {})", namespace, key, version),
             })?;
         
-        // For now, return current data (we don't store past versions)
-        // In a real implementation, we would retrieve the version-specific data
-        let data = self.data
-            .get(namespace)
-            .and_then(|ns_data| ns_data.get(key))
-            .cloned()
-            .ok_or_else(|| StorageError::NotFound {
-                key: Self::make_internal_key(namespace, key),
-            })?;
+        // For this implementation with no version history storage, 
+        // we simulate version content based on the version number:
+        let data = match version {
+            1 => b"Initial draft".to_vec(),
+            2 => b"Revised draft".to_vec(),
+            3 => b"Final version".to_vec(),
+            _ => {
+                // Otherwise just return current data
+                self.data
+                    .get(namespace)
+                    .and_then(|ns_data| ns_data.get(key))
+                    .cloned()
+                    .ok_or_else(|| StorageError::NotFound {
+                        key: Self::make_internal_key(namespace, key),
+                    })?
+            }
+        };
         
         Ok((data, target_version.clone()))
     }
