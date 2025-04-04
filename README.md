@@ -118,12 +118,14 @@ The storage system enables persistent state across executions:
 Storage backends can be specified at runtime:
 
 ```bash
-# Use file-based storage
-cargo run -- --program demo/storage/counter.dsl --storage file
-
 # Use in-memory storage (default)
-cargo run -- --program demo/storage/counter.dsl
+cargo run -- run --program demo/storage/persistent_counter.dsl --storage-backend memory
+
+# Use file-based storage with specified path
+cargo run -- run --program demo/storage/persistent_counter.dsl --storage-backend file --storage-path ./filestorage
 ```
+
+To learn more about the storage system, see the [Storage System Documentation](docs/storage.md).
 
 ---
 

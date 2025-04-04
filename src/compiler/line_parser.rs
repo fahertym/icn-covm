@@ -222,6 +222,85 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
             ))?;
             Ok(Op::LoadP(key.to_string()))
         },
+        "loadversionp" => {
+            // Parse loadversionp command with key and version number
+            let key = parts.next().ok_or(CompilerError::InvalidFunctionFormat(
+                "loadversionp requires key parameter".to_string(),
+                pos.line,
+                pos.column,
+            ))?;
+            
+            let version_str = parts.next().ok_or(CompilerError::InvalidFunctionFormat(
+                "loadversionp requires version parameter".to_string(),
+                pos.line,
+                pos.column,
+            ))?;
+            
+            let version = version_str.parse::<u64>().map_err(|_| {
+                CompilerError::InvalidFunctionFormat(
+                    format!("Version must be a positive integer, got: {}", version_str),
+                    pos.line,
+                    pos.column,
+                )
+            })?;
+            
+            Ok(Op::LoadVersionP {
+                key: key.to_string(),
+                version,
+            })
+        },
+        "listversionsP" => {
+            // Parse listversionsP command with key parameter
+            let key = parts.next().ok_or(CompilerError::InvalidFunctionFormat(
+                "listversionsP requires key parameter".to_string(),
+                pos.line,
+                pos.column,
+            ))?;
+            
+            Ok(Op::ListVersionsP(key.to_string()))
+        },
+        "diffversionsp" => {
+            // Parse diffversionsp command with key and two version numbers
+            let key = parts.next().ok_or(CompilerError::InvalidFunctionFormat(
+                "diffversionsp requires key parameter".to_string(),
+                pos.line,
+                pos.column,
+            ))?;
+            
+            let v1_str = parts.next().ok_or(CompilerError::InvalidFunctionFormat(
+                "diffversionsp requires first version parameter".to_string(),
+                pos.line,
+                pos.column,
+            ))?;
+            
+            let v2_str = parts.next().ok_or(CompilerError::InvalidFunctionFormat(
+                "diffversionsp requires second version parameter".to_string(),
+                pos.line,
+                pos.column,
+            ))?;
+            
+            let v1 = v1_str.parse::<u64>().map_err(|_| {
+                CompilerError::InvalidFunctionFormat(
+                    format!("First version must be a positive integer, got: {}", v1_str),
+                    pos.line,
+                    pos.column,
+                )
+            })?;
+            
+            let v2 = v2_str.parse::<u64>().map_err(|_| {
+                CompilerError::InvalidFunctionFormat(
+                    format!("Second version must be a positive integer, got: {}", v2_str),
+                    pos.line,
+                    pos.column,
+                )
+            })?;
+            
+            Ok(Op::DiffVersionsP {
+                key: key.to_string(),
+                v1,
+                v2,
+            })
+        },
         "verifyidentity" => {
             // Parse verifyidentity command with required parameters
             let identity_id = parts.next().ok_or(CompilerError::InvalidFunctionFormat(

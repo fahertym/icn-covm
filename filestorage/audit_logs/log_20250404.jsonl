@@ -1,0 +1,24 @@
+{"timestamp":1743744316,"user_id":"demo_user","action":"account_created","namespace":"global","key":"demo_user","details":"Created account with 1048576 byte quota"}
+{"timestamp":1743744316,"user_id":"demo_user","action":"create_namespace","namespace":"demo","key":null,"details":"Created namespace with quota 1048576 bytes"}
+{"timestamp":1743744316,"user_id":"demo_user","action":"write","namespace":"demo","key":"data_key","details":"Set v1 (2 bytes)"}
+{"timestamp":1743744316,"user_id":"demo_user","action":"read","namespace":"demo","key":"data_key","details":"Read version 1"}
+{"timestamp":1743744316,"user_id":"demo_user","action":"write","namespace":"demo","key":"data_key","details":"Set v2 (2 bytes)"}
+{"timestamp":1743744316,"user_id":"demo_user","action":"read","namespace":"demo","key":"data_key","details":"Read version 2"}
+{"timestamp":1743744316,"user_id":"demo_user","action":"write","namespace":"demo","key":"data_key","details":"Set v3 (2 bytes)"}
+{"timestamp":1743744316,"user_id":"demo_user","action":"read","namespace":"demo","key":"data_key","details":"Read version 3"}
+{"timestamp":1743744316,"user_id":"demo_user","action":"write","namespace":"demo","key":"data_key","details":"Set v4 (2 bytes)"}
+{"timestamp":1743744316,"user_id":"demo_user","action":"list_versions","namespace":"demo","key":"data_key","details":"Listed versions for key"}
+{"timestamp":1743744316,"user_id":"demo_user","action":"read_version","namespace":"demo","key":"data_key","details":"Read version 1"}
+{"timestamp":1743744316,"user_id":"demo_user","action":"read_version","namespace":"demo","key":"data_key","details":"Read version 2"}
+{"timestamp":1743744316,"user_id":"demo_user","action":"read_version","namespace":"demo","key":"data_key","details":"Read version 1"}
+{"timestamp":1743744316,"user_id":"demo_user","action":"read_version","namespace":"demo","key":"data_key","details":"Read version 4"}
+{"timestamp":1743744316,"user_id":"demo_user","action":"read_version","namespace":"demo","key":"data_key","details":"Read version 2"}
+{"timestamp":1743744316,"user_id":"demo_user","action":"read_version","namespace":"demo","key":"data_key","details":"Read version 3"}
+{"timestamp":1743744316,"user_id":"demo_user","action":"read_version","namespace":"demo","key":"data_key","details":"Read version 1"}
+{"timestamp":1743744316,"user_id":"demo_user","action":"read_version","namespace":"demo","key":"data_key","details":"Read version 2"}
+{"timestamp":1743744316,"user_id":"demo_user","action":"read_version","namespace":"demo","key":"data_key","details":"Read version 2"}
+{"timestamp":1743744316,"user_id":"demo_user","action":"read_version","namespace":"demo","key":"data_key","details":"Read version 3"}
+{"timestamp":1743744316,"user_id":"demo_user","action":"read_version","namespace":"demo","key":"data_key","details":"Read version 3"}
+{"timestamp":1743744316,"user_id":"demo_user","action":"read_version","namespace":"demo","key":"data_key","details":"Read version 4"}
+{"timestamp":1743744316,"user_id":"demo_user","action":"read_version","namespace":"demo","key":"data_key","details":"Read version 1"}
+{"timestamp":1743744316,"user_id":"demo_user","action":"read_version","namespace":"demo","key":"data_key","details":"Read version 4"}

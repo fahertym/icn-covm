@@ -313,6 +313,31 @@ pub enum Op {
     /// If the key does not exist, an error is returned.
     LoadP(String),
 
+    /// Load a specific version of a value from persistent storage
+    ///
+    /// This operation retrieves a specific version of a value from the
+    /// persistent storage backend using the specified key and version number.
+    /// The version is pushed onto the stack.
+    /// If the key or version does not exist, an error is returned.
+    LoadVersionP { key: String, version: u64 },
+
+    /// List all versions of a value in persistent storage
+    ///
+    /// This operation retrieves a list of all available versions for a key
+    /// in the persistent storage backend. It pushes the number of versions
+    /// onto the stack, and emits version metadata like timestamps and authors.
+    /// If the key does not exist, an error is returned.
+    ListVersionsP(String),
+
+    /// Compare two versions of a value in persistent storage
+    ///
+    /// This operation compares two specific versions of a value from the
+    /// persistent storage backend using the specified key and version numbers.
+    /// It emits information about differences between the versions and pushes
+    /// the numeric difference onto the stack if the values are numeric.
+    /// If the key or versions do not exist, an error is returned.
+    DiffVersionsP { key: String, v1: u64, v2: u64 },
+
     /// Verify an identity's digital signature
     ///
     /// This operation checks if a digital signature is valid for a given
@@ -796,17 +821,127 @@ impl VM {
                     }
                 },
                 Op::StoreP(key) => {
-                    // Temporarily disable persistent storage and use memory storage instead
-                    let value = self.pop_one("StoreP value")?;
-                    self.memory.insert(key.clone(), value);
+                    // Check if storage backend is available
+                    if self.storage_backend.is_none() {
+                        return Err(VMError::StorageUnavailable);
+                    }
+                    
+                    // Get the value to store from the stack
+                    let value = self.pop_one("StoreP")?;
+                    
+                    // Access the storage backend
+                    let storage = self.storage_backend.as_mut().unwrap();
+                    
+                    // Convert value to string bytes for storage
+                    let value_bytes = value.to_string().into_bytes();
+                    
+                    // Store the value in the storage backend with namespace
+                    storage.set(self.auth_context.as_ref(), &self.namespace, &key, value_bytes)
+                        .map_err(|e| VMError::StorageError(e.to_string()))?;
+                    
+                    // Emit an event for debugging
+                    self.emit_event("storage", &format!("Stored value {} at key '{}'", value, key));
                 },
                 Op::LoadP(key) => {
-                    // Temporarily disable persistent storage and use memory storage instead
-                    if let Some(val) = self.memory.get(key.as_str()) {
-                        self.stack.push(*val);
-                    } else {
-                        // Push a default value of 0.0 if the key doesn't exist
-                        self.stack.push(0.0);
+                    // Check if storage backend is available
+                    if self.storage_backend.is_none() {
+                        return Err(VMError::StorageUnavailable);
+                    }
+                    
+                    // Access the storage backend
+                    let storage = self.storage_backend.as_ref().unwrap();
+                    
+                    // Try to retrieve the value from storage
+                    match storage.get(self.auth_context.as_ref(), &self.namespace, &key) {
+                        Ok(value_bytes) => {
+                            // Convert bytes to string
+                            let value_str = String::from_utf8(value_bytes)
+                                .map_err(|e| VMError::StorageError(format!("Invalid UTF-8 data in storage for key '{}': {}", key, e)))?;
+                            
+                            // Parse string as f64
+                            let value = value_str.parse::<f64>()
+                                .map_err(|e| VMError::StorageError(format!("Failed to parse storage value for key '{}' as number: {}, value was: '{}'", key, e, value_str)))?;
+                            
+                            // Push value to stack
+                            self.stack.push(value);
+                            
+                            // Emit an event for debugging
+                            self.emit_event("storage", &format!("Loaded value {} from key '{}'", value, key));
+                        },
+                        Err(e) => {
+                            // Special handling for NotFound error - emit event and push 0.0 to stack for convenience
+                            if let StorageError::NotFound { key: _ } = e {
+                                self.emit_event("storage", &format!("Key '{}' not found, using default value 0.0", key));
+                                self.stack.push(0.0);
+                            } else {
+                                // For other errors, propagate them
+                                return Err(VMError::StorageError(e.to_string()));
+                            }
+                        }
+                    }
+                },
+                Op::LoadVersionP { key, version } => {
+                    // Check if storage backend is available
+                    if self.storage_backend.is_none() {
+                        return Err(VMError::StorageUnavailable);
+                    }
+                    
+                    // Access the storage backend
+                    let storage = self.storage_backend.as_ref().unwrap();
+                    
+                    // Try to retrieve the specific version from storage
+                    match storage.get_version(self.auth_context.as_ref(), &self.namespace, &key, *version) {
+                        Ok((value_bytes, version_info)) => {
+                            // Convert bytes to string
+                            let value_str = String::from_utf8(value_bytes)
+                                .map_err(|e| VMError::StorageError(format!("Invalid UTF-8 data in storage for key '{}' version {}: {}", key, version, e)))?;
+                            
+                            // Parse string as f64
+                            let value = value_str.parse::<f64>()
+                                .map_err(|e| VMError::StorageError(format!("Failed to parse storage value for key '{}' version {} as number: {}, value was: '{}'", key, version, e, value_str)))?;
+                            
+                            // Push value to stack
+                            self.stack.push(value);
+                            
+                            // Emit an event for debugging
+                            self.emit_event("storage", &format!("Loaded value {} from key '{}' version {} (created by {} at timestamp {})", 
+                                value, key, version, version_info.created_by, version_info.timestamp));
+                        },
+                        Err(e) => {
+                            // For version-specific loads, we'll propagate all errors
+                            return Err(VMError::StorageError(format!("Failed to load key '{}' version {}: {}", key, version, e)));
+                        }
+                    }
+                },
+                Op::ListVersionsP(key) => {
+                    // Check if storage backend is available
+                    if self.storage_backend.is_none() {
+                        return Err(VMError::StorageUnavailable);
+                    }
+                    
+                    // Access the storage backend
+                    let storage = self.storage_backend.as_ref().unwrap();
+                    
+                    // Try to retrieve the versions from storage
+                    match storage.list_versions(self.auth_context.as_ref(), &self.namespace, &key) {
+                        Ok(versions) => {
+                            // Push the number of versions onto the stack
+                            self.stack.push(versions.len() as f64);
+                            
+                            // Emit version metadata
+                            for version in versions {
+                                let event = Event::info(
+                                    "storage",
+                                    &format!("Version {} for key '{}' (created by {} at timestamp {})", 
+                                        version.version, key, version.created_by, version.timestamp)
+                                );
+                                event.emit().map_err(|e| VMError::IOError(e.to_string()))?;
+                            }
+                        },
+                        Err(e) => {
+                            // For errors, propagate them
+                            return Err(VMError::StorageError(e.to_string()));
+                        }
                     }
                 },
                 Op::VerifyIdentity { identity_id, message, signature } => {
@@ -874,6 +1009,55 @@ impl VM {
                         };
                         self.stack.push(0.0); // false
                         self.emit_event("identity_error", &format!("{}", err));
+                    }
+                },
+                Op::DiffVersionsP { key, v1, v2 } => {
+                    // Check if storage backend is available
+                    if self.storage_backend.is_none() {
+                        return Err(VMError::StorageUnavailable);
+                    }
+                    
+                    // Access the storage backend
+                    let storage = self.storage_backend.as_ref().unwrap();
+                    
+                    // Try to retrieve the versions from storage
+                    match storage.get_version(self.auth_context.as_ref(), &self.namespace, &key, *v1) {
+                        Ok((value_bytes1, _version_info1)) => {
+                            match storage.get_version(self.auth_context.as_ref(), &self.namespace, &key, *v2) {
+                                Ok((value_bytes2, _version_info2)) => {
+                                    // Convert bytes to string
+                                    let value_str1 = String::from_utf8(value_bytes1)
+                                        .map_err(|e| VMError::StorageError(format!("Invalid UTF-8 data in storage for key '{}' version {}: {}", key, v1, e)))?;
+                                    let value_str2 = String::from_utf8(value_bytes2)
+                                        .map_err(|e| VMError::StorageError(format!("Invalid UTF-8 data in storage for key '{}' version {}: {}", key, v2, e)))?;
+                                    
+                                    // Parse string as f64
+                                    let value1 = value_str1.parse::<f64>()
+                                        .map_err(|e| VMError::StorageError(format!("Failed to parse storage value for key '{}' version {} as number: {}, value was: '{}'", key, v1, e, value_str1)))?;
+                                    let value2 = value_str2.parse::<f64>()
+                                        .map_err(|e| VMError::StorageError(format!("Failed to parse storage value for key '{}' version {} as number: {}, value was: '{}'", key, v2, e, value_str2)))?;
+                                    
+                                    // Calculate difference
+                                    let difference = (value1 - value2).abs();
+                                    
+                                    // Display results through println (will show up in logs)
+                                    println!("[INFO] [storage] Version {} value: {}", v1, value1);
+                                    println!("[INFO] [storage] Version {} value: {}", v2, value2);
+                                    println!("[INFO] [storage] Absolute difference: {}", difference);
+                                    
+                                    // Push difference to stack
+                                    self.stack.push(difference);
+                                },
+                                Err(e) => {
+                                    // For version-specific loads, we'll propagate all errors
+                                    return Err(VMError::StorageError(format!("Failed to load key '{}' version {}: {}", key, v2, e)));
+                                }
+                            }
+                        },
+                        Err(e) => {
+                            // For version-specific loads, we'll propagate all errors
+                            return Err(VMError::StorageError(format!("Failed to load key '{}' version {}: {}", key, v1, e)));
+                        }
                     }
                 },
             }
