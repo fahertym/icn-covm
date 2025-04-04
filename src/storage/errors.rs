@@ -1,4 +1,5 @@
 use std::fmt;
+use std::io;
 
 // Storage errors
 #[derive(Debug, Clone)]
@@ -9,6 +10,7 @@ pub enum StorageError {
     VersionConflict { key: String, expected: u64, actual: u64 },
     SerializationError { details: String },
     TransactionError { details: String },
+    IoError { details: String },
     // Add other specific errors as needed
 }
 
@@ -28,6 +30,16 @@ impl fmt::Display for StorageError {
                 write!(f, "Serialization error: {}", details),
             StorageError::TransactionError { details } => 
                 write!(f, "Transaction error: {}", details),
+            StorageError::IoError { details } => 
+                write!(f, "I/O error: {}", details),
+        }
+    }
+}
+
+impl From<io::Error> for StorageError {
+    fn from(err: io::Error) -> Self {
+        StorageError::IoError {
+            details: err.to_string(),
         }
     }
 }
