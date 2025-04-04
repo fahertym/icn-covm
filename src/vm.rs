@@ -73,6 +73,35 @@ pub enum VMError {
     /// Parameter not found
     #[error("Parameter not found: {0}")]
     ParameterNotFound(String),
+    
+    /// Identity not found
+    #[error("Identity not found: {0}")]
+    IdentityNotFound(String),
+    
+    /// Invalid signature
+    #[error("Invalid signature for identity {identity_id}: {reason}")]
+    InvalidSignature {
+        identity_id: String,
+        reason: String,
+    },
+    
+    /// Membership check failed
+    #[error("Membership check failed for identity {identity_id} in namespace {namespace}")]
+    MembershipCheckFailed {
+        identity_id: String,
+        namespace: String,
+    },
+    
+    /// Delegation check failed
+    #[error("Delegation check failed from {delegator_id} to {delegate_id}")]
+    DelegationCheckFailed {
+        delegator_id: String,
+        delegate_id: String,
+    },
+    
+    /// Identity context unavailable
+    #[error("Identity context unavailable")]
+    IdentityContextUnavailable,
 }
 
 /// Operation types for the virtual machine
@@ -282,6 +311,54 @@ pub enum Op {
     /// using the specified key and pushes it onto the stack.
     /// If the key does not exist, an error is returned.
     LoadP(String),
+
+    /// Verify an identity's digital signature
+    ///
+    /// This operation checks if a digital signature is valid for a given
+    /// identity. It requires the identity ID, the message that was signed,
+    /// and the signature to verify.
+    /// 
+    /// Pushes 1.0 to the stack if the signature is valid, 0.0 otherwise.
+    VerifyIdentity {
+        /// The identity ID to verify against
+        identity_id: String,
+        
+        /// The message that was signed (as a string)
+        message: String,
+        
+        /// The signature to verify (base64 encoded)
+        signature: String,
+    },
+    
+    /// Check if an identity is a member of a cooperative or namespace
+    /// 
+    /// This operation verifies that the specified identity belongs to
+    /// the given cooperative or namespace. It can be used to enforce
+    /// membership-based access control.
+    /// 
+    /// Pushes 1.0 to the stack if the identity is a member, 0.0 otherwise.
+    CheckMembership {
+        /// The identity ID to check
+        identity_id: String,
+        
+        /// The cooperative or namespace to check membership in
+        namespace: String,
+    },
+    
+    /// Check if one identity has delegated authority to another
+    /// 
+    /// This operation verifies that one identity (the delegator) has
+    /// delegated authority to another identity (the delegate). It can
+    /// be used to implement delegation chains and proxy actions.
+    /// 
+    /// Pushes 1.0 to the stack if the delegation exists, 0.0 otherwise.
+    CheckDelegation {
+        /// The delegating identity
+        delegator_id: String,
+        
+        /// The identity receiving delegation
+        delegate_id: String,
+    },
 }
 
 #[derive(Debug)]
@@ -335,7 +412,7 @@ pub struct VM {
     pub events: Vec<VMEvent>,
     
     /// Authentication context for the current execution
-    pub auth_context: AuthContext,
+    pub auth_context: Option<AuthContext>,
     
     /// Storage namespace for current execution
     pub namespace: String,
@@ -354,7 +431,7 @@ impl VM {
             call_stack: Vec::new(),
             output: String::new(),
             events: Vec::new(),
-            auth_context: AuthContext::new("default_user"),
+            auth_context: None,
             namespace: "default".to_string(),
             storage_backend: Some(Box::new(InMemoryStorage::new())),
         }
@@ -369,7 +446,7 @@ impl VM {
             call_stack: Vec::new(),
             output: String::new(),
             events: Vec::new(),
-            auth_context: AuthContext::new("default_user"),
+            auth_context: None,
             namespace: "default".to_string(),
             storage_backend: Some(Box::new(backend)),
         }
@@ -718,10 +795,15 @@ impl VM {
                     }
                 },
                 Op::StoreP(key) => {
-                    let value = self.pop_one("StoreP")?;
-                    let value_bytes = value.to_string().into_bytes(); // Convert f64 to bytes via String
+                    if self.stack.is_empty() {
+                        return Err(VMError::StackUnderflow { op_name: "StoreP".to_string() });
+                    }
+                    
+                    let value = self.stack.pop().unwrap();
+                    let value_bytes = value.to_string().into_bytes();
+                    
                     if let Some(backend) = self.storage_backend.as_mut() {
-                        backend.set(&self.auth_context, &self.namespace, key, value_bytes)
+                        backend.set(self.auth_context.as_ref(), &self.namespace, key, value_bytes)
                             .map_err(|e| VMError::StorageError(e.to_string()))?;
                     } else {
                         return Err(VMError::StorageUnavailable); // Use correct variant
@@ -729,7 +811,7 @@ impl VM {
                 },
                 Op::LoadP(key) => {
                     let value_bytes = if let Some(backend) = self.storage_backend.as_ref() {
-                        backend.get(&self.auth_context, &self.namespace, key)
+                        backend.get(self.auth_context.as_ref(), &self.namespace, key)
                             .map_err(|e| VMError::StorageError(e.to_string()))?
                     } else {
                         return Err(VMError::StorageUnavailable); // Use correct variant
@@ -739,6 +821,73 @@ impl VM {
                     let value = value_str.parse::<f64>()
                         .map_err(|_| VMError::StorageError(format!("Invalid numeric value in storage: {}", value_str)))?;
                     self.stack.push(value);
+                },
+                Op::VerifyIdentity { identity_id, message, signature } => {
+                    let auth = self.auth_context.as_ref().ok_or(VMError::IdentityContextUnavailable)?;
+                    
+                    // Check if the identity exists
+                    if auth.get_identity(&identity_id).is_none() {
+                        let err = VMError::IdentityNotFound(identity_id.clone());
+                        self.stack.push(0.0); // Push false for error cases
+                        self.emit_event("identity_error", &format!("{}", err));
+                    } else if auth.verify_signature(&identity_id, &message, &signature) {
+                        self.stack.push(1.0); // true
+                        self.emit_event("identity_verification", &format!("Verified signature for identity {}", identity_id));
+                    } else {
+                        let err = VMError::InvalidSignature {
+                            identity_id: identity_id.clone(),
+                            reason: "Invalid signature or key".to_string(),
+                        };
+                        self.stack.push(0.0); // false
+                        self.emit_event("identity_error", &format!("{}", err));
+                    }
+                },
+                Op::CheckMembership { identity_id, namespace } => {
+                    let auth = self.auth_context.as_ref().ok_or(VMError::IdentityContextUnavailable)?;
+                    
+                    // Check if the identity exists
+                    if auth.get_identity(&identity_id).is_none() {
+                        let err = VMError::IdentityNotFound(identity_id.clone());
+                        self.stack.push(0.0); // Push false for error cases
+                        self.emit_event("identity_error", &format!("{}", err));
+                    } else if auth.is_member_of(&identity_id, &namespace) {
+                        self.stack.push(1.0); // true
+                        self.emit_event("membership_check", &format!("Identity {} is a member of {}", identity_id, namespace));
+                    } else {
+                        let err = VMError::MembershipCheckFailed {
+                            identity_id: identity_id.clone(),
+                            namespace: namespace.clone(),
+                        };
+                        self.stack.push(0.0); // false
+                        self.emit_event("identity_error", &format!("{}", err));
+                    }
+                },
+                Op::CheckDelegation { delegator_id, delegate_id } => {
+                    let auth = self.auth_context.as_ref().ok_or(VMError::IdentityContextUnavailable)?;
+                    
+                    // Check if both identities exist
+                    let delegator_exists = auth.get_identity(&delegator_id).is_some();
+                    let delegate_exists = auth.get_identity(&delegate_id).is_some();
+                    
+                    if !delegator_exists {
+                        let err = VMError::IdentityNotFound(delegator_id.clone());
+                        self.stack.push(0.0); // Push false for error cases
+                        self.emit_event("identity_error", &format!("{}", err));
+                    } else if !delegate_exists {
+                        let err = VMError::IdentityNotFound(delegate_id.clone());
+                        self.stack.push(0.0); // Push false for error cases
+                        self.emit_event("identity_error", &format!("{}", err));
+                    } else if auth.has_delegation(&delegator_id, &delegate_id) {
+                        self.stack.push(1.0); // true
+                        self.emit_event("delegation_check", &format!("Delegation from {} to {} is valid", delegator_id, delegate_id));
+                    } else {
+                        let err = VMError::DelegationCheckFailed {
+                            delegator_id: delegator_id.clone(),
+                            delegate_id: delegate_id.clone(),
+                        };
+                        self.stack.push(0.0); // false
+                        self.emit_event("identity_error", &format!("{}", err));
+                    }
                 },
             }
 
@@ -750,7 +899,7 @@ impl VM {
 
     /// Set the authentication context for this VM
     pub fn set_auth_context(&mut self, auth: AuthContext) {
-        self.auth_context = auth;
+        self.auth_context = Some(auth);
     }
     
     /// Set the storage namespace for this VM
@@ -759,12 +908,22 @@ impl VM {
     }
     
     /// Get the current authentication context
-    pub fn get_auth_context(&self) -> &AuthContext {
-        &self.auth_context
+    pub fn get_auth_context(&self) -> Option<&AuthContext> {
+        self.auth_context.as_ref()
     }
     
     /// Get the current storage namespace
     pub fn get_namespace(&self) -> &str {
         &self.namespace
+    }
+
+    /// Helper to emit an event
+    fn emit_event(&mut self, category: &str, message: &str) {
+        let event = VMEvent {
+            category: category.to_string(),
+            message: message.to_string(),
+            timestamp: crate::storage::utils::now(),
+        };
+        self.events.push(event);
     }
 }

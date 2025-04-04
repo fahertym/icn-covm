@@ -222,6 +222,83 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
             ))?;
             Ok(Op::LoadP(key.to_string()))
         },
+        "verifyidentity" => {
+            // Parse verifyidentity command with required parameters
+            let identity_id = parts.next().ok_or(CompilerError::InvalidFunctionFormat(
+                "verifyidentity requires identity_id parameter".to_string(),
+                pos.line,
+                pos.column,
+            ))?;
+            
+            // Extract message parameter from quoted string
+            let rest_of_line = line[line.find(identity_id).unwrap() + identity_id.len()..].trim();
+            
+            // Use a simple parser to extract two quoted strings
+            if let Some(quote1_start) = rest_of_line.find('"') {
+                if let Some(quote1_end) = rest_of_line[quote1_start + 1..].find('"') {
+                    let quote1_end = quote1_start + 1 + quote1_end;
+                    let message = rest_of_line[quote1_start + 1..quote1_end].to_string();
+                    
+                    if let Some(quote2_start) = rest_of_line[quote1_end + 1..].find('"') {
+                        let quote2_start = quote1_end + 1 + quote2_start;
+                        if let Some(quote2_end) = rest_of_line[quote2_start + 1..].find('"') {
+                            let quote2_end = quote2_start + 1 + quote2_end;
+                            let signature = rest_of_line[quote2_start + 1..quote2_end].to_string();
+                            
+                            return Ok(Op::VerifyIdentity {
+                                identity_id: identity_id.to_string(),
+                                message,
+                                signature,
+                            });
+                        }
+                    }
+                }
+            }
+            
+            Err(CompilerError::InvalidFunctionFormat(
+                "verifyidentity requires quoted message and signature parameters".to_string(),
+                pos.line,
+                pos.column,
+            ))
+        },
+        "checkmembership" => {
+            // Parse checkmembership command with required parameters
+            let identity_id = parts.next().ok_or(CompilerError::InvalidFunctionFormat(
+                "checkmembership requires identity_id parameter".to_string(),
+                pos.line,
+                pos.column,
+            ))?;
+            
+            let namespace = parts.next().ok_or(CompilerError::InvalidFunctionFormat(
+                "checkmembership requires namespace parameter".to_string(),
+                pos.line,
+                pos.column,
+            ))?;
+            
+            Ok(Op::CheckMembership {
+                identity_id: identity_id.to_string(),
+                namespace: namespace.to_string(),
+            })
+        },
+        "checkdelegation" => {
+            // Parse checkdelegation command with required parameters
+            let delegator_id = parts.next().ok_or(CompilerError::InvalidFunctionFormat(
+                "checkdelegation requires delegator_id parameter".to_string(),
+                pos.line,
+                pos.column,
+            ))?;
+            
+            let delegate_id = parts.next().ok_or(CompilerError::InvalidFunctionFormat(
+                "checkdelegation requires delegate_id parameter".to_string(),
+                pos.line,
+                pos.column,
+            ))?;
+            
+            Ok(Op::CheckDelegation {
+                delegator_id: delegator_id.to_string(),
+                delegate_id: delegate_id.to_string(),
+            })
+        },
         _ => Err(CompilerError::UnknownCommand(
             command.to_string(),
             pos.line,
@@ -294,4 +371,20 @@ pub fn parse_block(
     //println!("  parse_block END: block_ops count={}", block_ops.len()); // DEBUG
 
     Ok(block_ops)
+}
+
+// Helper to parse quoted strings (handles both single and double quotes)
+fn parse_quoted_string(input: &str) -> Result<String, CompilerError> {
+    let trimmed = input.trim();
+    
+    if (trimmed.starts_with('"') && trimmed.ends_with('"')) || 
+       (trimmed.starts_with('\'') && trimmed.ends_with('\'')) {
+        // Remove the quotes
+        let result = &trimmed[1..trimmed.len()-1];
+        Ok(result.to_string())
+    } else {
+        Err(CompilerError::SyntaxError {
+            details: format!("Expected a quoted string, got: '{}'", input),
+        })
+    }
 }
