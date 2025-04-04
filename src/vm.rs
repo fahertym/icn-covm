@@ -707,7 +707,32 @@ impl VM {
                 Op::Negate => { let value = self.pop_one("Negate")?; self.stack.push(-value); },
                 Op::Call(name) => {
                     let (params, body) = self.functions.get(name).ok_or_else(|| VMError::FunctionNotFound(name.clone()))?.clone();
+                    
+                    // Save parameter values from stack
+                    let mut param_values = Vec::with_capacity(params.len());
+                    for _ in 0..params.len() {
+                        if let Some(val) = self.stack.pop() {
+                            param_values.push(val);
+                        } else {
+                            return Err(VMError::StackUnderflow { op_name: format!("Call to {}", name) });
+                        }
+                    }
+                    param_values.reverse(); // Reverse to match parameter order
+                    
+                    // Create a new memory context for the function
+                    let original_memory = self.memory.clone();
+                    
+                    // Store parameter values in memory
+                    for (param, value) in params.iter().zip(param_values.iter()) {
+                        self.memory.insert(param.clone(), *value);
+                    }
+                    
+                    // Execute the function body
                     let result = self.execute_inner(&body);
+                    
+                    // Restore the original memory context
+                    self.memory = original_memory;
+                    
                     result?;
                 },
                 Op::Return => {
