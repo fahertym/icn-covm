@@ -4,8 +4,11 @@ use icn_covm::bytecode::{BytecodeCompiler, BytecodeExecutor};
 use icn_covm::compiler::{parse_dsl, parse_dsl_with_stdlib, CompilerError};
 use icn_covm::storage::auth::AuthContext;
 use icn_covm::vm::{VM, VMError};
+use icn_covm::identity::{Identity, MemberProfile};
+use icn_covm::storage::InMemoryStorage;
+use icn_covm::storage::utils::now;
 
-use clap::{Arg, Command};
+use clap::{Arg, Command, ArgAction, value_parser};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -46,111 +49,182 @@ impl From<String> for AppError {
 fn main() {
     // Parse command line arguments
     let matches = Command::new("icn-covm")
-        .version("0.2.0")
+        .version("0.5.0")
         .author("Intercooperative Network")
         .about("Secure stack-based virtual machine with governance-inspired opcodes")
-        .arg(
-            Arg::new("program")
-                .short('p')
-                .long("program")
-                .value_name("FILE")
-                .help("Program file to execute (.dsl or .json)")
-                .default_value("program.dsl"),
+        .subcommand(
+            Command::new("run")
+                .about("Run a program")
+                .arg(
+                    Arg::new("program")
+                        .short('p')
+                        .long("program")
+                        .value_name("FILE")
+                        .help("Program file to execute (.dsl or .json)")
+                        .default_value("program.dsl"),
+                )
+                .arg(
+                    Arg::new("verbose")
+                        .short('v')
+                        .long("verbose")
+                        .help("Display detailed execution information")
+                        .action(ArgAction::SetTrue),
+                )
+                .arg(
+                    Arg::new("param")
+                        .short('P')
+                        .long("param")
+                        .value_name("KEY=VALUE")
+                        .help("Set a key-value parameter for the program (can be used multiple times)")
+                        .action(ArgAction::Append),
+                )
+                .arg(
+                    Arg::new("interactive")
+                        .short('i')
+                        .long("interactive")
+                        .help("Start in interactive REPL mode")
+                        .action(ArgAction::SetTrue),
+                )
+                .arg(
+                    Arg::new("json")
+                        .long("json")
+                        .help("Output logs in JSON format")
+                        .action(ArgAction::SetTrue),
+                )
+                .arg(
+                    Arg::new("stdlib")
+                        .long("stdlib")
+                        .help("Include standard library functions")
+                        .action(ArgAction::SetTrue),
+                )
+                .arg(
+                    Arg::new("bytecode")
+                        .short('b')
+                        .long("bytecode")
+                        .help("Run in bytecode mode (compile and execute bytecode)")
+                        .action(ArgAction::SetTrue),
+                )
+                .arg(
+                    Arg::new("benchmark")
+                        .long("benchmark")
+                        .help("Run both AST and bytecode execution and compare performance")
+                        .action(ArgAction::SetTrue),
+                )
         )
-        .arg(
-            Arg::new("verbose")
-                .short('v')
-                .long("verbose")
-                .help("Display detailed execution information")
-                .action(clap::ArgAction::SetTrue),
-        )
-        .arg(
-            Arg::new("param")
-                .short('P')
-                .long("param")
-                .value_name("KEY=VALUE")
-                .help("Set a key-value parameter for the program (can be used multiple times)")
-                .action(clap::ArgAction::Append),
-        )
-        .arg(
-            Arg::new("interactive")
-                .short('i')
-                .long("interactive")
-                .help("Start in interactive REPL mode")
-                .action(clap::ArgAction::SetTrue),
-        )
-        .arg(
-            Arg::new("json")
-                .long("json")
-                .help("Output logs in JSON format")
-                .action(clap::ArgAction::SetTrue),
-        )
-        .arg(
-            Arg::new("stdlib")
-                .long("stdlib")
-                .help("Include standard library functions")
-                .action(clap::ArgAction::SetTrue),
-        )
-        .arg(
-            Arg::new("bytecode")
-                .short('b')
-                .long("bytecode")
-                .help("Run in bytecode mode (compile and execute bytecode)")
-                .action(clap::ArgAction::SetTrue),
-        )
-        .arg(
-            Arg::new("benchmark")
-                .long("benchmark")
-                .help("Run both AST and bytecode execution and compare performance")
-                .action(clap::ArgAction::SetTrue),
+        .subcommand(
+            Command::new("identity")
+                .about("Identity management commands")
+                .subcommand(
+                    Command::new("register")
+                        .about("Register a new identity")
+                        .arg(
+                            Arg::new("file")
+                                .short('f')
+                                .long("file")
+                                .value_name("FILE")
+                                .help("JSON file containing identity information")
+                                .required(true),
+                        )
+                        .arg(
+                            Arg::new("type")
+                                .short('t')
+                                .long("type")
+                                .value_name("TYPE")
+                                .help("Type of identity (member, cooperative, service)")
+                                .default_value("member"),
+                        )
+                        .arg(
+                            Arg::new("output")
+                                .short('o')
+                                .long("output")
+                                .value_name("FILE")
+                                .help("Output file to save the registered identity to"),
+                        )
+                )
         )
         .get_matches();
 
-    // Get program file and verbosity setting
-    let program_path = matches.get_one::<String>("program").unwrap();
-    let verbose = matches.get_flag("verbose");
-    let interactive = matches.get_flag("interactive");
-    let use_bytecode = matches.get_flag("bytecode");
-    let benchmark = matches.get_flag("benchmark");
+    match matches.subcommand() {
+        Some(("run", run_matches)) => {
+            // Get program file and verbosity setting
+            let program_path = run_matches.get_one::<String>("program").unwrap();
+            let verbose = run_matches.get_flag("verbose");
+            let interactive = run_matches.get_flag("interactive");
+            let use_bytecode = run_matches.get_flag("bytecode");
+            let benchmark = run_matches.get_flag("benchmark");
+            let use_stdlib = run_matches.get_flag("stdlib");
 
-    // Collect parameters
-    let mut parameters = HashMap::new();
-    if let Some(params) = matches.get_many::<String>("param") {
-        for param_str in params {
-            if let Some(equals_pos) = param_str.find('=') {
-                let key = param_str[0..equals_pos].to_string();
-                let value = param_str[equals_pos + 1..].to_string();
-                if verbose {
-                    println!("Parameter: {} = {}", key, value);
+            // Collect parameters
+            let mut parameters = HashMap::new();
+            if let Some(params) = run_matches.get_many::<String>("param") {
+                for param_str in params {
+                    if let Some(equals_pos) = param_str.find('=') {
+                        let key = param_str[0..equals_pos].to_string();
+                        let value = param_str[equals_pos + 1..].to_string();
+                        if verbose {
+                            println!("Parameter: {} = {}", key, value);
+                        }
+                        parameters.insert(key, value);
+                    } else {
+                        eprintln!(
+                            "Warning: Invalid parameter format '{}', expected KEY=VALUE",
+                            param_str
+                        );
+                    }
                 }
-                parameters.insert(key, value);
-            } else {
-                eprintln!(
-                    "Warning: Invalid parameter format '{}', expected KEY=VALUE",
-                    param_str
-                );
             }
-        }
-    }
 
-    // Execute the program
-    if interactive {
-        if let Err(err) = run_interactive(verbose, parameters, use_bytecode) {
-            eprintln!("Error: {}", err);
-            process::exit(1);
-        }
-    } else {
-        let use_stdlib = matches.get_flag("stdlib");
-        if benchmark {
-            if let Err(err) = run_benchmark(program_path, verbose, use_stdlib, parameters) {
+            // Execute the program
+            if interactive {
+                if let Err(err) = run_interactive(verbose, parameters, use_bytecode) {
+                    eprintln!("Error: {}", err);
+                    process::exit(1);
+                }
+            } else {
+                if benchmark {
+                    if let Err(err) = run_benchmark(program_path, verbose, use_stdlib, parameters) {
+                        eprintln!("Error: {}", err);
+                        process::exit(1);
+                    }
+                } else if let Err(err) =
+                    run_program(program_path, verbose, use_stdlib, parameters, use_bytecode)
+                {
+                    eprintln!("Error: {}", err);
+                    process::exit(1);
+                }
+            }
+        },
+        Some(("identity", identity_matches)) => {
+            match identity_matches.subcommand() {
+                Some(("register", register_matches)) => {
+                    let id_file = register_matches.get_one::<String>("file").unwrap();
+                    let id_type = register_matches.get_one::<String>("type").unwrap();
+                    let output_file = register_matches.get_one::<String>("output");
+                    
+                    if let Err(err) = register_identity(id_file, id_type, output_file) {
+                        eprintln!("Error registering identity: {}", err);
+                        process::exit(1);
+                    }
+                },
+                _ => {
+                    eprintln!("Unknown identity subcommand");
+                    process::exit(1);
+                }
+            }
+        },
+        _ => {
+            // No subcommand or unknown subcommand
+            // For backward compatibility, assume 'run' with default arguments
+            let program_path = "program.dsl";
+            let verbose = false;
+            let use_stdlib = false;
+            let parameters = HashMap::new();
+            let use_bytecode = false;
+            
+            if let Err(err) = run_program(program_path, verbose, use_stdlib, parameters, use_bytecode) {
                 eprintln!("Error: {}", err);
                 process::exit(1);
             }
-        } else if let Err(err) =
-            run_program(program_path, verbose, use_stdlib, parameters, use_bytecode)
-        {
-            eprintln!("Error: {}", err);
-            process::exit(1);
         }
     }
 }
@@ -580,5 +654,87 @@ fn run_interactive(
         }
     }
 
+    Ok(())
+}
+
+/// Register a new identity using the information in the provided JSON file
+fn register_identity(
+    id_file: &str,
+    id_type: &str,
+    output_file: Option<&String>,
+) -> Result<(), AppError> {
+    // Read the identity file
+    let file_content = fs::read_to_string(id_file)?;
+    let json_data: serde_json::Value = serde_json::from_str(&file_content)?;
+    
+    // Extract identity information
+    let id = json_data["id"].as_str().ok_or_else(|| AppError::Other("Missing 'id' field".to_string()))?;
+    
+    // Create a new identity
+    let mut identity = Identity::new(id, id_type);
+    
+    // Add metadata from the JSON file
+    if let Some(metadata) = json_data["metadata"].as_object() {
+        for (key, value) in metadata {
+            if let Some(value_str) = value.as_str() {
+                identity.add_metadata(key, value_str);
+            }
+        }
+    }
+    
+    // Add public key if provided
+    if let Some(public_key_str) = json_data["public_key"].as_str() {
+        if let Some(crypto_scheme) = json_data["crypto_scheme"].as_str() {
+            // In a real application, we would decode the public key here
+            // For now, just use the string as a placeholder
+            let public_key = public_key_str.as_bytes().to_vec();
+            identity.public_key = Some(public_key);
+            identity.crypto_scheme = Some(crypto_scheme.to_string());
+        }
+    }
+    
+    // If this is a member, create a profile
+    if id_type == "member" {
+        let timestamp = now();
+        let mut profile = MemberProfile::new(identity.clone(), timestamp);
+        
+        // Add roles if provided
+        if let Some(roles) = json_data["roles"].as_array() {
+            for role in roles {
+                if let Some(role_str) = role.as_str() {
+                    profile.add_role(role_str);
+                }
+            }
+        }
+        
+        // Add attributes if provided
+        if let Some(attributes) = json_data["attributes"].as_object() {
+            for (key, value) in attributes {
+                if let Some(value_str) = value.as_str() {
+                    profile.add_attribute(key, value_str);
+                }
+            }
+        }
+        
+        println!("Member profile created for '{}'", id);
+        
+        // In a real application, we would store this in persistent storage
+        // For now, just print the information
+        println!("  Roles: {:?}", profile.roles);
+        if let Some(reputation) = profile.reputation {
+            println!("  Reputation: {}", reputation);
+        }
+    }
+    
+    // Save to output file if requested
+    if let Some(output_path) = output_file {
+        let identity_json = serde_json::to_string_pretty(&identity)?;
+        fs::write(output_path, identity_json)?;
+        println!("Identity saved to '{}'", output_path);
+    }
+    
+    println!("Identity '{}' of type '{}' registered successfully", id, id_type);
+    println!("Namespace: {}", identity.get_namespace());
+    
     Ok(())
 }

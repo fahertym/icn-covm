@@ -1,7 +1,8 @@
 use crate::storage::auth::AuthContext;
 use crate::storage::errors::StorageResult;
-use crate::storage::versioning::VersionInfo;
+use crate::storage::versioning::{VersionInfo, VersionDiff};
 use crate::storage::events::StorageEvent;
+use crate::storage::namespaces::NamespaceMetadata;
 use serde::{Serialize, de::DeserializeOwned};
 
 /// Defines the core operations for a cooperative storage backend.
@@ -14,15 +15,33 @@ pub trait StorageBackend {
 
     /// Retrieves data along with its versioning information.
     fn get_versioned(&self, auth: &AuthContext, namespace: &str, key: &str) -> StorageResult<(Vec<u8>, VersionInfo)>;
+    
+    /// Retrieves a specific version of data
+    fn get_version(&self, auth: &AuthContext, namespace: &str, key: &str, version: u64) -> StorageResult<(Vec<u8>, VersionInfo)>;
+    
+    /// Lists all available versions for a key
+    fn list_versions(&self, auth: &AuthContext, namespace: &str, key: &str) -> StorageResult<Vec<VersionInfo>>;
+    
+    /// Compare two versions and return differences
+    fn diff_versions(&self, auth: &AuthContext, namespace: &str, key: &str, v1: u64, v2: u64) -> StorageResult<VersionDiff<Vec<u8>>>;
 
     /// Sets raw byte data for a key within a namespace.
     /// Performs permission checks and resource accounting.
     /// Updates version information.
     fn set(&mut self, auth: &AuthContext, namespace: &str, key: &str, value: Vec<u8>) -> StorageResult<()>;
+    
+    /// List keys in a namespace
+    fn list_keys(&self, auth: &AuthContext, namespace: &str, prefix: Option<&str>) -> StorageResult<Vec<String>>;
+    
+    /// List sub-namespaces
+    fn list_namespaces(&self, auth: &AuthContext, parent_namespace: &str) -> StorageResult<Vec<NamespaceMetadata>>;
 
     /// Creates a resource account for a user.
     /// Typically requires administrative privileges.
     fn create_account(&mut self, auth: &AuthContext, user_id: &str, quota_bytes: u64) -> StorageResult<()>;
+    
+    /// Creates a new namespace
+    fn create_namespace(&mut self, auth: &AuthContext, namespace: &str, quota_bytes: u64, parent: Option<&str>) -> StorageResult<()>;
 
     /// Checks if the user has the required permission for an action in a namespace.
     /// This might be used internally by other methods or exposed for direct checks.
@@ -42,7 +61,32 @@ pub trait StorageBackend {
     /// Requires appropriate permissions.
     fn get_audit_log(&self, auth: &AuthContext, namespace: Option<&str>, event_type: Option<&str>, limit: usize) -> StorageResult<Vec<StorageEvent>>;
 
-    // TODO: Add methods for deletion, listing keys, managing roles/delegations directly?
+    /// Delete a key and its versions
+    fn delete(&mut self, auth: &AuthContext, namespace: &str, key: &str) -> StorageResult<()>;
+    
+    /// Get storage usage for a namespace
+    fn get_usage(&self, auth: &AuthContext, namespace: &str) -> StorageResult<u64>;
+}
+
+// Convenience extension trait for serializing/deserializing values
+pub trait StorageExtensions: StorageBackend {
+    fn get_json<T: DeserializeOwned>(&self, auth: &AuthContext, namespace: &str, key: &str) -> StorageResult<T>;
+    fn set_json<T: Serialize>(&mut self, auth: &AuthContext, namespace: &str, key: &str, value: &T) -> StorageResult<()>;
+}
+
+// Default implementation for the extension trait
+impl<S: StorageBackend> StorageExtensions for S {
+    fn get_json<T: DeserializeOwned>(&self, auth: &AuthContext, namespace: &str, key: &str) -> StorageResult<T> {
+        let bytes = self.get(auth, namespace, key)?;
+        serde_json::from_slice(&bytes)
+            .map_err(|e| crate::storage::errors::StorageError::SerializationError { details: e.to_string() })
+    }
+
+    fn set_json<T: Serialize>(&mut self, auth: &AuthContext, namespace: &str, key: &str, value: &T) -> StorageResult<()> {
+        let bytes = serde_json::to_vec(value)
+            .map_err(|e| crate::storage::errors::StorageError::SerializationError { details: e.to_string() })?;
+        self.set(auth, namespace, key, bytes)
+    }
 }
 
 // Potential trait for federated operations (optional for now)

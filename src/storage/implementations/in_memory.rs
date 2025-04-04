@@ -307,6 +307,218 @@ impl StorageBackend for InMemoryStorage {
         // Let's return latest first.
         Ok(results)
     }
+
+    fn get_version(&self, auth: &AuthContext, namespace: &str, key: &str, version: u64) -> StorageResult<(Vec<u8>, VersionInfo)> {
+        // Check read permission
+        self.check_permission(auth, "read", namespace)?;
+
+        // Get all version history
+        let version_info = self.versions
+            .get(namespace)
+            .and_then(|ns_versions| ns_versions.get(key))
+            .ok_or_else(|| StorageError::NotFound {
+                key: Self::make_internal_key(namespace, key),
+            })?;
+        
+        // Find the specific version
+        let target_version = version_info.get_version(version)
+            .ok_or_else(|| StorageError::NotFound {
+                key: format!("{}:{} (version {})", namespace, key, version),
+            })?;
+        
+        // For now, return current data (we don't store past versions)
+        // In a real implementation, we would retrieve the version-specific data
+        let data = self.data
+            .get(namespace)
+            .and_then(|ns_data| ns_data.get(key))
+            .cloned()
+            .ok_or_else(|| StorageError::NotFound {
+                key: Self::make_internal_key(namespace, key),
+            })?;
+        
+        Ok((data, target_version.clone()))
+    }
+    
+    fn list_versions(&self, auth: &AuthContext, namespace: &str, key: &str) -> StorageResult<Vec<VersionInfo>> {
+        // Check read permission
+        self.check_permission(auth, "read", namespace)?;
+
+        // Get version info
+        let version_info = self.versions
+            .get(namespace)
+            .and_then(|ns_versions| ns_versions.get(key))
+            .ok_or_else(|| StorageError::NotFound {
+                key: Self::make_internal_key(namespace, key),
+            })?;
+        
+        // Get all versions in history
+        let versions = version_info.get_version_history()
+            .into_iter()
+            .cloned()
+            .collect();
+        
+        Ok(versions)
+    }
+    
+    fn diff_versions(&self, auth: &AuthContext, namespace: &str, key: &str, v1: u64, v2: u64) -> StorageResult<crate::storage::versioning::VersionDiff<Vec<u8>>> {
+        // Check read permission
+        self.check_permission(auth, "read", namespace)?;
+
+        // Stub implementation - in a real implementation we would compare the actual version contents
+        Err(StorageError::TransactionError {
+            details: "Version diffing not implemented for InMemoryStorage".to_string(),
+        })
+    }
+    
+    fn list_keys(&self, auth: &AuthContext, namespace: &str, prefix: Option<&str>) -> StorageResult<Vec<String>> {
+        // Check read permission
+        self.check_permission(auth, "read", namespace)?;
+
+        let keys = match self.data.get(namespace) {
+            Some(ns_data) => {
+                let mut keys: Vec<String> = ns_data.keys().cloned().collect();
+                
+                // Filter by prefix if specified
+                if let Some(prefix_str) = prefix {
+                    keys.retain(|k| k.starts_with(prefix_str));
+                }
+                
+                keys
+            },
+            None => Vec::new(),
+        };
+        
+        Ok(keys)
+    }
+    
+    fn list_namespaces(&self, auth: &AuthContext, parent_namespace: &str) -> StorageResult<Vec<crate::storage::namespaces::NamespaceMetadata>> {
+        // Check read permission for global namespaces
+        self.check_permission(auth, "read", "global")?;
+
+        // In-memory implementation doesn't have rich namespace metadata
+        // Just return a simplified list based on data keys
+        let mut namespaces = Vec::new();
+        
+        // Get all namespaces that start with the parent prefix
+        for ns in self.data.keys() {
+            if ns.starts_with(parent_namespace) && ns != parent_namespace {
+                // Create minimal metadata
+                let metadata = crate::storage::namespaces::NamespaceMetadata {
+                    path: ns.clone(),
+                    owner: auth.user_id.clone(), // Simplified, real impl would track owners
+                    quota_bytes: 1_000_000, // Dummy quota
+                    used_bytes: 0, // We don't track this in the demo
+                    parent: Some(parent_namespace.to_string()),
+                    attributes: std::collections::HashMap::new(),
+                };
+                namespaces.push(metadata);
+            }
+        }
+        
+        Ok(namespaces)
+    }
+    
+    fn create_namespace(&mut self, auth: &AuthContext, namespace: &str, quota_bytes: u64, parent: Option<&str>) -> StorageResult<()> {
+        // Check admin permission
+        if !auth.has_role("global", "admin") {
+            return Err(StorageError::PermissionDenied {
+                user_id: auth.user_id.clone(),
+                action: "create_namespace".to_string(),
+                key: namespace.to_string(),
+            });
+        }
+        
+        // Check if parent exists
+        if let Some(parent_ns) = parent {
+            if !self.data.contains_key(parent_ns) {
+                return Err(StorageError::NotFound {
+                    key: parent_ns.to_string(),
+                });
+            }
+        }
+        
+        // Create empty namespace if it doesn't exist
+        if !self.data.contains_key(namespace) {
+            self.data.insert(namespace.to_string(), HashMap::new());
+            self.versions.insert(namespace.to_string(), HashMap::new());
+            
+            // Log the event
+            self.emit_event(
+                "namespace_created",
+                auth,
+                "global",
+                namespace,
+                &format!("Namespace created with quota {} bytes", quota_bytes),
+            );
+        }
+        
+        Ok(())
+    }
+    
+    fn delete(&mut self, auth: &AuthContext, namespace: &str, key: &str) -> StorageResult<()> {
+        // Check write permission
+        self.check_permission(auth, "write", namespace)?;
+        
+        // Check if key exists
+        if !self.data.get(namespace).map_or(false, |ns| ns.contains_key(key)) {
+            return Err(StorageError::NotFound {
+                key: Self::make_internal_key(namespace, key),
+            });
+        }
+        
+        // Get existing data for rollback and resource accounting
+        let existing_value = self.data.get(namespace)
+            .and_then(|ns| ns.get(key))
+            .cloned();
+            
+        // Record for potential rollback
+        self.record_for_rollback(namespace, key, existing_value.clone());
+        
+        // Reduce quota usage
+        if let Some(value) = existing_value {
+            let size = value.len() as u64;
+            if let Some(account) = self.accounts.get_mut(&auth.user_id) {
+                account.reduce_usage(size);
+            }
+        }
+        
+        // Remove the key
+        if let Some(ns_data) = self.data.get_mut(namespace) {
+            ns_data.remove(key);
+        }
+        
+        // Remove version info
+        if let Some(ns_versions) = self.versions.get_mut(namespace) {
+            ns_versions.remove(key);
+        }
+        
+        // Log the event
+        self.emit_event(
+            "delete",
+            auth,
+            namespace,
+            key,
+            "Key deleted",
+        );
+        
+        Ok(())
+    }
+    
+    fn get_usage(&self, auth: &AuthContext, namespace: &str) -> StorageResult<u64> {
+        // Check read permission
+        self.check_permission(auth, "read", namespace)?;
+        
+        // Calculate total bytes used in this namespace
+        let total_bytes = self.data.get(namespace)
+            .map(|ns_data| {
+                ns_data.values()
+                    .map(|v| v.len() as u64)
+                    .sum()
+            })
+            .unwrap_or(0);
+            
+        Ok(total_bytes)
+    }
 }
 
 // Add unit tests for InMemoryStorage here
