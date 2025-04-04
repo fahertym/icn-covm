@@ -142,6 +142,15 @@ pub enum BytecodeOp {
     /// Load a value from persistent storage
     LoadStorage(String),
     
+    /// Load a specific version from persistent storage
+    LoadStorageVersion(String, u64),
+    
+    /// List all versions for a key in persistent storage
+    ListStorageVersions(String),
+    
+    /// Compare two versions of a value in persistent storage
+    DiffStorageVersions(String, u64, u64),
+    
     /// Modulo operation
     Mod,
 }
@@ -379,6 +388,14 @@ impl BytecodeCompiler {
                     .program
                     .instructions
                     .push(BytecodeOp::LoadStorage(key.clone())),
+                Op::LoadVersionP { key, version } => self
+                    .program
+                    .instructions
+                    .push(BytecodeOp::LoadStorageVersion(key.clone(), *version)),
+                Op::ListVersionsP(key) => self
+                    .program
+                    .instructions
+                    .push(BytecodeOp::ListStorageVersions(key.clone())),
                 Op::LiquidDelegate { from, to } => self
                     .program
                     .instructions
@@ -403,6 +420,10 @@ impl BytecodeCompiler {
                     // Not fully implemented in bytecode yet, just add a NOP
                     self.program.instructions.push(BytecodeOp::Return);
                 },
+                Op::DiffVersionsP { key, v1, v2 } => self
+                    .program
+                    .instructions
+                    .push(BytecodeOp::DiffStorageVersions(key.clone(), *v1, *v2)),
 
                 // Handle more complex operations
                 Op::If {
@@ -967,20 +988,108 @@ impl BytecodeExecutor {
                 }
             },
             BytecodeOp::LoadStorage(key) => {
-                if let Some(storage) = self.vm.storage_backend.as_ref() {
-                    // Use the VM's auth_context and namespace
-                    let value_bytes = storage.get(self.vm.auth_context.as_ref(), &self.vm.namespace, &key)
-                        .map_err(|e| VMError::StorageError(e.to_string()))?;
-                    let value_str = String::from_utf8(value_bytes)
-                        .map_err(|_| VMError::StorageError("Invalid UTF-8 data in storage".to_string()))?;
-                    
-                    // Parse the value as a float
-                    let value = value_str.parse::<f64>()
-                        .map_err(|_| VMError::StorageError(format!("Cannot parse '{}' as a number", value_str)))?;
-                    
-                    self.vm.stack.push(value);
-                } else {
-                    return Err(VMError::StorageError("No storage backend configured".to_string()));
+                if self.vm.storage_backend.is_none() {
+                    return Err(VMError::StorageUnavailable);
+                }
+                
+                let storage = self.vm.storage_backend.as_ref().unwrap();
+                match storage.get(self.vm.auth_context.as_ref(), &self.vm.namespace, &key) {
+                    Ok(value_bytes) => {
+                        let value_str = String::from_utf8(value_bytes)
+                            .map_err(|e| VMError::StorageError(e.to_string()))?;
+                        let value = value_str.parse::<f64>()
+                            .map_err(|e| VMError::StorageError(e.to_string()))?;
+                        self.vm.stack.push(value);
+                    },
+                    Err(e) => {
+                        if let crate::storage::errors::StorageError::NotFound { key: _ } = e {
+                            self.vm.stack.push(0.0);
+                        } else {
+                            return Err(VMError::StorageError(e.to_string()));
+                        }
+                    }
+                }
+            },
+            BytecodeOp::LoadStorageVersion(key, version) => {
+                if self.vm.storage_backend.is_none() {
+                    return Err(VMError::StorageUnavailable);
+                }
+                
+                let storage = self.vm.storage_backend.as_ref().unwrap();
+                match storage.get_version(self.vm.auth_context.as_ref(), &self.vm.namespace, &key, version) {
+                    Ok((value_bytes, _version_info)) => {
+                        let value_str = String::from_utf8(value_bytes)
+                            .map_err(|e| VMError::StorageError(format!("Invalid UTF-8 data in storage for key '{}' version {}: {}", key, version, e)))?;
+                        
+                        let value = value_str.parse::<f64>()
+                            .map_err(|e| VMError::StorageError(format!("Failed to parse storage value for key '{}' version {} as number: {}", key, version, e)))?;
+                        
+                        self.vm.stack.push(value);
+                    },
+                    Err(e) => {
+                        return Err(VMError::StorageError(format!("Failed to load key '{}' version {}: {}", key, version, e)));
+                    }
+                }
+            },
+            BytecodeOp::ListStorageVersions(key) => {
+                if self.vm.storage_backend.is_none() {
+                    return Err(VMError::StorageUnavailable);
+                }
+                
+                let storage = self.vm.storage_backend.as_ref().unwrap();
+                match storage.list_versions(self.vm.auth_context.as_ref(), &self.vm.namespace, &key) {
+                    Ok(versions) => {
+                        self.vm.stack.push(versions.len() as f64);
+                    },
+                    Err(e) => {
+                        return Err(VMError::StorageError(e.to_string()));
+                    }
+                }
+            },
+            BytecodeOp::DiffStorageVersions(key, v1, v2) => {
+                if self.vm.storage_backend.is_none() {
+                    return Err(VMError::StorageUnavailable);
+                }
+                
+                let storage = self.vm.storage_backend.as_ref().unwrap();
+                
+                // Get both versions
+                match storage.get_version(self.vm.auth_context.as_ref(), &self.vm.namespace, &key, v1) {
+                    Ok((value_bytes1, _)) => {
+                        match storage.get_version(self.vm.auth_context.as_ref(), &self.vm.namespace, &key, v2) {
+                            Ok((value_bytes2, _)) => {
+                                // Convert to strings and parse as numbers
+                                let value_str1 = String::from_utf8(value_bytes1)
+                                    .map_err(|e| VMError::StorageError(format!("Invalid UTF-8 data for key '{}' version {}: {}", key, v1, e)))?;
+                                let value_str2 = String::from_utf8(value_bytes2)
+                                    .map_err(|e| VMError::StorageError(format!("Invalid UTF-8 data for key '{}' version {}: {}", key, v2, e)))?;
+                                
+                                // Parse as numbers and calculate difference
+                                match (value_str1.parse::<f64>(), value_str2.parse::<f64>()) {
+                                    (Ok(num1), Ok(num2)) => {
+                                        // Push absolute difference to stack
+                                        let diff = (num1 - num2).abs();
+                                        self.vm.stack.push(diff);
+                                        
+                                        // Emit event showing the difference using println since VM's emit_event is private
+                                        println!("[INFO] [storage] Difference between v{} ({}) and v{} ({}) for key '{}': {}",
+                                            v1, num1, v2, num2, key, diff);
+                                    },
+                                    _ => {
+                                        // If not numeric, just indicate they're different
+                                        println!("[INFO] [storage] Versions v{} and v{} for key '{}' have different values: '{}' vs '{}'",
+                                            v1, v2, key, value_str1, value_str2);
+                                        
+                                        // Push 1.0 if different, 0.0 if same
+                                        let is_different = value_str1 != value_str2;
+                                        self.vm.stack.push(if is_different { 1.0 } else { 0.0 });
+                                    }
+                                }
+                            },
+                            Err(e) => return Err(VMError::StorageError(format!("Failed to load version {} for key '{}': {}", v2, key, e)))
+                        }
+                    },
+                    Err(e) => return Err(VMError::StorageError(format!("Failed to load version {} for key '{}': {}", v1, key, e)))
                 }
             },
             BytecodeOp::Mod => {

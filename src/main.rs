@@ -5,7 +5,9 @@ use icn_covm::compiler::{parse_dsl, parse_dsl_with_stdlib, CompilerError};
 use icn_covm::storage::auth::AuthContext;
 use icn_covm::vm::{VM, VMError};
 use icn_covm::identity::{Identity, MemberProfile};
-use icn_covm::storage::InMemoryStorage;
+use icn_covm::storage::traits::StorageBackend;
+use icn_covm::storage::implementations::in_memory::InMemoryStorage;
+use icn_covm::storage::implementations::file_storage::FileStorage;
 use icn_covm::storage::utils::now;
 
 use clap::{Arg, Command, ArgAction, value_parser};
@@ -15,6 +17,7 @@ use std::path::Path;
 use std::process;
 use std::time::Instant;
 use thiserror::Error;
+use std::io::{self, Write};
 
 #[derive(Debug, Error)]
 enum AppError {
@@ -110,6 +113,20 @@ fn main() {
                         .help("Run both AST and bytecode execution and compare performance")
                         .action(ArgAction::SetTrue),
                 )
+                .arg(
+                    Arg::new("storage-backend")
+                        .long("storage-backend")
+                        .value_name("TYPE")
+                        .help("Storage backend type (memory or file)")
+                        .default_value("memory"),
+                )
+                .arg(
+                    Arg::new("storage-path")
+                        .long("storage-path")
+                        .value_name("PATH")
+                        .help("Path for file storage backend")
+                        .default_value("./storage"),
+                )
         )
         .subcommand(
             Command::new("identity")
@@ -153,6 +170,8 @@ fn main() {
             let use_bytecode = run_matches.get_flag("bytecode");
             let benchmark = run_matches.get_flag("benchmark");
             let use_stdlib = run_matches.get_flag("stdlib");
+            let storage_backend = run_matches.get_one::<String>("storage-backend").unwrap();
+            let storage_path = run_matches.get_one::<String>("storage-path").unwrap();
 
             // Collect parameters
             let mut parameters = HashMap::new();
@@ -176,18 +195,18 @@ fn main() {
 
             // Execute the program
             if interactive {
-                if let Err(err) = run_interactive(verbose, parameters, use_bytecode) {
+                if let Err(err) = run_interactive(verbose, parameters, use_bytecode, storage_backend, storage_path) {
                     eprintln!("Error: {}", err);
                     process::exit(1);
                 }
             } else {
                 if benchmark {
-                    if let Err(err) = run_benchmark(program_path, verbose, use_stdlib, parameters) {
+                    if let Err(err) = run_benchmark(program_path, verbose, use_stdlib, parameters, storage_backend, storage_path) {
                         eprintln!("Error: {}", err);
                         process::exit(1);
                     }
                 } else if let Err(err) =
-                    run_program(program_path, verbose, use_stdlib, parameters, use_bytecode)
+                    run_program(program_path, verbose, use_stdlib, parameters, use_bytecode, storage_backend, storage_path)
                 {
                     eprintln!("Error: {}", err);
                     process::exit(1);
@@ -220,8 +239,10 @@ fn main() {
             let use_stdlib = false;
             let parameters = HashMap::new();
             let use_bytecode = false;
+            let storage_backend = "memory";
+            let storage_path = "./storage";
             
-            if let Err(err) = run_program(program_path, verbose, use_stdlib, parameters, use_bytecode) {
+            if let Err(err) = run_program(program_path, verbose, use_stdlib, parameters, use_bytecode, storage_backend, storage_path) {
                 eprintln!("Error: {}", err);
                 process::exit(1);
             }
@@ -235,6 +256,8 @@ fn run_program(
     use_stdlib: bool,
     parameters: HashMap<String, String>,
     use_bytecode: bool,
+    storage_backend: &str,
+    storage_path: &str,
 ) -> Result<(), AppError> {
     let path = Path::new(program_path);
 
@@ -280,69 +303,189 @@ fn run_program(
         println!("Program loaded with {} operations", ops.len());
     }
 
-    if use_bytecode {
-        let mut compiler = BytecodeCompiler::new();
-        let program = compiler.compile(&ops);
-        
+    // Setup auth context and storage based on selected backend
+    let auth_context = create_demo_auth_context();
+    
+    // Select the appropriate storage backend
+    if storage_backend == "file" {
         if verbose {
-            println!("Compiled bytecode program:\n{}", program.dump());
+            println!("Using FileStorage backend at {}", storage_path);
         }
         
-        // Create bytecode interpreter
-        let mut interpreter = BytecodeExecutor::new(VM::new(), program.instructions);
-        
-        // Set parameters
-        interpreter.vm.set_parameters(parameters)?;
-        
-        // Execute
-        let start = Instant::now();
-        let result = interpreter.execute();
-        let duration = start.elapsed();
-        
-        if verbose {
-            println!("Execution completed in {:?}", duration);
+        // Create the storage directory if it doesn't exist
+        let storage_dir = Path::new(storage_path);
+        if !storage_dir.exists() {
+            if verbose {
+                println!("Creating storage directory: {}", storage_path);
+            }
+            fs::create_dir_all(storage_dir)
+                .map_err(|e| AppError::Other(format!("Failed to create storage directory: {}", e)))?;
         }
         
-        if let Err(err) = result {
-            return Err(err.into());
+        // Initialize the FileStorage backend
+        match FileStorage::new(storage_path) {
+            Ok(mut storage) => {
+                initialize_storage(&auth_context, &mut storage, verbose)?;
+                
+                if use_bytecode {
+                    // Bytecode execution with FileStorage
+                    let mut compiler = BytecodeCompiler::new();
+                    let program = compiler.compile(&ops);
+                    
+                    if verbose {
+                        println!("Compiled bytecode program:\n{}", program.dump());
+                    }
+                    
+                    // Create bytecode interpreter with proper auth context and storage
+                    let mut vm = VM::new();
+                    vm.set_auth_context(auth_context);
+                    vm.set_namespace("demo");
+                    vm.set_storage_backend(storage);
+                    
+                    let mut interpreter = BytecodeExecutor::new(vm, program.instructions);
+                    
+                    // Set parameters
+                    interpreter.vm.set_parameters(parameters)?;
+                    
+                    // Execute
+                    let start = Instant::now();
+                    let result = interpreter.execute();
+                    let duration = start.elapsed();
+                    
+                    if verbose {
+                        println!("Execution completed in {:?}", duration);
+                    }
+                    
+                    if let Err(err) = result {
+                        return Err(err.into());
+                    }
+                    
+                    if verbose {
+                        println!("Final stack: {:?}", interpreter.vm.stack);
+                        
+                        if let Some(top) = interpreter.vm.top() {
+                            println!("Top of stack: {}", top);
+                        } else {
+                            println!("Stack is empty");
+                        }
+                        
+                        println!("Final memory: {:?}", interpreter.vm.memory);
+                    }
+                } else {
+                    // AST execution with FileStorage
+                    let mut vm = VM::new();
+                    vm.set_auth_context(auth_context);
+                    vm.set_namespace("demo");
+                    vm.set_storage_backend(storage);
+
+                    // Set parameters
+                    vm.set_parameters(parameters)?;
+
+                    if verbose {
+                        println!("Executing program in AST interpreter mode...");
+                        println!("-----------------------------------");
+                    }
+
+                    vm.execute(&ops)?;
+
+                    if verbose {
+                        println!("-----------------------------------");
+                        println!("Program execution completed successfully");
+
+                        // Print final stack state
+                        if let Some(top) = vm.top() {
+                            println!("Final top of stack: {}", top);
+                        } else {
+                            println!("Stack is empty");
+                        }
+                    }
+                }
+            },
+            Err(e) => {
+                return Err(AppError::Other(format!("Failed to initialize file storage: {}", e)));
+            }
+        }
+    } else {
+        // Use InMemoryStorage (default)
+        if verbose {
+            println!("Using InMemoryStorage backend");
         }
         
-        if verbose {
-            println!("Final stack: {:?}", interpreter.vm.stack);
+        // Initialize InMemoryStorage
+        let mut storage = InMemoryStorage::new();
+        initialize_storage(&auth_context, &mut storage, verbose)?;
+        
+        if use_bytecode {
+            // Bytecode execution with InMemoryStorage
+            let mut compiler = BytecodeCompiler::new();
+            let program = compiler.compile(&ops);
             
-            if let Some(top) = interpreter.vm.top() {
-                println!("Top of stack: {}", top);
-            } else {
-                println!("Stack is empty");
+            if verbose {
+                println!("Compiled bytecode program:\n{}", program.dump());
             }
             
-            println!("Final memory: {:?}", interpreter.vm.memory);
-        }
-        
-        return Ok(());
-    } else {
-        // Create and execute the VM
-        let mut vm = VM::new();
+            // Create bytecode interpreter with proper auth context and storage
+            let mut vm = VM::new();
+            vm.set_auth_context(auth_context);
+            vm.set_namespace("demo");
+            vm.set_storage_backend(storage);
+            
+            let mut interpreter = BytecodeExecutor::new(vm, program.instructions);
+            
+            // Set parameters
+            interpreter.vm.set_parameters(parameters)?;
+            
+            // Execute
+            let start = Instant::now();
+            let result = interpreter.execute();
+            let duration = start.elapsed();
+            
+            if verbose {
+                println!("Execution completed in {:?}", duration);
+            }
+            
+            if let Err(err) = result {
+                return Err(err.into());
+            }
+            
+            if verbose {
+                println!("Final stack: {:?}", interpreter.vm.stack);
+                
+                if let Some(top) = interpreter.vm.top() {
+                    println!("Top of stack: {}", top);
+                } else {
+                    println!("Stack is empty");
+                }
+                
+                println!("Final memory: {:?}", interpreter.vm.memory);
+            }
+        } else {
+            // AST execution with InMemoryStorage
+            let mut vm = VM::new();
+            vm.set_auth_context(auth_context);
+            vm.set_namespace("demo");
+            vm.set_storage_backend(storage);
 
-        // Set parameters
-        vm.set_parameters(parameters)?;
+            // Set parameters
+            vm.set_parameters(parameters)?;
 
-        if verbose {
-            println!("Executing program in AST interpreter mode...");
-            println!("-----------------------------------");
-        }
+            if verbose {
+                println!("Executing program in AST interpreter mode...");
+                println!("-----------------------------------");
+            }
 
-        vm.execute(&ops)?;
+            vm.execute(&ops)?;
 
-        if verbose {
-            println!("-----------------------------------");
-            println!("Program execution completed successfully");
+            if verbose {
+                println!("-----------------------------------");
+                println!("Program execution completed successfully");
 
-            // Print final stack state
-            if let Some(top) = vm.top() {
-                println!("Final top of stack: {}", top);
-            } else {
-                println!("Stack is empty");
+                // Print final stack state
+                if let Some(top) = vm.top() {
+                    println!("Final top of stack: {}", top);
+                } else {
+                    println!("Stack is empty");
+                }
             }
         }
     }
@@ -350,11 +493,83 @@ fn run_program(
     Ok(())
 }
 
+// Helper function to initialize any storage backend
+fn initialize_storage<T: StorageBackend>(
+    auth_context: &AuthContext,
+    storage: &mut T,
+    verbose: bool,
+) -> Result<(), AppError> {
+    // Create user account
+    if let Err(e) = storage.create_account(Some(auth_context), &auth_context.user_id, 1024 * 1024) {
+        if verbose {
+            println!("Warning: Failed to create account: {:?}", e);
+        }
+    }
+    
+    // Create namespace
+    if let Err(e) = storage.create_namespace(Some(auth_context), "demo", 1024 * 1024, None) {
+        if verbose {
+            println!("Warning: Failed to create namespace: {:?}", e);
+        }
+    }
+    
+    Ok(())
+}
+
+// Create a demo authentication context for storage operations
+fn create_demo_auth_context() -> AuthContext {
+    // Create a basic auth context for demo purposes
+    let user_id = "demo_user";
+    let mut auth = AuthContext::new(user_id);
+    
+    // Add roles with storage permissions - match the required roles in StorageBackend impl
+    auth.add_role("global", "admin");   // Permission to create accounts and namespaces
+    auth.add_role("demo", "reader");    // Permission to read from demo namespace
+    auth.add_role("demo", "writer");    // Permission to write to demo namespace
+    auth.add_role("demo", "admin");     // Permission to administrate demo namespace
+    
+    // Set up identity
+    let mut identity = Identity::new(user_id, "user");
+    identity.add_metadata("description", "Demo User");
+    
+    // Register the identity
+    auth.register_identity(identity);
+    
+    // Set up member profile
+    let mut profile = MemberProfile::new(Identity::new(user_id, "user"), now());
+    profile.add_role("user");
+    auth.register_member(profile);
+    
+    auth
+}
+
+// Helper function to create a demo auth context and initialize storage
+fn setup_storage_for_demo() -> (AuthContext, InMemoryStorage) {
+    let auth = create_demo_auth_context();
+    
+    // Create storage backend
+    let mut storage = InMemoryStorage::new();
+    
+    // Create user account
+    if let Err(e) = storage.create_account(Some(&auth), &auth.user_id, 1024 * 1024) {
+        println!("Warning: Failed to create account: {:?}", e);
+    }
+    
+    // Create namespace
+    if let Err(e) = storage.create_namespace(Some(&auth), "demo", 1024 * 1024, None) {
+        println!("Warning: Failed to create namespace: {:?}", e);
+    }
+    
+    (auth, storage)
+}
+
 fn run_benchmark(
     program_path: &str,
-    _verbose: bool,
+    verbose: bool,
     use_stdlib: bool,
     parameters: HashMap<String, String>,
+    storage_backend: &str,
+    storage_path: &str,
 ) -> Result<(), AppError> {
     let path = Path::new(program_path);
 
@@ -394,6 +609,12 @@ fn run_benchmark(
     println!("\n1. Running AST interpreter...");
 
     let mut vm = VM::new();
+    
+    // Set up auth context and namespace
+    let auth_context = setup_storage_for_demo().0;
+    vm.set_auth_context(auth_context.clone());
+    vm.set_namespace("demo");
+    
     vm.set_parameters(parameters.clone())?;
 
     let ast_start = Instant::now();
@@ -413,7 +634,11 @@ fn run_benchmark(
     println!("Bytecode compilation time: {:?}", compiler_duration);
     println!("Bytecode size: {} instructions", program.instructions.len());
 
-    let mut interpreter = BytecodeExecutor::new(VM::new(), program.instructions);
+    let mut vm = VM::new();
+    vm.set_auth_context(auth_context);
+    vm.set_namespace("demo");
+    
+    let mut interpreter = BytecodeExecutor::new(vm, program.instructions);
     interpreter.vm.set_parameters(parameters)?;
 
     let bytecode_start = Instant::now();
@@ -464,23 +689,20 @@ fn run_interactive(
     verbose: bool,
     parameters: HashMap<String, String>,
     use_bytecode: bool,
+    storage_backend: &str,
+    storage_path: &str,
 ) -> Result<(), AppError> {
     use std::io::{self, Write};
 
-    println!("icn-covm interactive REPL");
-    println!("Type DSL code to execute, 'help' for commands, or 'exit' to quit");
-    if use_bytecode {
-        println!("Running in bytecode mode");
-    } else {
-        println!("Running in AST interpreter mode");
-    }
-
-    // Show verbose setting if enabled
-    if verbose {
-        println!("Verbose mode: enabled");
-    }
-
+    println!("ICN Cooperative VM Interactive Shell (type 'exit' to quit, 'help' for commands)");
+    
     let mut vm = VM::new();
+    
+    // Set up auth context and namespace
+    let (auth_context, storage) = setup_storage_for_demo();
+    vm.set_auth_context(auth_context);
+    vm.set_namespace("demo");
+    
     vm.set_parameters(parameters)?;
 
     // Create an editor for interactive input
@@ -570,6 +792,8 @@ fn run_interactive(
                         .map(|(k, v)| (k.clone(), v.to_string()))
                         .collect(),
                     false,
+                    storage_backend,
+                    storage_path,
                 );
             }
             "mode bytecode" => {
@@ -580,6 +804,8 @@ fn run_interactive(
                         .map(|(k, v)| (k.clone(), v.to_string()))
                         .collect(),
                     true,
+                    storage_backend,
+                    storage_path,
                 );
             }
             _ if trimmed.starts_with("save ") => {

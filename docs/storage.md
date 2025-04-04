@@ -1,296 +1,185 @@
-# Storage System Documentation
+# ICN-COVM Storage System
 
-## Overview
+The ICN Cooperative Virtual Machine (COVM) includes a powerful storage system that enables programs to store and retrieve data persistently. This document describes the storage system architecture, available backends, and how to use storage in DSL programs.
 
-The ICN-COVM Storage System provides persistent state management across VM executions. It enables cooperative applications to maintain state, implement transactions, and manage namespaced data with proper access controls.
+## Storage Backends
 
-This document describes the storage system architecture, interfaces, implementations, and integration with the identity system.
+The COVM supports multiple storage backends through a common interface defined by the `StorageBackend` trait. Currently, two implementations are available:
 
-## Core Components
+### InMemoryStorage
 
-### StorageBackend Trait
+- Stores data in memory during program execution
+- Data is lost when the program terminates
+- Useful for testing, development, and ephemeral data
 
-The foundation of the storage system is the `StorageBackend` trait:
+### FileStorage
 
-```rust
-pub trait StorageBackend {
-    // Basic operations
-    fn get(&self, key: &str, auth: Option<&AuthContext>) -> Result<Option<String>, StorageError>;
-    fn set(&mut self, key: &str, value: &str, auth: Option<&AuthContext>) -> Result<(), StorageError>;
-    fn delete(&mut self, key: &str, auth: Option<&AuthContext>) -> Result<(), StorageError>;
-    fn exists(&self, key: &str, auth: Option<&AuthContext>) -> Result<bool, StorageError>;
-    
-    // JSON operations
-    fn get_json<T: DeserializeOwned>(&self, key: &str, auth: Option<&AuthContext>) -> Result<Option<T>, StorageError>;
-    fn set_json<T: Serialize>(&mut self, key: &str, value: &T, auth: Option<&AuthContext>) -> Result<(), StorageError>;
-    
-    // Key listing
-    fn list_keys(&self, prefix: &str, auth: Option<&AuthContext>) -> Result<Vec<String>, StorageError>;
-    
-    // Transaction support
-    fn begin_transaction(&mut self) -> Result<(), StorageError>;
-    fn commit_transaction(&mut self) -> Result<(), StorageError>;
-    fn rollback_transaction(&mut self) -> Result<(), StorageError>;
-    fn in_transaction(&self) -> bool;
-    
-    // Version information
-    fn get_version(&self, key: &str, auth: Option<&AuthContext>) -> Result<Option<u64>, StorageError>;
-    fn get_latest_version(&self) -> Result<u64, StorageError>;
-}
+- Stores data on disk in a structured directory hierarchy
+- Data persists between program runs
+- Supports versioning, audit logs, and transaction rollback
+- Implements resource usage tracking and quotas
+- Provides robust permission checking
+
+## Selecting a Storage Backend
+
+The COVM CLI supports selecting which storage backend to use through command-line options:
+
+```bash
+# Use in-memory storage (default)
+cargo run -- run --program your_program.dsl --storage-backend memory
+
+# Use file-based storage with a specified directory
+cargo run -- run --program your_program.dsl --storage-backend file --storage-path ./storage_dir
 ```
 
-### StorageError
+## Authorization Model
 
-Error types for storage operations:
+The storage system implements an identity-aware authorization model with the following components:
 
-```rust
-pub enum StorageError {
-    // Basic errors
-    KeyNotFound(String),
-    InvalidKey(String),
-    SerializationError(String),
-    DeserializationError(String),
-    
-    // Transaction errors
-    TransactionError(String),
-    NoActiveTransaction,
-    NestedTransactionNotSupported,
-    
-    // Permission errors
-    PermissionDenied(String),
-    AuthenticationRequired(String),
-    
-    // Backend-specific errors
-    BackendError(String),
-    IOError(String),
-}
-```
+1. **Users**: Identified by a user ID string
+2. **Namespaces**: Logical containers for data, similar to directories
+3. **Roles**: Assigned to users for specific namespaces:
+   - `reader`: Permission to read data
+   - `writer`: Permission to write data
+   - `admin`: Permission to manage namespace configuration
+   - `global admin`: Permission to manage accounts and create namespaces
 
-### Storage Implementations
+## Usage in DSL Programs
 
-The system provides multiple storage backend implementations:
+### Storing Data
 
-1. **InMemoryStorage**: Volatile storage for testing and development
-2. **FileStorage**: File-based persistent storage using JSON serialization
-3. **Custom backends**: The trait can be implemented for other storage systems
-
-## VM Operations
-
-The storage system adds several operations to the VM:
-
-### Basic Storage Operations
+To store a value in persistent storage:
 
 ```
-# Store a value
-push 100.0
-storep "org/treasury/balance"
-
-# Load a value
-loadp "org/treasury/balance"
-
-# Check if a key exists
-keyexists "org/treasury/balance"
-
-# Delete a key
-deletep "org/treasury/balance"
-
-# List keys with a prefix
-push "org/treasury/"
-listkeys
-```
-
-### Transaction Operations
-
-```
-# Begin a transaction
-begintx
-
-# Commit a transaction
-committx
-
-# Rollback a transaction
-rollbacktx
-```
-
-## DSL Examples
-
-### Basic Key-Value Storage
-
-```
-# Store and retrieve a value
+# First push the value on the stack
 push 42.0
-storep "app/counter"
-
-loadp "app/counter"
-emit
-
-# Store a calculated value
-push 10.0
-push 5.0
-add
-storep "app/sum"
+# Then store it with a key
+storep my_counter
 ```
 
-### Transaction Example
+### Loading Data
+
+To load a value from persistent storage:
 
 ```
-# Atomic transfer between accounts
-begintx
-    # Load first account
-    loadp "accounts/alice"
-    push 10.0
-    sub
-    storep "accounts/alice"
-    
-    # Load second account
-    loadp "accounts/bob"
-    push 10.0
-    add
-    storep "accounts/bob"
-committx
-
-# Handle errors gracefully
-onerror:
-    rollbacktx
-    emit "Transfer failed"
-enderr
+# Load the value onto the stack
+loadp my_counter
 ```
 
-### Namespace Management
+### Conditional Storage Patterns
+
+A common pattern for initializing a counter:
 
 ```
-# List all accounts
-push "accounts/"
-listkeys
-
-# Create a counter for each account
-begintx
-    push "accounts/"
-    listkeys
-    store "accounts"
-    
-    push 0
-    store "i"
-    push 0
-    store "count"
-    
-    load "accounts"
-    length
-    store "num_accounts"
-    
-    while:
-        load "i"
-        load "num_accounts"
-        lt
-    do:
-        load "accounts"
-        load "i"
-        array_get
-        
-        push "/counter"
-        concat
-        
-        push 0
-        storep
-        
-        load "i"
-        push 1
-        add
-        store "i"
-    endwhile
-committx
+# Try to load the counter
+loadp counter
+# Check if it exists (0.0 = falsy)
+push 0.0
+eq
+if:
+  # First run: initialize counter to 0
+  push 0.0
+  storep counter
+  # Load the counter for following operations
+  loadp counter
+else:
+  # Counter already exists, proceed with existing value
+  emit "Counter exists with value:"
+  dumpstack
 ```
 
-## Integration with Identity System
+## Storage Backend Implementation Details
 
-The storage system integrates with the identity system to enable:
+### InMemoryStorage
 
-1. **Permission Checking**: StorageBackend operations validate permissions via the AuthContext
-2. **Namespace Permissions**: Different roles can have access to different namespaces
-3. **Audit Trails**: Storage operations can be logged with identity information
+The `InMemoryStorage` backend provides a simple in-memory implementation that is useful for:
+- Development and testing
+- Programs that don't need persistence
+- Benchmarking and performance testing
 
-Example with permissions:
+Data is stored in memory and is lost when the program terminates.
 
-```
-# Only admins can access this namespace
-begintx
-    requirerole "admin"
-    push 100.0
-    storep "admin/config/max_users"
-committx
+### FileStorage
 
-# Regular members can only access their own namespace
-begintx
-    requirerole "member"
-    getcaller
-    store "user_id"
-    
-    push 42.0
-    push "users/"
-    load "user_id"
-    concat
-    push "/profile/score"
-    concat
-    storep
-committx
-```
+The `FileStorage` backend implements a persistent storage solution with the following features:
 
-## Namespacing Conventions
+- **File Organization**:
+  - Root directory contains `namespaces/`, `accounts/`, `audit_logs/`, and `transactions/` directories
+  - Each namespace has its own directory structure
+  - Keys are stored in versioned files with metadata
 
-The storage system uses hierarchical namespaces:
+- **Versioning**:
+  - Every update to a key creates a new numbered version
+  - Previous versions are retained and can be accessed
+  - Metadata is stored alongside data, including creation timestamps and authors
 
-1. **Organization-level**: `org/*` or `coop/*`
-2. **Module-level**: `org/module/*`
-3. **User-level**: `users/user_id/*`
-4. **Governance-level**: `governance/*`
+- **Transactions**:
+  - Supports beginning, committing, and rolling back transactions
+  - Transaction logs track all operations for potential rollback
+  - Ensures data consistency across related operations
 
-These conventions help organize data and implement proper access controls.
+- **Resource Management**:
+  - User accounts have configurable storage quotas
+  - Storage usage is tracked for each user
+  - Prevents users from exceeding their allocated quota
 
-## File-based Storage Implementation
+- **Audit Logs**:
+  - All operations are logged with timestamps, user IDs, and operation details
+  - Logs can be queried for audit and debugging purposes
 
-The `FileStorage` backend stores data in a structured file hierarchy:
+## Example Programs
 
-```
-storage/
-├── v1/
-│   ├── namespace1/
-│   │   ├── key1.json
-│   │   └── key2.json
-│   └── namespace2/
-│       └── key3.json
-└── latest_version.json
+The COVM includes several example programs that demonstrate the storage system:
+
+### Persistent Counter
+
+The `demo/storage/persistent_counter.dsl` program demonstrates a simple counter that increments each time it's run. Run it with:
+
+```bash
+# With in-memory storage (resets each run)
+cargo run -- run --program demo/storage/persistent_counter.dsl --storage-backend memory
+
+# With file storage (persists between runs)
+cargo run -- run --program demo/storage/persistent_counter.dsl --storage-backend file --storage-path ./filestorage
 ```
 
-This allows:
-- Easy backup and inspection
-- Version history
-- Clear namespace separation
+### Shopping Cart
+
+The `demo/storage/cart.dsl` program demonstrates a simple shopping cart that adds items with each run. Run it with:
+
+```bash
+# First run - creates an empty cart and adds first item
+cargo run -- run --program demo/storage/cart.dsl --storage-backend file --storage-path ./filestorage
+
+# Subsequent runs - adds more items to existing cart
+cargo run -- run --program demo/storage/cart.dsl --storage-backend file --storage-path ./filestorage
+```
+
+### Basic Storage Test
+
+The `demo/storage/basic_storage_test.dsl` program tests basic storage functionality:
+
+```bash
+# Test with file storage
+cargo run -- run --program demo/storage/basic_storage_test.dsl --storage-backend file --storage-path ./filestorage
+```
+
+## Limitations
+
+1. The `InMemoryStorage` backend does not persist data across program runs.
+2. The `FileStorage` backend is currently not optimized for very large datasets or high concurrency.
+3. Complex queries and indexing are not supported directly by the storage backends.
 
 ## Performance Considerations
 
-1. **Caching**: Both implementations include caching for frequently accessed keys
-2. **Transaction Performance**: Transactions are optimized to minimize disk I/O
-3. **Batch Operations**: Consider using transactions for batch operations
+- For small programs with minimal storage needs, both backends offer good performance.
+- For programs with large data requirements, the `FileStorage` backend may have increased latency compared to `InMemoryStorage`.
+- The `FileStorage` backend uses caching for namespace and account metadata to improve performance.
 
-## Security Considerations
+## Future Enhancements
 
-1. **Key Validation**: All keys are validated for security
-2. **Access Control**: Namespaces should enforce proper access control
-3. **Transactions**: Use transactions for consistent state updates
-4. **Error Handling**: Always handle storage errors gracefully
-
-## Best Practices
-
-1. **Namespace Design**: Create a clear namespace hierarchy
-2. **Versioning**: Use version information when needed
-3. **Transactions**: Use transactions for related operations
-4. **Key Prefixes**: Use consistent key prefixes for organization
-5. **Error Handling**: Implement proper error recovery
-
-## Future Extensions
-
-1. **Query Support**: Advanced querying beyond simple key lookups
-2. **Compression**: Data compression for efficient storage
-3. **Encryption**: Encrypt sensitive data at rest
-4. **Remote Storage**: Network-based storage backends
-5. **Schema Validation**: Validate data against schemas
+Planned improvements to the storage system include:
+- Database-backed storage options (SQL, NoSQL)
+- Enhanced query capabilities beyond simple key-value lookups
+- Additional optimization for the `FileStorage` backend
+- Network-distributed storage options
