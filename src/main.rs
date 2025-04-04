@@ -10,14 +10,14 @@ use icn_covm::storage::implementations::in_memory::InMemoryStorage;
 use icn_covm::storage::implementations::file_storage::FileStorage;
 use icn_covm::storage::utils::now;
 
-use clap::{Arg, Command, ArgAction, value_parser};
+use clap::{Arg, Command, ArgAction};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::process;
 use std::time::Instant;
 use thiserror::Error;
-use std::io::{self, Write};
+use std::io::{Write};
 
 #[derive(Debug, Error)]
 enum AppError {
@@ -565,11 +565,11 @@ fn setup_storage_for_demo() -> (AuthContext, InMemoryStorage) {
 
 fn run_benchmark(
     program_path: &str,
-    verbose: bool,
+    _verbose: bool,
     use_stdlib: bool,
     parameters: HashMap<String, String>,
-    storage_backend: &str,
-    storage_path: &str,
+    _storage_backend: &str,
+    _storage_path: &str,
 ) -> Result<(), AppError> {
     let path = Path::new(program_path);
 
@@ -699,7 +699,7 @@ fn run_interactive(
     let mut vm = VM::new();
     
     // Set up auth context and namespace
-    let (auth_context, storage) = setup_storage_for_demo();
+    let (auth_context, _storage) = setup_storage_for_demo();
     vm.set_auth_context(auth_context);
     vm.set_namespace("demo");
     

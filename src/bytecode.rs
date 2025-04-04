@@ -14,7 +14,7 @@
 use crate::vm::{VM, VMError, Op};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use crate::storage::auth::AuthContext;
+
 
 /// Bytecode operations for the ICN-COVM virtual machine
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -375,7 +375,7 @@ impl BytecodeCompiler {
                     .instructions
                     .push(BytecodeOp::AssertEqualStack(*depth)),
                 Op::Mod => self.program.instructions.push(BytecodeOp::Mod),
-                Op::RankedVote { candidates, ballots } => {
+                Op::RankedVote { candidates: _, ballots: _ } => {
                     // Skip for now until we implement RankedVote properly in BytecodeOp
                     // or convert the structure as needed
                     self.program.instructions.push(BytecodeOp::Return); // NOP for now
@@ -408,15 +408,15 @@ impl BytecodeCompiler {
                     .program
                     .instructions
                     .push(BytecodeOp::QuorumThreshold(*threshold)),
-                Op::VerifyIdentity { identity_id, message, signature } => {
+                Op::VerifyIdentity { identity_id: _, message: _, signature: _ } => {
                     // Not fully implemented in bytecode yet, just add a NOP
                     self.program.instructions.push(BytecodeOp::Return);
                 },
-                Op::CheckMembership { identity_id, namespace } => {
+                Op::CheckMembership { identity_id: _, namespace: _ } => {
                     // Not fully implemented in bytecode yet, just add a NOP
                     self.program.instructions.push(BytecodeOp::Return);
                 },
-                Op::CheckDelegation { delegator_id, delegate_id } => {
+                Op::CheckDelegation { delegator_id: _, delegate_id: _ } => {
                     // Not fully implemented in bytecode yet, just add a NOP
                     self.program.instructions.push(BytecodeOp::Return);
                 },
@@ -776,7 +776,7 @@ impl BytecodeExecutor {
                     .ok_or_else(|| VMError::VariableNotFound(name))?;
                 self.vm.stack.push(value);
             },
-            BytecodeOp::Call(name) => {
+            BytecodeOp::Call(_name) => {
                 // TODO: Implement function call
                 return Err(VMError::NotImplemented("Function calls not implemented yet".to_string()));
             },

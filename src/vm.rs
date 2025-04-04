@@ -2,15 +2,15 @@
 
 use crate::events::Event;
 use crate::storage::auth::AuthContext;
-use crate::storage::errors::{StorageError, StorageResult};
+use crate::storage::errors::{StorageError};
 use crate::storage::traits::StorageBackend;
 use crate::storage::implementations::in_memory::InMemoryStorage;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fmt;
+
 use thiserror::Error;
-use crate::bytecode::BytecodeOp;
-use crate::identity::{Identity, Credential, DelegationLink, MemberProfile};
+
+
 
 /// Error variants that can occur during VM execution
 #[derive(Debug, Error, Clone, PartialEq)]
@@ -731,7 +731,7 @@ impl VM {
                 },
                 Op::Negate => { let value = self.pop_one("Negate")?; self.stack.push(-value); },
                 Op::Call(name) => {
-                    let (params, body) = self.functions.get(name).ok_or_else(|| VMError::FunctionNotFound(name.clone()))?.clone();
+                    let (_params, body) = self.functions.get(name).ok_or_else(|| VMError::FunctionNotFound(name.clone()))?.clone();
                     let result = self.execute_inner(&body);
                     result?;
                 },
@@ -792,7 +792,7 @@ impl VM {
                     );
                     event.emit().map_err(|e| VMError::IOError(e.to_string()))?;
                 },
-                Op::LiquidDelegate { from, to } => {
+                Op::LiquidDelegate { from: _, to: _ } => {
                     // self.perform_liquid_delegation(from.as_str(), to.as_str())?; // Method removed or needs reimplementation
                     println!("WARN: LiquidDelegate Op ignored - method not found/implemented."); // Add a warning
                 },
