@@ -391,6 +391,18 @@ impl BytecodeCompiler {
                     .program
                     .instructions
                     .push(BytecodeOp::QuorumThreshold(*threshold)),
+                Op::VerifyIdentity { identity_id, message, signature } => {
+                    // Not fully implemented in bytecode yet, just add a NOP
+                    self.program.instructions.push(BytecodeOp::Return);
+                },
+                Op::CheckMembership { identity_id, namespace } => {
+                    // Not fully implemented in bytecode yet, just add a NOP
+                    self.program.instructions.push(BytecodeOp::Return);
+                },
+                Op::CheckDelegation { delegator_id, delegate_id } => {
+                    // Not fully implemented in bytecode yet, just add a NOP
+                    self.program.instructions.push(BytecodeOp::Return);
+                },
 
                 // Handle more complex operations
                 Op::If {
@@ -840,7 +852,7 @@ impl BytecodeExecutor {
                 
                 // Convert value to string and store
                 let value_bytes = value.to_string().into_bytes();
-                storage.set(&self.vm.auth_context, &self.vm.namespace, &key, value_bytes)
+                storage.set(self.vm.auth_context.as_ref(), &self.vm.namespace, &key, value_bytes)
                     .map_err(|e| VMError::StorageError(e.to_string()))?;
                 
                 Ok(())
@@ -855,7 +867,7 @@ impl BytecodeExecutor {
                 let storage = self.vm.storage_backend.as_ref().unwrap();
                 
                 // Load and parse value
-                let value_bytes = storage.get(&self.vm.auth_context, &self.vm.namespace, &key)
+                let value_bytes = storage.get(self.vm.auth_context.as_ref(), &self.vm.namespace, &key)
                     .map_err(|e| VMError::StorageError(e.to_string()))?;
                 
                 let value_str = String::from_utf8(value_bytes)
@@ -943,29 +955,33 @@ impl BytecodeExecutor {
                 println!("{}", val);
             },
             BytecodeOp::StoreStorage(key) => {
-                let value = self.vm.pop_one("StoreStorage")?;
-                let value_bytes = value.to_string().into_bytes(); 
+                let val = self.vm.pop_one("StoreStorage")?;
+                
                 if let Some(storage) = self.vm.storage_backend.as_mut() {
-                    // Use the VM's auth_context and namespace
-                    storage.set(&self.vm.auth_context, &self.vm.namespace, &key, value_bytes)
+                    // Convert value to string and store
+                    let value_bytes = val.to_string().into_bytes();
+                    storage.set(self.vm.auth_context.as_ref(), &self.vm.namespace, &key, value_bytes)
                         .map_err(|e| VMError::StorageError(e.to_string()))?;
                 } else {
-                    return Err(VMError::StorageUnavailable);
+                    return Err(VMError::StorageError("No storage backend configured".to_string()));
                 }
             },
             BytecodeOp::LoadStorage(key) => {
-                 if let Some(storage) = self.vm.storage_backend.as_ref() {
+                if let Some(storage) = self.vm.storage_backend.as_ref() {
                     // Use the VM's auth_context and namespace
-                    let value_bytes = storage.get(&self.vm.auth_context, &self.vm.namespace, &key)
+                    let value_bytes = storage.get(self.vm.auth_context.as_ref(), &self.vm.namespace, &key)
                         .map_err(|e| VMError::StorageError(e.to_string()))?;
                     let value_str = String::from_utf8(value_bytes)
-                        .map_err(|e| VMError::StorageError(format!("Invalid UTF-8 data in storage for key '{}': {}", key, e)))?;
+                        .map_err(|_| VMError::StorageError("Invalid UTF-8 data in storage".to_string()))?;
+                    
+                    // Parse the value as a float
                     let value = value_str.parse::<f64>()
-                        .map_err(|e| VMError::StorageError(format!("Failed to parse storage value for key '{}' as number: {}, value was: '{}'", key, e, value_str)))?;
+                        .map_err(|_| VMError::StorageError(format!("Cannot parse '{}' as a number", value_str)))?;
+                    
                     self.vm.stack.push(value);
-                 } else {
-                    return Err(VMError::StorageUnavailable);
-                 }
+                } else {
+                    return Err(VMError::StorageError("No storage backend configured".to_string()));
+                }
             },
             BytecodeOp::Mod => {
                 let b = self.vm.pop_one("Mod")?;

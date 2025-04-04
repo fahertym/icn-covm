@@ -1,15 +1,17 @@
-use std::path::{Path, PathBuf};
-use std::fs::{self, File, create_dir_all, OpenOptions};
 use std::io::{self, Read, Write, BufRead, BufReader};
+use std::fs::{self, File, create_dir_all, OpenOptions};
+use std::path::{Path, PathBuf};
 use std::collections::HashMap;
 use serde::{Serialize, Deserialize};
-use crate::storage::traits::StorageBackend;
+use chrono::{NaiveDateTime, TimeZone, Utc};
+use std::time::SystemTime;
 use crate::storage::auth::AuthContext;
+use crate::storage::traits::StorageBackend;
 use crate::storage::errors::{StorageError, StorageResult};
-use crate::storage::versioning::VersionInfo;
-use crate::storage::namespaces::NamespaceMetadata;
-use crate::storage::utils::{now, Timestamp};
+use crate::storage::versioning::{VersionInfo, VersionDiff, DiffChange};
 use crate::storage::events::StorageEvent;
+use crate::storage::namespaces::NamespaceMetadata;
+use crate::storage::utils::{Timestamp, now};
 
 /// Represents a file-based persistent storage implementation.
 /// 
@@ -32,12 +34,12 @@ pub struct FileStorage {
     /// In-memory cache of namespace metadata (for performance)
     namespace_cache: HashMap<String, NamespaceMetadata>,
     /// In-memory cache of account data (for performance)
-    account_cache: HashMap<String, ResourceAccount>,
+    account_cache: HashMap<String, FileResourceAccount>,
 }
 
 /// Represents a user's resource account for storage quota management
-#[derive(Clone, Serialize, Deserialize)]
-struct ResourceAccount {
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct FileResourceAccount {
     user_id: String,
     quota_bytes: u64,
     used_bytes: u64,
@@ -199,7 +201,7 @@ impl FileStorage {
             
             if path.is_file() && path.extension().unwrap_or_default() == "json" {
                 let account_str = fs::read_to_string(&path)?;
-                let account: ResourceAccount = serde_json::from_str(&account_str)
+                let account: FileResourceAccount = serde_json::from_str(&account_str)
                     .map_err(|e| StorageError::SerializationError { details: e.to_string() })?;
                 
                 // Add to cache
@@ -316,7 +318,7 @@ impl FileStorage {
     }
     
     /// Records an audit log entry
-    fn record_audit_log(&self, auth: &AuthContext, action: &str, namespace: &str, key: Option<&str>, details: &str) -> StorageResult<()> {
+    fn record_audit_log(&self, auth: &AuthContext, action: &str, namespace: &str, key: Option<&str>, message: &str) -> StorageResult<()> {
         let now = now();
         let date = chrono::NaiveDateTime::from_timestamp_opt(now as i64, 0)
             .ok_or_else(|| StorageError::TransactionError { details: "Invalid timestamp".to_string() })?
@@ -330,7 +332,7 @@ impl FileStorage {
             action: action.to_string(),
             namespace: namespace.to_string(),
             key: key.map(String::from),
-            details: details.to_string(),
+            details: message.to_string(),
         };
         
         let log_str = serde_json::to_string(&log_entry)
@@ -400,7 +402,7 @@ impl FileStorage {
 }
 
 impl StorageBackend for FileStorage {
-    fn get(&self, auth: &AuthContext, namespace: &str, key: &str) -> StorageResult<Vec<u8>> {
+    fn get(&self, auth: Option<&AuthContext>, namespace: &str, key: &str) -> StorageResult<Vec<u8>> {
         // Check read permission
         self.check_permission(auth, "read", namespace)?;
         
@@ -423,12 +425,12 @@ impl StorageBackend for FileStorage {
         let data = self.read_version_data(namespace, key, latest_version.version)?;
         
         // Record audit log
-        self.record_audit_log(auth, "read", namespace, Some(key), &format!("Read version {}", latest_version.version))?;
+        self.record_audit_log(auth.as_ref().unwrap_or_else(|| panic!("Auth required for audit log")), "read", namespace, Some(key), &format!("Read version {}", latest_version.version))?;
         
         Ok(data)
     }
     
-    fn set(&mut self, auth: &AuthContext, namespace: &str, key: &str, value: Vec<u8>) -> StorageResult<()> {
+    fn set(&mut self, auth: Option<&AuthContext>, namespace: &str, key: &str, value: Vec<u8>) -> StorageResult<()> {
         // Check permissions
         self.check_permission(auth, "write", namespace)?;
         
@@ -465,10 +467,11 @@ impl StorageBackend for FileStorage {
             let additional_bytes = value_size - existing_size;
             
             // Get the user's account
-            if let Some(account) = self.account_cache.get_mut(&auth.user_id) {
+            let user_id = auth.map(|a| a.user_id.clone()).unwrap_or_else(|| "system".to_string());
+            if let Some(account) = self.account_cache.get_mut(&user_id) {
                 if account.used_bytes + additional_bytes > account.quota_bytes {
                     return Err(StorageError::QuotaExceeded {
-                        account_id: auth.user_id.clone(),
+                        account_id: user_id.clone(),
                         requested: additional_bytes,
                         available: account.quota_bytes.saturating_sub(account.used_bytes),
                     });
@@ -478,7 +481,7 @@ impl StorageBackend for FileStorage {
                 account.used_bytes += additional_bytes;
                 
                 // Save the updated account
-                let account_path = self.root_path.join("accounts").join(format!("{}.json", auth.user_id));
+                let account_path = self.root_path.join("accounts").join(format!("{}.json", user_id));
                 let account_str = serde_json::to_string(account)
                     .map_err(|e| StorageError::SerializationError { details: e.to_string() })?;
                 fs::write(account_path, account_str)?;
@@ -503,6 +506,9 @@ impl StorageBackend for FileStorage {
             })?;
         }
         
+        // Get the user ID for the version info
+        let user_id = auth.map(|a| a.user_id.clone()).unwrap_or_else(|| "system".to_string());
+        
         // Get the new version number
         let version_info = if key_metadata_exists {
             let mut metadata = self.read_key_metadata(namespace, key)?;
@@ -513,7 +519,7 @@ impl StorageBackend for FileStorage {
             let new_version = latest_version + 1;
             let version_info = VersionInfo {
                 version: new_version,
-                created_by: auth.user_id.clone(),
+                created_by: user_id.clone(),
                 timestamp: now(),
                 prev_version: metadata.versions.last().cloned().map(Box::new),
             };
@@ -526,14 +532,14 @@ impl StorageBackend for FileStorage {
             // First version
             let version_info = VersionInfo {
                 version: 1,
-                created_by: auth.user_id.clone(),
+                created_by: user_id.clone(),
                 timestamp: now(),
                 prev_version: None,
             };
             
             let metadata = KeyMetadata {
                 key: key.to_string(),
-                created_by: auth.user_id.clone(),
+                created_by: user_id.clone(),
                 created_at: now(),
                 versions: vec![version_info.clone()],
             };
@@ -548,7 +554,7 @@ impl StorageBackend for FileStorage {
         
         // Record to audit log
         self.record_audit_log(
-            auth,
+            auth.as_ref().unwrap_or_else(|| panic!("Auth required for audit log")),
             "write",
             namespace,
             Some(key),
@@ -558,7 +564,7 @@ impl StorageBackend for FileStorage {
         Ok(())
     }
     
-    fn delete(&mut self, auth: &AuthContext, namespace: &str, key: &str) -> StorageResult<()> {
+    fn delete(&mut self, auth: Option<&AuthContext>, namespace: &str, key: &str) -> StorageResult<()> {
         // Check write permission
         self.check_permission(auth, "write", namespace)?;
         
@@ -593,13 +599,18 @@ impl StorageBackend for FileStorage {
         fs::remove_dir_all(key_dir)?;
         
         // Record audit log
-        self.record_audit_log(auth, "delete", namespace, Some(key), 
-            &format!("Deleted key with {} versions", metadata.versions.len()))?;
+        self.record_audit_log(
+            auth.as_ref().unwrap_or_else(|| panic!("Auth required for audit log")),
+            "delete",
+            namespace,
+            Some(key),
+            &format!("Deleted version {}", latest_version.version),
+        )?;
         
         Ok(())
     }
     
-    fn list_keys(&self, auth: &AuthContext, namespace: &str, prefix: Option<&str>) -> StorageResult<Vec<String>> {
+    fn list_keys(&self, auth: Option<&AuthContext>, namespace: &str, prefix: Option<&str>) -> StorageResult<Vec<String>> {
         // Check read permission
         self.check_permission(auth, "read", namespace)?;
         
@@ -638,8 +649,13 @@ impl StorageBackend for FileStorage {
         }
         
         // Record audit log
-        self.record_audit_log(auth, "list_keys", namespace, None, 
-            &format!("Listed keys (found {})", keys.len()))?;
+        self.record_audit_log(
+            auth.as_ref().unwrap_or_else(|| panic!("Auth required for audit log")),
+            "list_keys",
+            namespace,
+            None,
+            &format!("Listed keys with prefix {:?}", prefix),
+        )?;
         
         Ok(keys)
     }
@@ -750,7 +766,7 @@ impl StorageBackend for FileStorage {
         Ok(())
     }
     
-    fn get_version(&self, auth: &AuthContext, namespace: &str, key: &str, version: u64) -> StorageResult<(Vec<u8>, VersionInfo)> {
+    fn get_version(&self, auth: Option<&AuthContext>, namespace: &str, key: &str, version: u64) -> StorageResult<(Vec<u8>, VersionInfo)> {
         // Check read permission
         self.check_permission(auth, "read", namespace)?;
         
@@ -775,13 +791,18 @@ impl StorageBackend for FileStorage {
         let data = self.read_version_data(namespace, key, version)?;
         
         // Record audit log
-        self.record_audit_log(auth, "read_version", namespace, Some(key), 
-            &format!("Read version {}", version))?;
+        self.record_audit_log(
+            auth.as_ref().unwrap_or_else(|| panic!("Auth required for audit log")),
+            "read_version",
+            namespace,
+            Some(key),
+            &format!("Read version {}", version),
+        )?;
         
         Ok((data, version_info.clone()))
     }
     
-    fn list_versions(&self, auth: &AuthContext, namespace: &str, key: &str) -> StorageResult<Vec<VersionInfo>> {
+    fn list_versions(&self, auth: Option<&AuthContext>, namespace: &str, key: &str) -> StorageResult<Vec<VersionInfo>> {
         // Check read permission
         self.check_permission(auth, "read", namespace)?;
         
@@ -796,88 +817,76 @@ impl StorageBackend for FileStorage {
         let metadata = self.read_key_metadata(namespace, key)?;
         
         // Record audit log
-        self.record_audit_log(auth, "list_versions", namespace, Some(key), 
-            &format!("Listed versions (found {})", metadata.versions.len()))?;
+        self.record_audit_log(
+            auth.as_ref().unwrap_or_else(|| panic!("Auth required for audit log")),
+            "list_versions",
+            namespace,
+            Some(key),
+            &format!("Listed versions for key"),
+        )?;
         
         Ok(metadata.versions)
     }
     
-    fn diff_versions(&self, auth: &AuthContext, namespace: &str, key: &str, v1: u64, v2: u64) -> StorageResult<crate::storage::versioning::VersionDiff<Vec<u8>>> {
-        // Check permissions
+    fn diff_versions(&self, auth: Option<&AuthContext>, namespace: &str, key: &str, v1: u64, v2: u64) -> StorageResult<VersionDiff<Vec<u8>>> {
+        // Check read permission
         self.check_permission(auth, "read", namespace)?;
         
-        // Check if namespace exists
-        if !self.namespace_exists(namespace) {
-            return Err(StorageError::NotFound {
-                key: format!("{}:{}", namespace, key),
-            });
-        }
+        // Get the data for version 1
+        let (data1, info1) = self.get_version(auth, namespace, key, v1)?;
         
-        // Read metadata to get version info
-        let metadata = self.read_key_metadata(namespace, key)?;
-        
-        // Find version info for v1
-        let v1_info = metadata.versions.iter()
-            .find(|v| v.version == v1)
-            .ok_or_else(|| StorageError::NotFound {
-                key: format!("{}:{}:v{}", namespace, key, v1),
-            })?;
-        
-        // Find version info for v2
-        let v2_info = metadata.versions.iter()
-            .find(|v| v.version == v2)
-            .ok_or_else(|| StorageError::NotFound {
-                key: format!("{}:{}:v{}", namespace, key, v2),
-            })?;
-        
-        // Read data for both versions
-        let v1_data = self.read_version_data(namespace, key, v1)?;
-        let v2_data = self.read_version_data(namespace, key, v2)?;
+        // Get the data for version 2
+        let (data2, info2) = self.get_version(auth, namespace, key, v2)?;
         
         // Record the audit event
         self.record_audit_log(
-            auth,
-            "diff",
+            auth.as_ref().unwrap_or_else(|| panic!("Auth required for audit log")),
+            "diff_versions",
             namespace,
             Some(key),
-            &format!("Diff between v{} and v{}", v1, v2),
+            &format!("Diffed versions {} and {}", v1, v2),
         )?;
         
-        // For now, just a simple comparison of data size differences
-        // In a real implementation, you might want to use a diff algorithm
-        use crate::storage::versioning::{VersionDiff, DiffChange};
-        let diff = VersionDiff {
+        // Implementation of diff can vary, but here's a basic one
+        // Just indicate if the entire value changed
+        let mut changes = Vec::new();
+        
+        if data1 != data2 {
+            changes.push(DiffChange::ValueChanged {
+                path: "data".to_string(),
+                old_value: data1.clone(),
+                new_value: data2.clone(),
+            });
+        }
+        
+        // Create a user ID for the diff creator
+        let user_id = auth.map(|a| a.user_id.clone()).unwrap_or_else(|| "system".to_string());
+        
+        // Return the diff
+        Ok(VersionDiff {
             old_version: v1,
             new_version: v2,
-            created_by: auth.user_id.clone(),
+            created_by: user_id,
             timestamp: now(),
-            changes: vec![
-                DiffChange::ValueChanged {
-                    path: key.to_string(),
-                    old_value: v1_data,
-                    new_value: v2_data,
-                }
-            ],
-        };
-        
-        Ok(diff)
+            changes,
+        })
     }
     
-    fn create_namespace(&mut self, auth: &AuthContext, namespace: &str, quota_bytes: u64, parent: Option<&str>) -> StorageResult<()> {
+    fn create_namespace(&mut self, auth: Option<&AuthContext>, namespace: &str, quota_bytes: u64, parent_namespace: Option<&str>) -> StorageResult<()> {
         // Check if user has admin permission on global or parent namespace
-        let can_create = auth.has_role("global", "admin") || 
-            parent.map_or(false, |p| auth.has_role(p, "admin"));
+        let can_create = auth.map_or(false, |a| a.has_role("global", "admin") || 
+            parent_namespace.map_or(false, |p| a.has_role(p, "admin")));
             
         if !can_create {
             return Err(StorageError::PermissionDenied {
-                user_id: auth.user_id.clone(),
+                user_id: auth.map_or("anonymous".to_string(), |a| a.user_id.clone()),
                 action: "create_namespace".to_string(),
                 key: namespace.to_string(),
             });
         }
         
         // Check if parent exists when specified
-        if let Some(parent_ns) = parent {
+        if let Some(parent_ns) = parent_namespace {
             if !self.namespace_exists(parent_ns) {
                 return Err(StorageError::NotFound {
                     key: format!("Parent namespace not found: {}", parent_ns),
@@ -900,10 +909,10 @@ impl StorageBackend for FileStorage {
         // Create namespace metadata
         let metadata = NamespaceMetadata {
             path: namespace.to_string(),
-            owner: auth.user_id.clone(),
+            owner: auth.map_or("SYSTEM".to_string(), |a| a.user_id.clone()),
             quota_bytes,
             used_bytes: 0,
-            parent: parent.map(String::from),
+            parent: parent_namespace.map(String::from),
             attributes: std::collections::HashMap::new(),
         };
         
@@ -919,13 +928,15 @@ impl StorageBackend for FileStorage {
         })?;
         
         // Record audit log
-        self.record_audit_log(auth, "create_namespace", namespace, None,
-            &format!("Created namespace with quota {} bytes", quota_bytes))?;
+        if let Some(auth_ref) = auth {
+            self.record_audit_log(auth_ref, "create_namespace", namespace, None,
+                &format!("Created namespace with quota {} bytes", quota_bytes))?;
+        }
         
         Ok(())
     }
     
-    fn list_namespaces(&self, auth: &AuthContext, parent_namespace: &str) -> StorageResult<Vec<crate::storage::namespaces::NamespaceMetadata>> {
+    fn list_namespaces(&self, auth: Option<&AuthContext>, parent_namespace: &str) -> StorageResult<Vec<crate::storage::namespaces::NamespaceMetadata>> {
         // Check if the parent namespace exists
         if !parent_namespace.is_empty() && !self.namespace_exists(parent_namespace) {
             return Err(StorageError::NotFound {
@@ -945,22 +956,24 @@ impl StorageBackend for FileStorage {
             }
             
             // Check permission - user must have at least reader role
-            if auth.has_role(path, "reader") || 
-               auth.has_role(path, "writer") || 
-               auth.has_role(path, "admin") ||
-               auth.has_role("global", "admin") {
+            if auth.map_or(false, |a| a.has_role(path, "reader") || 
+               a.has_role(path, "writer") || 
+               a.has_role(path, "admin") ||
+               a.has_role("global", "admin")) {
                 namespaces.push(metadata.clone());
             }
         }
         
         // Record audit log
-        self.record_audit_log(auth, "list_namespaces", parent_namespace, None,
-            &format!("Listed namespaces (found {})", namespaces.len()))?;
+        if let Some(auth_ref) = auth {
+            self.record_audit_log(auth_ref, "list_namespaces", parent_namespace, None,
+                &format!("Listed namespaces (found {})", namespaces.len()))?;
+        }
         
         Ok(namespaces)
     }
     
-    fn get_usage(&self, auth: &AuthContext, namespace: &str) -> StorageResult<u64> {
+    fn get_usage(&self, auth: Option<&AuthContext>, namespace: &str) -> StorageResult<u64> {
         // Check permission
         self.check_permission(auth, "read", namespace)?;
         
@@ -1005,25 +1018,24 @@ impl StorageBackend for FileStorage {
         Ok(total_size)
     }
     
-    fn create_account(&mut self, auth: &AuthContext, user_id: &str, quota_bytes: u64) -> StorageResult<()> {
-        // Check if user has admin permission
-        if !auth.has_role("global", "admin") {
-            return Err(StorageError::PermissionDenied {
-                user_id: auth.user_id.clone(),
-                action: "create_account".to_string(),
-                key: user_id.to_string(),
-            });
-        }
+    fn create_account(&mut self, auth: Option<&AuthContext>, user_id: &str, quota_bytes: u64) -> StorageResult<()> {
+        // Check admin permissions
+        self.check_permission(auth, "admin", "global")?;
+        
+        // Create accounts directory if it doesn't exist
+        let accounts_dir = self.root_path.join("accounts");
+        create_dir_all(&accounts_dir)?;
         
         // Check if account already exists
-        if self.account_cache.contains_key(user_id) {
+        let account_path = accounts_dir.join(format!("{}.json", user_id));
+        if account_path.exists() {
             return Err(StorageError::TransactionError {
-                details: format!("Account already exists: {}", user_id),
+                details: format!("Account already exists for user {}", user_id),
             });
         }
         
-        // Create account
-        let account = ResourceAccount {
+        // Create resource account
+        let account = FileResourceAccount {
             user_id: user_id.to_string(),
             quota_bytes,
             used_bytes: 0,
@@ -1031,92 +1043,74 @@ impl StorageBackend for FileStorage {
             last_updated: now(),
         };
         
-        // Write to file
-        let account_path = self.root_path.join("accounts").join(format!("{}.json", user_id));
-        let account_str = serde_json::to_string(&account)
-            .map_err(|e| StorageError::SerializationError { details: e.to_string() })?;
+        // Store it in cache
+        self.account_cache.insert(user_id.to_string(), account.clone());
         
-        fs::write(account_path, account_str)?;
+        // Serialize to JSON and write to file
+        let account_json = match serde_json::to_string_pretty(&account) {
+            Ok(json) => json,
+            Err(e) => return Err(StorageError::SerializationError { 
+                details: format!("Failed to serialize account: {}", e) 
+            }),
+        };
         
-        // Add to cache
-        self.account_cache.insert(user_id.to_string(), account);
+        fs::write(account_path, account_json)?;
         
         // Record audit log
-        self.record_audit_log(auth, "create_account", "global", Some(user_id),
-            &format!("Created account with quota {} bytes", quota_bytes))?;
+        self.record_audit_log(
+            auth.as_ref().unwrap_or_else(|| panic!("Auth required for audit log")),
+            "account_created",
+            "global",
+            Some(user_id),
+            &format!("Created account with {} byte quota", quota_bytes),
+        )?;
         
         Ok(())
     }
     
-    fn get_audit_log(&self, auth: &AuthContext, namespace: Option<&str>, event_type: Option<&str>, limit: usize) -> StorageResult<Vec<StorageEvent>> {
-        // Check permissions - only admins can access audit logs
-        if !auth.has_role("global", "admin") {
+    fn get_audit_log(&self, auth: Option<&AuthContext>, namespace: Option<&str>, event_type: Option<&str>, limit: usize) -> StorageResult<Vec<StorageEvent>> {
+        // Permission Check: Only global admin or namespace admin (for that namespace)
+        let effective_ns = namespace.unwrap_or("global");
+        if !auth.unwrap().has_role("global", "admin") && !auth.unwrap().has_role(effective_ns, "admin") {
             return Err(StorageError::PermissionDenied {
-                user_id: auth.user_id.clone(),
-                action: "get_audit_log".to_string(),
-                key: "audit_logs".to_string(),
+                user_id: auth.unwrap().user_id.clone(),
+                action: "view_audit_log".to_string(),
+                key: effective_ns.to_string(),
             });
         }
         
-        let mut events = Vec::new();
-        let audit_dir = self.root_path.join("audit_logs");
-        
-        // Filter logs by namespace if specified
-        let target_dir = if let Some(ns) = namespace {
-            audit_dir.join(ns)
-        } else {
-            audit_dir
-        };
-        
-        if !target_dir.exists() {
+        // Get log file
+        let log_path = self.root_path.join("audit_logs").join("audit.log");
+        if !log_path.exists() {
             return Ok(Vec::new());
         }
         
-        // Read all log files in the directory
-        for entry in fs::read_dir(target_dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            
-            if path.is_file() && path.extension().unwrap_or_default() == "log" {
-                // Extract date from filename if needed for filtering
-                // For now, we're just reading all log files
-                
-                let file = File::open(&path)?;
-                let reader = BufReader::new(file);
-                
-                for line_result in reader.lines() {
-                    let line = line_result?;
-                    
-                    // Parse the log entry
-                    let log_entry: AuditLogEntry = serde_json::from_str(&line)
-                        .map_err(|e| StorageError::SerializationError { details: e.to_string() })?;
-                    
-                    // Apply event_type filter if specified
-                    if let Some(et) = event_type {
-                        if log_entry.action != et {
-                            continue;
-                        }
-                    }
-                    
-                    // Convert AuditLogEntry to StorageEvent
-                    let event = StorageEvent {
-                        event_type: log_entry.action,
-                        user_id: log_entry.user_id,
-                        namespace: log_entry.namespace,
-                        key: log_entry.key.unwrap_or_default(),
-                        timestamp: log_entry.timestamp,
-                        details: log_entry.details,
-                    };
-                    
-                    events.push(event);
-                    
-                    // Check if we've reached the limit
-                    if events.len() >= limit {
-                        break;
+        // Read log file
+        let file = File::open(log_path)?;
+        let reader = BufReader::new(file);
+        
+        // Parse events
+        let mut events = Vec::new();
+        for line in reader.lines() {
+            let line = line?;
+            if let Ok(event) = serde_json::from_str::<StorageEvent>(&line) {
+                // Filter by namespace
+                if let Some(ns) = namespace {
+                    if event.namespace != ns {
+                        continue;
                     }
                 }
                 
-                // Check if we've reached the limit after processing a file
+                // Filter by event type
+                if let Some(et) = event_type {
+                    if event.event_type != et {
+                        continue;
+                    }
+                }
+                
+                events.push(event);
+                
+                // Limit results
                 if events.len() >= limit {
                     break;
                 }
@@ -1126,7 +1120,7 @@ impl StorageBackend for FileStorage {
         Ok(events)
     }
 
-    fn get_versioned(&self, auth: &AuthContext, namespace: &str, key: &str) -> StorageResult<(Vec<u8>, VersionInfo)> {
+    fn get_versioned(&self, auth: Option<&AuthContext>, namespace: &str, key: &str) -> StorageResult<(Vec<u8>, VersionInfo)> {
         // Check the user has permission to read from this namespace
         self.check_permission(auth, "read", namespace)?;
         
@@ -1154,19 +1148,24 @@ impl StorageBackend for FileStorage {
         })?.clone();
         
         // Record the audit event
-        self.record_audit_log(
-            auth,
-            "read",
-            namespace,
-            Some(key),
-            &format!("Read versioned data (v{})", latest_version),
-        )?;
+        if let Some(auth_ref) = auth {
+            self.record_audit_log(auth_ref, "read", namespace, Some(key),
+                &format!("Read versioned data (v{})", latest_version)
+            )?;
+        }
         
         Ok((data, version_info))
     }
 
     // Implement the public trait method by delegating to our internal method
-    fn check_permission(&self, auth: &AuthContext, action: &str, namespace: &str) -> StorageResult<()> {
-        self.check_permission_internal(auth, action, namespace)
+    fn check_permission(&self, auth: Option<&AuthContext>, action: &str, namespace: &str) -> StorageResult<()> {
+        match auth {
+            Some(auth) => self.check_permission_internal(auth, action, namespace),
+            None => Err(StorageError::PermissionDenied {
+                user_id: "anonymous".to_string(),
+                action: action.to_string(),
+                key: namespace.to_string(),
+            }),
+        }
     }
 }

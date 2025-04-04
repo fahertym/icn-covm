@@ -141,6 +141,10 @@ pub enum CompilerError {
     /// Invalid indentation level
     #[error("Invalid indentation level at line {0}")]
     InvalidIndentation(usize),
+    
+    /// Syntax error in parsing
+    #[error("Syntax error: {details}")]
+    SyntaxError { details: String },
 }
 
 /// Source position information for error reporting
