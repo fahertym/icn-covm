@@ -9,4 +9,4 @@ pub fn now() -> Timestamp {
         .duration_since(UNIX_EPOCH)
         .expect("Time went backwards") // Or handle error more gracefully
         .as_secs()
-} 
+}

@@ -1,35 +1,35 @@
-use icn_covm::identity::{Identity, Credential, DelegationLink, MemberProfile};
-use icn_covm::storage::auth::AuthContext;
-use icn_covm::vm::{VM, Op};
 use icn_covm::compiler::parse_dsl;
+use icn_covm::identity::{Credential, DelegationLink, Identity, MemberProfile};
+use icn_covm::storage::auth::AuthContext;
+use icn_covm::vm::{Op, VM};
 
 // Test helpers
 fn create_test_identity(id: &str, identity_type: &str) -> Identity {
     // Create a basic identity
     let mut identity = Identity::new(id, identity_type);
-    
+
     // Add a public key (mock)
     let public_key = vec![1, 2, 3, 4, 5];
     identity.public_key = Some(public_key);
     identity.crypto_scheme = Some("ed25519".to_string());
-    
+
     // Add metadata
     identity.add_metadata("coop_id", "test_coop");
-    
+
     identity
 }
 
 fn create_test_member(id: &str) -> MemberProfile {
     // Create the identity first
     let identity = create_test_identity(id, "member");
-    
+
     // Create the member profile
     let mut member = MemberProfile::new(identity, crate::storage::utils::now());
-    
+
     // Add some roles
     member.add_role("member");
     member.add_role("voter");
-    
+
     member
 }
 
@@ -42,14 +42,14 @@ fn create_test_credential(id: &str, issuer_id: &str, holder_id: &str) -> Credent
         holder_id,
         crate::storage::utils::now(),
     );
-    
+
     // Add claims
     credential.add_claim("namespace", "test_coop");
     credential.add_claim("cooperative_id", "test_coop");
-    
+
     // Sign it (mock)
     credential.sign(vec![5, 4, 3, 2, 1]);
-    
+
     credential
 }
 
@@ -62,14 +62,14 @@ fn create_test_delegation(id: &str, delegator_id: &str, delegate_id: &str) -> De
         "voting",
         crate::storage::utils::now(),
     );
-    
+
     // Add permissions
     delegation.add_permission("vote");
     delegation.add_permission("propose");
-    
+
     // Sign it (mock)
     delegation.sign(vec![9, 8, 7, 6, 5]);
-    
+
     delegation
 }
 
@@ -78,35 +78,27 @@ fn setup_identity_context() -> AuthContext {
     let member_id = "member1";
     let member_identity = create_test_identity(member_id, "member");
     let mut auth = AuthContext::with_identity(member_id, member_identity.clone());
-    
+
     // Add some roles
     auth.add_role("test_coop", "member");
     auth.add_role("coops/test_coop", "member");
     auth.add_role("coops/test_coop/proposals", "proposer");
-    
+
     // Add identities to registry
     auth.register_identity(member_identity);
     auth.register_identity(create_test_identity("member2", "member"));
     auth.register_identity(create_test_identity("test_coop", "cooperative"));
-    
+
     // Add member profiles
     auth.register_member(create_test_member("member1"));
     auth.register_member(create_test_member("member2"));
-    
+
     // Add credentials
-    auth.register_credential(create_test_credential(
-        "cred1", 
-        "test_coop", 
-        "member1"
-    ));
-    
+    auth.register_credential(create_test_credential("cred1", "test_coop", "member1"));
+
     // Add delegations
-    auth.register_delegation(create_test_delegation(
-        "deleg1",
-        "member2",
-        "member1"
-    ));
-    
+    auth.register_delegation(create_test_delegation("deleg1", "member2", "member1"));
+
     auth
 }
 
@@ -115,28 +107,24 @@ fn test_identity_verification() {
     let auth = setup_identity_context();
     let mut vm = VM::new();
     vm.set_auth_context(auth);
-    
+
     // Test verifying a signature (using the mock that always returns true if identity exists)
-    let ops = vec![
-        Op::VerifyIdentity { 
-            identity_id: "member1".to_string(),
-            message: "test message".to_string(),
-            signature: "mock signature".to_string(),
-        },
-    ];
-    
+    let ops = vec![Op::VerifyIdentity {
+        identity_id: "member1".to_string(),
+        message: "test message".to_string(),
+        signature: "mock signature".to_string(),
+    }];
+
     vm.execute(&ops).unwrap();
     assert_eq!(vm.top(), Some(1.0)); // Should be true (1.0)
-    
+
     // Test with non-existent identity
-    let ops = vec![
-        Op::VerifyIdentity { 
-            identity_id: "nonexistent".to_string(),
-            message: "test message".to_string(),
-            signature: "mock signature".to_string(),
-        },
-    ];
-    
+    let ops = vec![Op::VerifyIdentity {
+        identity_id: "nonexistent".to_string(),
+        message: "test message".to_string(),
+        signature: "mock signature".to_string(),
+    }];
+
     vm.execute(&ops).unwrap();
     assert_eq!(vm.top(), Some(0.0)); // Should be false (0.0)
 }
@@ -146,37 +134,31 @@ fn test_membership_check() {
     let auth = setup_identity_context();
     let mut vm = VM::new();
     vm.set_auth_context(auth);
-    
+
     // Test checking membership in a namespace where the member belongs
-    let ops = vec![
-        Op::CheckMembership { 
-            identity_id: "member1".to_string(),
-            namespace: "coops/test_coop".to_string(),
-        },
-    ];
-    
+    let ops = vec![Op::CheckMembership {
+        identity_id: "member1".to_string(),
+        namespace: "coops/test_coop".to_string(),
+    }];
+
     vm.execute(&ops).unwrap();
     assert_eq!(vm.top(), Some(1.0)); // Should be true (1.0)
-    
+
     // Test with a namespace where the member doesn't belong
-    let ops = vec![
-        Op::CheckMembership { 
-            identity_id: "member1".to_string(),
-            namespace: "coops/other_coop".to_string(),
-        },
-    ];
-    
+    let ops = vec![Op::CheckMembership {
+        identity_id: "member1".to_string(),
+        namespace: "coops/other_coop".to_string(),
+    }];
+
     vm.execute(&ops).unwrap();
     assert_eq!(vm.top(), Some(0.0)); // Should be false (0.0)
-    
+
     // Test with non-existent identity
-    let ops = vec![
-        Op::CheckMembership { 
-            identity_id: "nonexistent".to_string(),
-            namespace: "coops/test_coop".to_string(),
-        },
-    ];
-    
+    let ops = vec![Op::CheckMembership {
+        identity_id: "nonexistent".to_string(),
+        namespace: "coops/test_coop".to_string(),
+    }];
+
     vm.execute(&ops).unwrap();
     assert_eq!(vm.top(), Some(0.0)); // Should be false (0.0)
 }
@@ -186,37 +168,31 @@ fn test_delegation_check() {
     let auth = setup_identity_context();
     let mut vm = VM::new();
     vm.set_auth_context(auth);
-    
+
     // Test checking a valid delegation
-    let ops = vec![
-        Op::CheckDelegation { 
-            delegator_id: "member2".to_string(),
-            delegate_id: "member1".to_string(),
-        },
-    ];
-    
+    let ops = vec![Op::CheckDelegation {
+        delegator_id: "member2".to_string(),
+        delegate_id: "member1".to_string(),
+    }];
+
     vm.execute(&ops).unwrap();
     assert_eq!(vm.top(), Some(1.0)); // Should be true (1.0)
-    
+
     // Test with invalid delegation
-    let ops = vec![
-        Op::CheckDelegation { 
-            delegator_id: "member1".to_string(),
-            delegate_id: "member2".to_string(),
-        },
-    ];
-    
+    let ops = vec![Op::CheckDelegation {
+        delegator_id: "member1".to_string(),
+        delegate_id: "member2".to_string(),
+    }];
+
     vm.execute(&ops).unwrap();
     assert_eq!(vm.top(), Some(0.0)); // Should be false (0.0)
-    
+
     // Test with non-existent identity
-    let ops = vec![
-        Op::CheckDelegation { 
-            delegator_id: "nonexistent".to_string(),
-            delegate_id: "member1".to_string(),
-        },
-    ];
-    
+    let ops = vec![Op::CheckDelegation {
+        delegator_id: "nonexistent".to_string(),
+        delegate_id: "member1".to_string(),
+    }];
+
     vm.execute(&ops).unwrap();
     assert_eq!(vm.top(), Some(0.0)); // Should be false (0.0)
 }
@@ -234,35 +210,45 @@ fn test_dsl_parsing() {
         # Delegation check
         checkdelegation member2 member1
     "#;
-    
+
     let ops = parse_dsl(source).unwrap();
-    
+
     // Check that we got the expected number of operations
     assert_eq!(ops.len(), 3);
-    
+
     // Check that the operations are of the correct type
     match &ops[0] {
-        Op::VerifyIdentity { identity_id, message, signature } => {
+        Op::VerifyIdentity {
+            identity_id,
+            message,
+            signature,
+        } => {
             assert_eq!(identity_id, "member1");
             assert_eq!(message, "test message");
             assert_eq!(signature, "mock signature");
-        },
+        }
         _ => panic!("Expected VerifyIdentity operation"),
     }
-    
+
     match &ops[1] {
-        Op::CheckMembership { identity_id, namespace } => {
+        Op::CheckMembership {
+            identity_id,
+            namespace,
+        } => {
             assert_eq!(identity_id, "member1");
             assert_eq!(namespace, "coops/test_coop");
-        },
+        }
         _ => panic!("Expected CheckMembership operation"),
     }
-    
+
     match &ops[2] {
-        Op::CheckDelegation { delegator_id, delegate_id } => {
+        Op::CheckDelegation {
+            delegator_id,
+            delegate_id,
+        } => {
             assert_eq!(delegator_id, "member2");
             assert_eq!(delegate_id, "member1");
-        },
+        }
         _ => panic!("Expected CheckDelegation operation"),
     }
 }
@@ -272,7 +258,7 @@ fn test_identity_dsl_execution() {
     let auth = setup_identity_context();
     let mut vm = VM::new();
     vm.set_auth_context(auth);
-    
+
     // Test executing a DSL program with identity operations
     let source = r#"
         # Identity verification with valid identity
@@ -288,10 +274,10 @@ fn test_identity_dsl_execution() {
         add
         add
     "#;
-    
+
     let ops = parse_dsl(source).unwrap();
     vm.execute(&ops).unwrap();
-    
+
     // If all 3 operations returned true (1.0), the sum should be 3.0
     assert_eq!(vm.top(), Some(3.0));
 }
@@ -301,7 +287,7 @@ fn test_tutorial_demo() {
     let auth = setup_identity_context();
     let mut vm = VM::new();
     vm.set_auth_context(auth);
-    
+
     // This is a complete tutorial demo showing how identity-aware opcodes
     // enforce cooperative permissions during execution
     let source = r#"
@@ -356,15 +342,18 @@ fn test_tutorial_demo() {
         # Return the operation success status
         load operation_success
     "#;
-    
+
     let ops = parse_dsl(source).unwrap();
     vm.execute(&ops).unwrap();
-    
+
     // Check that the operation succeeded
     assert_eq!(vm.top(), Some(1.0));
-    
+
     // Let's also check that the expected events were emitted
-    assert!(vm.events.iter().any(|e| e.message == "User is authorized to create a proposal"));
+    assert!(vm
+        .events
+        .iter()
+        .any(|e| e.message == "User is authorized to create a proposal"));
 }
 
 #[test]
@@ -372,9 +361,9 @@ fn test_edge_cases() {
     let auth = setup_identity_context();
     let mut vm = VM::new();
     vm.set_auth_context(auth);
-    
+
     // Test edge cases and error handling
-    
+
     // 1. Unknown identity
     let source = r#"
         verifyidentity unknown_user "test" "test"
@@ -384,26 +373,22 @@ fn test_edge_cases() {
         load result1
         not
     "#;
-    
+
     let ops = parse_dsl(source).unwrap();
     vm.execute(&ops).unwrap();
     assert_eq!(vm.top(), Some(1.0)); // not 0.0 => 1.0
-    
+
     // 2. Invalid signature
     // Note: Our mock doesn't actually check signatures,
     // but would in a real implementation
-    
+
     // 3. Delegation cycle
     // Create a circular delegation (member1 -> member2 -> member1)
     let mut auth = setup_identity_context();
-    auth.register_delegation(create_test_delegation(
-        "cycle-deleg",
-        "member1",
-        "member2"
-    ));
-    
+    auth.register_delegation(create_test_delegation("cycle-deleg", "member1", "member2"));
+
     vm.set_auth_context(auth);
-    
+
     let source = r#"
         # Check self-delegation (should be false)
         checkdelegation member1 member1
@@ -424,10 +409,10 @@ fn test_edge_cases() {
         # Check we got true for first result (result1 should be false, so !result1 = true)
         # and an implementation-specific result for result2 (depends on how cycles are handled)
     "#;
-    
+
     let ops = parse_dsl(source).unwrap();
     vm.execute(&ops).unwrap();
-    
+
     // 4. Missing memberships
     let source = r#"
         # Check a missing membership in non-existent coop
@@ -435,7 +420,7 @@ fn test_edge_cases() {
         
         # Should return false (0.0)
     "#;
-    
+
     let ops = parse_dsl(source).unwrap();
     vm.execute(&ops).unwrap();
     assert_eq!(vm.top(), Some(0.0));
@@ -446,84 +431,66 @@ fn test_identity_operations() {
     // Create admin identity
     let admin_id = Identity::new("admin", "admin");
     let mut admin_auth = AuthContext::new("admin");
-    
+
     // Create user identity with public key
     let mut user_id = Identity::new("user1", "member");
     user_id.public_key = Some(vec![1, 2, 3, 4]);
     user_id.crypto_scheme = Some("ed25519".to_string());
-    
+
     // Create a member profile
     let mut member = MemberProfile::new(user_id.clone(), 0);
     member.add_role("member");
-    
-    // Create a credential 
-    let credential = Credential::new(
-        "cred1",
-        "membership",
-        "admin",
-        "user1",
-        0,
-    );
-    
+
+    // Create a credential
+    let credential = Credential::new("cred1", "membership", "admin", "user1", 0);
+
     // Create a delegation
-    let delegation = DelegationLink::new(
-        "del1",
-        "user2",
-        "user1",
-        "voting",
-        0,
-    );
-    
+    let delegation = DelegationLink::new("del1", "user2", "user1", "voting", 0);
+
     // Create user authentication context
     let mut user_auth = AuthContext::new("user1");
     user_auth.add_role("coops/test_coop", "member");
-    
+
     // Register the identities
     user_auth.register_identity(user_id.clone());
     user_auth.register_identity(Identity::new("user2", "member"));
     user_auth.register_credential(credential);
     user_auth.register_delegation(delegation);
     user_auth.register_member(member);
-    
+
     // Create VM with auth context
     let mut vm = VM::new();
     vm.set_auth_context(user_auth);
-    
+
     // Test the identity verification operation
-    let ops = vec![
-        Op::VerifyIdentity {
-            identity_id: "user1".to_string(),
-            message: "test message".to_string(),
-            signature: "valid".to_string(),
-        }
-    ];
-    
+    let ops = vec![Op::VerifyIdentity {
+        identity_id: "user1".to_string(),
+        message: "test message".to_string(),
+        signature: "valid".to_string(),
+    }];
+
     // Execute and check result
     vm.execute(&ops).unwrap();
     assert_eq!(vm.top(), Some(1.0));
-    
+
     // Test membership check
-    let ops = vec![
-        Op::CheckMembership {
-            identity_id: "user1".to_string(), 
-            namespace: "coops/test_coop".to_string()
-        }
-    ];
-    
+    let ops = vec![Op::CheckMembership {
+        identity_id: "user1".to_string(),
+        namespace: "coops/test_coop".to_string(),
+    }];
+
     vm.execute(&ops).unwrap();
     assert_eq!(vm.top(), Some(1.0));
-    
+
     // Test delegation check
-    let ops = vec![
-        Op::CheckDelegation {
-            delegator_id: "user2".to_string(),
-            delegate_id: "user1".to_string(),
-        }
-    ];
-    
+    let ops = vec![Op::CheckDelegation {
+        delegator_id: "user2".to_string(),
+        delegate_id: "user1".to_string(),
+    }];
+
     vm.execute(&ops).unwrap();
     assert_eq!(vm.top(), Some(1.0));
-    
+
     // Test DSL parsing
     let source = r#"
         # Test the identity verification
@@ -539,10 +506,10 @@ fn test_identity_operations() {
         add
         add
     "#;
-    
+
     let ops = parse_dsl(source).unwrap();
     vm.execute(&ops).unwrap();
-    
+
     // Should be 3.0 if all three operations returned true (1.0)
     assert_eq!(vm.top(), Some(3.0));
-} 
+}

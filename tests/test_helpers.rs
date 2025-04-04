@@ -1,7 +1,7 @@
 use icn_covm::storage::auth::AuthContext;
+use icn_covm::storage::errors::StorageResult;
 use icn_covm::storage::implementations::in_memory::InMemoryStorage;
 use icn_covm::storage::traits::StorageBackend;
-use icn_covm::storage::errors::StorageResult;
 
 /// Creates an admin AuthContext with full permissions
 pub fn create_admin_auth() -> AuthContext {
@@ -43,25 +43,60 @@ pub fn create_observer_auth(user_id: &str) -> AuthContext {
 pub fn setup_test_storage() -> StorageResult<InMemoryStorage> {
     let mut storage = InMemoryStorage::new();
     let admin = create_admin_auth();
-    
+
     // Create standard namespaces
-    storage.create_namespace(&admin, "governance", 1024*1024, None)?;
-    storage.create_namespace(&admin, "governance/config", 1024*1024, Some("governance"))?;
-    storage.create_namespace(&admin, "governance/proposals", 1024*1024, Some("governance"))?;
-    storage.create_namespace(&admin, "governance/votes", 1024*1024, Some("governance"))?;
-    storage.create_namespace(&admin, "governance/members", 1024*1024, Some("governance"))?;
-    storage.create_namespace(&admin, "governance/delegations", 1024*1024, Some("governance"))?;
-    
+    storage.create_namespace(Some(&admin), "governance", 1024 * 1024, None)?;
+    storage.create_namespace(
+        Some(&admin),
+        "governance/config",
+        1024 * 1024,
+        Some("governance"),
+    )?;
+    storage.create_namespace(
+        Some(&admin),
+        "governance/proposals",
+        1024 * 1024,
+        Some("governance"),
+    )?;
+    storage.create_namespace(
+        Some(&admin),
+        "governance/votes",
+        1024 * 1024,
+        Some("governance"),
+    )?;
+    storage.create_namespace(
+        Some(&admin),
+        "governance/members",
+        1024 * 1024,
+        Some("governance"),
+    )?;
+    storage.create_namespace(
+        Some(&admin),
+        "governance/delegations",
+        1024 * 1024,
+        Some("governance"),
+    )?;
+
     // Create member-specific vote namespaces
-    storage.create_namespace(&admin, "governance/votes/member1", 1024*1024, Some("governance/votes"))?;
-    storage.create_namespace(&admin, "governance/votes/member2", 1024*1024, Some("governance/votes"))?;
-    
+    storage.create_namespace(
+        Some(&admin),
+        "governance/votes/member1",
+        1024 * 1024,
+        Some("governance/votes"),
+    )?;
+    storage.create_namespace(
+        Some(&admin),
+        "governance/votes/member2",
+        1024 * 1024,
+        Some("governance/votes"),
+    )?;
+
     // Create resource accounts
-    storage.create_account(&admin, "admin_user", 1024*1024)?;
-    storage.create_account(&admin, "member1", 1024*1024)?;
-    storage.create_account(&admin, "member2", 1024*1024)?;
-    storage.create_account(&admin, "observer_user", 1024*100)?;
-    
+    storage.create_account(Some(&admin), "admin_user", 1024 * 1024)?;
+    storage.create_account(Some(&admin), "member1", 1024 * 1024)?;
+    storage.create_account(Some(&admin), "member2", 1024 * 1024)?;
+    storage.create_account(Some(&admin), "observer_user", 1024 * 100)?;
+
     Ok(storage)
 }
 
@@ -73,4 +108,4 @@ pub fn to_bytes(value: &str) -> Vec<u8> {
 /// Converts bytes from storage to a string (with error handling)
 pub fn from_bytes(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).to_string()
-} 
+}

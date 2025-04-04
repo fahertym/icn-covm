@@ -2,22 +2,22 @@
 
 use icn_covm::bytecode::{BytecodeCompiler, BytecodeExecutor};
 use icn_covm::compiler::{parse_dsl, parse_dsl_with_stdlib, CompilerError};
-use icn_covm::storage::auth::AuthContext;
-use icn_covm::vm::{VM, VMError};
 use icn_covm::identity::{Identity, MemberProfile};
-use icn_covm::storage::traits::StorageBackend;
-use icn_covm::storage::implementations::in_memory::InMemoryStorage;
+use icn_covm::storage::auth::AuthContext;
 use icn_covm::storage::implementations::file_storage::FileStorage;
+use icn_covm::storage::implementations::in_memory::InMemoryStorage;
+use icn_covm::storage::traits::StorageBackend;
 use icn_covm::storage::utils::now;
+use icn_covm::vm::{VMError, VM};
 
-use clap::{Arg, Command, ArgAction};
+use clap::{Arg, ArgAction, Command};
 use std::collections::HashMap;
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 use std::process;
 use std::time::Instant;
 use thiserror::Error;
-use std::io::{Write};
 
 #[derive(Debug, Error)]
 enum AppError {
@@ -195,40 +195,57 @@ fn main() {
 
             // Execute the program
             if interactive {
-                if let Err(err) = run_interactive(verbose, parameters, use_bytecode, storage_backend, storage_path) {
+                if let Err(err) = run_interactive(
+                    verbose,
+                    parameters,
+                    use_bytecode,
+                    storage_backend,
+                    storage_path,
+                ) {
                     eprintln!("Error: {}", err);
                     process::exit(1);
                 }
             } else {
                 if benchmark {
-                    if let Err(err) = run_benchmark(program_path, verbose, use_stdlib, parameters, storage_backend, storage_path) {
+                    if let Err(err) = run_benchmark(
+                        program_path,
+                        verbose,
+                        use_stdlib,
+                        parameters,
+                        storage_backend,
+                        storage_path,
+                    ) {
                         eprintln!("Error: {}", err);
                         process::exit(1);
                     }
-                } else if let Err(err) =
-                    run_program(program_path, verbose, use_stdlib, parameters, use_bytecode, storage_backend, storage_path)
-                {
+                } else if let Err(err) = run_program(
+                    program_path,
+                    verbose,
+                    use_stdlib,
+                    parameters,
+                    use_bytecode,
+                    storage_backend,
+                    storage_path,
+                ) {
                     eprintln!("Error: {}", err);
                     process::exit(1);
                 }
             }
-        },
-        Some(("identity", identity_matches)) => {
-            match identity_matches.subcommand() {
-                Some(("register", register_matches)) => {
-                    let id_file = register_matches.get_one::<String>("file").unwrap();
-                    let id_type = register_matches.get_one::<String>("type").unwrap();
-                    let output_file = register_matches.get_one::<String>("output");
-                    
-                    if let Err(err) = register_identity(id_file, id_type, output_file) {
-                        eprintln!("Error registering identity: {}", err);
-                        process::exit(1);
-                    }
-                },
-                _ => {
-                    eprintln!("Unknown identity subcommand");
+        }
+        Some(("identity", identity_matches)) => match identity_matches.subcommand() {
+            Some(("register", register_matches)) => {
+                let id_file = register_matches.get_one::<String>("file").unwrap();
+                let id_type = register_matches.get_one::<String>("type").unwrap();
+                let output_file = register_matches.get_one::<String>("output");
+
+                if let Err(err) = register_identity(id_file, id_type, output_file) {
+                    eprintln!("Error registering identity: {}", err);
                     process::exit(1);
                 }
+            }
+            _ => {
+                eprintln!("Unknown identity subcommand");
+                process::exit(1);
             }
         },
         _ => {
@@ -241,8 +258,16 @@ fn main() {
             let use_bytecode = false;
             let storage_backend = "memory";
             let storage_path = "./storage";
-            
-            if let Err(err) = run_program(program_path, verbose, use_stdlib, parameters, use_bytecode, storage_backend, storage_path) {
+
+            if let Err(err) = run_program(
+                program_path,
+                verbose,
+                use_stdlib,
+                parameters,
+                use_bytecode,
+                storage_backend,
+                storage_path,
+            ) {
                 eprintln!("Error: {}", err);
                 process::exit(1);
             }
@@ -305,70 +330,71 @@ fn run_program(
 
     // Setup auth context and storage based on selected backend
     let auth_context = create_demo_auth_context();
-    
+
     // Select the appropriate storage backend
     if storage_backend == "file" {
         if verbose {
             println!("Using FileStorage backend at {}", storage_path);
         }
-        
+
         // Create the storage directory if it doesn't exist
         let storage_dir = Path::new(storage_path);
         if !storage_dir.exists() {
             if verbose {
                 println!("Creating storage directory: {}", storage_path);
             }
-            fs::create_dir_all(storage_dir)
-                .map_err(|e| AppError::Other(format!("Failed to create storage directory: {}", e)))?;
+            fs::create_dir_all(storage_dir).map_err(|e| {
+                AppError::Other(format!("Failed to create storage directory: {}", e))
+            })?;
         }
-        
+
         // Initialize the FileStorage backend
         match FileStorage::new(storage_path) {
             Ok(mut storage) => {
                 initialize_storage(&auth_context, &mut storage, verbose)?;
-                
+
                 if use_bytecode {
                     // Bytecode execution with FileStorage
                     let mut compiler = BytecodeCompiler::new();
                     let program = compiler.compile(&ops);
-                    
+
                     if verbose {
                         println!("Compiled bytecode program:\n{}", program.dump());
                     }
-                    
+
                     // Create bytecode interpreter with proper auth context and storage
                     let mut vm = VM::new();
                     vm.set_auth_context(auth_context);
                     vm.set_namespace("demo");
                     vm.set_storage_backend(storage);
-                    
+
                     let mut interpreter = BytecodeExecutor::new(vm, program.instructions);
-                    
+
                     // Set parameters
                     interpreter.vm.set_parameters(parameters)?;
-                    
+
                     // Execute
                     let start = Instant::now();
                     let result = interpreter.execute();
                     let duration = start.elapsed();
-                    
+
                     if verbose {
                         println!("Execution completed in {:?}", duration);
                     }
-                    
+
                     if let Err(err) = result {
                         return Err(err.into());
                     }
-                    
+
                     if verbose {
                         println!("Final stack: {:?}", interpreter.vm.stack);
-                        
+
                         if let Some(top) = interpreter.vm.top() {
                             println!("Top of stack: {}", top);
                         } else {
                             println!("Stack is empty");
                         }
-                        
+
                         println!("Final memory: {:?}", interpreter.vm.memory);
                     }
                 } else {
@@ -400,9 +426,12 @@ fn run_program(
                         }
                     }
                 }
-            },
+            }
             Err(e) => {
-                return Err(AppError::Other(format!("Failed to initialize file storage: {}", e)));
+                return Err(AppError::Other(format!(
+                    "Failed to initialize file storage: {}",
+                    e
+                )));
             }
         }
     } else {
@@ -410,53 +439,53 @@ fn run_program(
         if verbose {
             println!("Using InMemoryStorage backend");
         }
-        
+
         // Initialize InMemoryStorage
         let mut storage = InMemoryStorage::new();
         initialize_storage(&auth_context, &mut storage, verbose)?;
-        
+
         if use_bytecode {
             // Bytecode execution with InMemoryStorage
             let mut compiler = BytecodeCompiler::new();
             let program = compiler.compile(&ops);
-            
+
             if verbose {
                 println!("Compiled bytecode program:\n{}", program.dump());
             }
-            
+
             // Create bytecode interpreter with proper auth context and storage
             let mut vm = VM::new();
             vm.set_auth_context(auth_context);
             vm.set_namespace("demo");
             vm.set_storage_backend(storage);
-            
+
             let mut interpreter = BytecodeExecutor::new(vm, program.instructions);
-            
+
             // Set parameters
             interpreter.vm.set_parameters(parameters)?;
-            
+
             // Execute
             let start = Instant::now();
             let result = interpreter.execute();
             let duration = start.elapsed();
-            
+
             if verbose {
                 println!("Execution completed in {:?}", duration);
             }
-            
+
             if let Err(err) = result {
                 return Err(err.into());
             }
-            
+
             if verbose {
                 println!("Final stack: {:?}", interpreter.vm.stack);
-                
+
                 if let Some(top) = interpreter.vm.top() {
                     println!("Top of stack: {}", top);
                 } else {
                     println!("Stack is empty");
                 }
-                
+
                 println!("Final memory: {:?}", interpreter.vm.memory);
             }
         } else {
@@ -505,14 +534,14 @@ fn initialize_storage<T: StorageBackend>(
             println!("Warning: Failed to create account: {:?}", e);
         }
     }
-    
+
     // Create namespace
     if let Err(e) = storage.create_namespace(Some(auth_context), "demo", 1024 * 1024, None) {
         if verbose {
             println!("Warning: Failed to create namespace: {:?}", e);
         }
     }
-    
+
     Ok(())
 }
 
@@ -521,45 +550,45 @@ fn create_demo_auth_context() -> AuthContext {
     // Create a basic auth context for demo purposes
     let user_id = "demo_user";
     let mut auth = AuthContext::new(user_id);
-    
+
     // Add roles with storage permissions - match the required roles in StorageBackend impl
-    auth.add_role("global", "admin");   // Permission to create accounts and namespaces
-    auth.add_role("demo", "reader");    // Permission to read from demo namespace
-    auth.add_role("demo", "writer");    // Permission to write to demo namespace
-    auth.add_role("demo", "admin");     // Permission to administrate demo namespace
-    
+    auth.add_role("global", "admin"); // Permission to create accounts and namespaces
+    auth.add_role("demo", "reader"); // Permission to read from demo namespace
+    auth.add_role("demo", "writer"); // Permission to write to demo namespace
+    auth.add_role("demo", "admin"); // Permission to administrate demo namespace
+
     // Set up identity
     let mut identity = Identity::new(user_id, "user");
     identity.add_metadata("description", "Demo User");
-    
+
     // Register the identity
     auth.register_identity(identity);
-    
+
     // Set up member profile
     let mut profile = MemberProfile::new(Identity::new(user_id, "user"), now());
     profile.add_role("user");
     auth.register_member(profile);
-    
+
     auth
 }
 
 // Helper function to create a demo auth context and initialize storage
 fn setup_storage_for_demo() -> (AuthContext, InMemoryStorage) {
     let auth = create_demo_auth_context();
-    
+
     // Create storage backend
     let mut storage = InMemoryStorage::new();
-    
+
     // Create user account
     if let Err(e) = storage.create_account(Some(&auth), &auth.user_id, 1024 * 1024) {
         println!("Warning: Failed to create account: {:?}", e);
     }
-    
+
     // Create namespace
     if let Err(e) = storage.create_namespace(Some(&auth), "demo", 1024 * 1024, None) {
         println!("Warning: Failed to create namespace: {:?}", e);
     }
-    
+
     (auth, storage)
 }
 
@@ -609,12 +638,12 @@ fn run_benchmark(
     println!("\n1. Running AST interpreter...");
 
     let mut vm = VM::new();
-    
+
     // Set up auth context and namespace
     let auth_context = setup_storage_for_demo().0;
     vm.set_auth_context(auth_context.clone());
     vm.set_namespace("demo");
-    
+
     vm.set_parameters(parameters.clone())?;
 
     let ast_start = Instant::now();
@@ -637,7 +666,7 @@ fn run_benchmark(
     let mut vm = VM::new();
     vm.set_auth_context(auth_context);
     vm.set_namespace("demo");
-    
+
     let mut interpreter = BytecodeExecutor::new(vm, program.instructions);
     interpreter.vm.set_parameters(parameters)?;
 
@@ -695,14 +724,14 @@ fn run_interactive(
     use std::io::{self, Write};
 
     println!("ICN Cooperative VM Interactive Shell (type 'exit' to quit, 'help' for commands)");
-    
+
     let mut vm = VM::new();
-    
+
     // Set up auth context and namespace
     let (auth_context, _storage) = setup_storage_for_demo();
     vm.set_auth_context(auth_context);
     vm.set_namespace("demo");
-    
+
     vm.set_parameters(parameters)?;
 
     // Create an editor for interactive input
@@ -840,7 +869,8 @@ fn run_interactive(
                                 println!("{}", program.dump());
                             }
 
-                            let mut interpreter = BytecodeExecutor::new(VM::new(), program.instructions);
+                            let mut interpreter =
+                                BytecodeExecutor::new(VM::new(), program.instructions);
 
                             // Copy VM state to interpreter
                             for (key, value) in vm.memory.iter() {
@@ -892,13 +922,15 @@ fn register_identity(
     // Read the identity file
     let file_content = fs::read_to_string(id_file)?;
     let json_data: serde_json::Value = serde_json::from_str(&file_content)?;
-    
+
     // Extract identity information
-    let id = json_data["id"].as_str().ok_or_else(|| AppError::Other("Missing 'id' field".to_string()))?;
-    
+    let id = json_data["id"]
+        .as_str()
+        .ok_or_else(|| AppError::Other("Missing 'id' field".to_string()))?;
+
     // Create a new identity
     let mut identity = Identity::new(id, id_type);
-    
+
     // Add metadata from the JSON file
     if let Some(metadata) = json_data["metadata"].as_object() {
         for (key, value) in metadata {
@@ -907,7 +939,7 @@ fn register_identity(
             }
         }
     }
-    
+
     // Add public key if provided
     if let Some(public_key_str) = json_data["public_key"].as_str() {
         if let Some(crypto_scheme) = json_data["crypto_scheme"].as_str() {
@@ -918,12 +950,12 @@ fn register_identity(
             identity.crypto_scheme = Some(crypto_scheme.to_string());
         }
     }
-    
+
     // If this is a member, create a profile
     if id_type == "member" {
         let timestamp = now();
         let mut profile = MemberProfile::new(identity.clone(), timestamp);
-        
+
         // Add roles if provided
         if let Some(roles) = json_data["roles"].as_array() {
             for role in roles {
@@ -932,7 +964,7 @@ fn register_identity(
                 }
             }
         }
-        
+
         // Add attributes if provided
         if let Some(attributes) = json_data["attributes"].as_object() {
             for (key, value) in attributes {
@@ -941,9 +973,9 @@ fn register_identity(
                 }
             }
         }
-        
+
         println!("Member profile created for '{}'", id);
-        
+
         // In a real application, we would store this in persistent storage
         // For now, just print the information
         println!("  Roles: {:?}", profile.roles);
@@ -951,16 +983,19 @@ fn register_identity(
             println!("  Reputation: {}", reputation);
         }
     }
-    
+
     // Save to output file if requested
     if let Some(output_path) = output_file {
         let identity_json = serde_json::to_string_pretty(&identity)?;
         fs::write(output_path, identity_json)?;
         println!("Identity saved to '{}'", output_path);
     }
-    
-    println!("Identity '{}' of type '{}' registered successfully", id, id_type);
+
+    println!(
+        "Identity '{}' of type '{}' registered successfully",
+        id, id_type
+    );
     println!("Namespace: {}", identity.get_namespace());
-    
+
     Ok(())
 }

@@ -1,5 +1,5 @@
-use serde::{Serialize, Deserialize};
-use crate::storage::utils::{Timestamp, now};
+use crate::storage::utils::{now, Timestamp};
+use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 
 // Version info for stored data
@@ -34,38 +34,38 @@ impl VersionInfo {
             prev_version: Some(Box::new(self.clone())),
         }
     }
-    
+
     // Get all versions in chronological order (oldest first)
     pub fn get_version_history(&self) -> Vec<&VersionInfo> {
         let mut history = Vec::new();
         let mut current = self;
-        
+
         // Travel back through version history
         loop {
             history.push(current);
-            
+
             if let Some(prev) = &current.prev_version {
                 current = prev;
             } else {
                 break;
             }
         }
-        
+
         // Reverse to get oldest first
         history.reverse();
         history
     }
-    
+
     // Get a specific version by number (1-indexed)
     pub fn get_version(&self, version_number: u64) -> Option<&VersionInfo> {
         if version_number == self.version {
             return Some(self);
         }
-        
+
         if version_number > self.version {
             return None; // Future version
         }
-        
+
         // Travel back through history
         let mut current = self;
         while let Some(prev) = &current.prev_version {
@@ -74,7 +74,7 @@ impl VersionInfo {
                 return Some(current);
             }
         }
-        
+
         None // Not found
     }
 }
@@ -93,12 +93,25 @@ pub struct VersionDiff<T> {
 #[derive(Debug)]
 pub enum DiffChange<T> {
     // For simple values
-    ValueChanged { path: String, old_value: T, new_value: T },
+    ValueChanged {
+        path: String,
+        old_value: T,
+        new_value: T,
+    },
     // For more complex types like collections
-    Added { path: String, value: T },
-    Removed { path: String, value: T },
+    Added {
+        path: String,
+        value: T,
+    },
+    Removed {
+        path: String,
+        value: T,
+    },
     // For hierarchical structures
-    Modified { path: String, changes: Vec<DiffChange<T>> },
+    Modified {
+        path: String,
+        changes: Vec<DiffChange<T>>,
+    },
 }
 
 /// Version store for managing multiple versions of data
@@ -115,27 +128,29 @@ impl<T: Clone> VersionStore<T> {
             max_versions,
         }
     }
-    
+
     /// Add a new version
     pub fn add_version(&mut self, version_info: VersionInfo, data: T) {
         self.versions.push_back((version_info, data));
-        
+
         // Trim old versions if exceeding max
         while self.versions.len() > self.max_versions {
             self.versions.pop_front();
         }
     }
-    
+
     /// Get the current version
     pub fn get_current(&self) -> Option<&(VersionInfo, T)> {
         self.versions.back()
     }
-    
+
     /// Get a specific version by number
     pub fn get_version(&self, version_number: u64) -> Option<&(VersionInfo, T)> {
-        self.versions.iter().find(|(info, _)| info.version == version_number)
+        self.versions
+            .iter()
+            .find(|(info, _)| info.version == version_number)
     }
-    
+
     /// List available versions
     pub fn list_versions(&self) -> Vec<&VersionInfo> {
         self.versions.iter().map(|(info, _)| info).collect()
