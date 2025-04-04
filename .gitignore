@@ -30,3 +30,6 @@ full_project_dump.txt
 
 # Binary directory
 /src/bin/
+
+# Storage files
+/filestorage/

@@ -1,46 +1,34 @@
-# Fix: Implement Function Parameter Handling and Memory Isolation
+# Implement VM Storage Routing & Integration
 
-## Overview
+This PR adds routing capabilities to the VM allowing it to work with different storage backends (in-memory and file-based). This work is part of the storage rewrite to provide a more flexible and robust storage system.
 
-This PR implements proper function parameter passing and scoped memory isolation within the VM runtime. These changes ensure that:
+## Key Features
 
-1. Function parameters are correctly passed from the stack to the function
-2. Memory contexts are isolated between function calls
-3. Nested function calls maintain proper memory scoping
-4. Return values are properly preserved on the stack
-
-## Changes
-
-- Updated the `Op::Call` implementation in `src/vm.rs` to:
-  - Pop parameter values from the stack in the correct order
-  - Save the original memory context before function execution
-  - Create a new memory context with parameters correctly bound to values
-  - Restore the original memory context after function execution
-
-- Created test files to verify the implementation:
-  - `demo/test_function_basic.dsl`: Simple parameter passing test
-  - `demo/functions/test_nested_functions.dsl`: Tests memory isolation in nested calls
-
-- Fixed previously broken function examples:
-  - `demo/functions/function_example.dsl` now works as expected
+- Storage backend switching via command-line arguments
+- Persistent storage with file-based backend
+- Version history and versioning support
+- Storage audit logs 
+- Demo programs showcasing various storage capabilities
 
 ## Testing
 
-All tests have been verified through `cargo run` with the `--verbose` flag:
-- Basic function parameter passing works correctly
-- Nested function calls maintain proper memory isolation
-- Return values are correctly preserved on the stack
-- Previously broken example programs now execute as expected
+The core functionality has been tested with several demo programs:
+- Basic storage tests
+- Version history demonstration
+- Persistent counter example
 
-## Version Tag
+Some tests are failing due to API changes and will need to be updated separately.
 
-`v0.6.0-finalization`
+## Documentation
 
-## Feature Completeness
+- Updated storage.md with the new API details
+- Added storage_integration_guide.md with integration examples
 
-This PR completes the following VM features:
-- ✅ Arithmetic
-- ✅ Stack logic
-- ✅ Memory (transient and persistent)
-- ✅ Conditionals
-- ✅ Functions with parameter binding and memory scope 
+## Breaking Changes
+
+- Storage API has been updated to use the StorageBackend trait
+- Example code will need to be updated to use the new API
+
+## Future Work
+
+Further test updates and cleanup will be done in a separate PR. 
