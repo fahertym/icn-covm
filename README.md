@@ -6,6 +6,8 @@ A lightweight cooperative virtual machine for executing a domain-specific langua
 
 - **Bytecode Compiler & Interpreter**: Faster execution through bytecode compilation
 - **Typed Value System**: Optional support for multiple data types (numbers, booleans, strings)
+- **Identity-Aware Execution**: Support for authenticated operations and permission checks
+- **Persistent Storage**: Storage backends for maintaining state between executions
 - **Comprehensive Documentation**: Improved inline documentation and architecture docs
 - **Performance Benchmarking**: Compare AST interpretation vs bytecode execution
 
@@ -83,6 +85,48 @@ cargo run --features typed-values -- --program demo/typed/string_operations.dsl
 
 ---
 
+## Identity System
+
+The identity system provides secure authentication and authorization:
+
+- Identity verification with cryptographic signatures
+- Role-based access control for operations
+- Delegation chains for actions on behalf of others
+- Integration with storage backends for permission validation
+
+To use the identity system:
+
+```bash
+# Run a program with an identity context
+cargo run -- --program demo/identity/basic_auth.dsl --identity member1
+
+# Run with identity and roles
+cargo run -- --program demo/identity/role_check.dsl --identity member1 --roles admin,member
+```
+
+---
+
+## Storage System
+
+The storage system enables persistent state across executions:
+
+- Key-value storage with namespaces
+- File-based and in-memory storage backends
+- Transaction support for atomic operations
+- Identity-aware access control
+
+Storage backends can be specified at runtime:
+
+```bash
+# Use file-based storage
+cargo run -- --program demo/storage/counter.dsl --storage file
+
+# Use in-memory storage (default)
+cargo run -- --program demo/storage/counter.dsl
+```
+
+---
+
 ## Documentation
 
 Comprehensive documentation is available:
@@ -91,6 +135,8 @@ Comprehensive documentation is available:
 - **API Documentation**: `make doc` or `cargo doc --open`
 - **Architecture Overview**: `docs/architecture.md`
 - **Bytecode System**: `docs/bytecode.md`
+- **Identity System**: `docs/identity.md`
+- **Storage System**: `docs/storage.md`
 - **Typed Value System**: `docs/typed-values.md`
 
 ---
@@ -102,20 +148,28 @@ Comprehensive documentation is available:
 ├── demo/                    # Example DSL programs
 │   ├── benchmark/           # Performance benchmark programs
 │   ├── functions/           # Function examples
+│   ├── governance/          # Governance primitive examples
+│   ├── identity/            # Identity verification examples
 │   ├── parser/              # Parser test cases
+│   ├── storage/             # Storage operation examples
 │   ├── stdlib/              # Standard library demos
 │   └── typed/               # Typed value system demos
 ├── docs/                    # Documentation
 │   ├── architecture.md      # System architecture overview
 │   ├── bytecode.md          # Bytecode system documentation
+│   ├── governance.md        # Governance primitives documentation
+│   ├── identity.md          # Identity system documentation
+│   ├── storage.md           # Storage system documentation
 │   └── typed-values.md      # Typed value system documentation
 ├── scripts/                 # Dev utility scripts
 ├── src/                     # Source code
 │   ├── bytecode.rs          # Bytecode compiler and interpreter
 │   ├── compiler/            # Modular parser components
 │   ├── events.rs            # Event system for logging
+│   ├── identity/            # Identity and authorization system
 │   ├── lib.rs               # Library exports
 │   ├── main.rs              # Command-line interface
+│   ├── storage/             # Storage system implementations
 │   ├── typed.rs             # Typed value system (feature-flagged)
 │   └── vm.rs                # Virtual machine implementation
 ├── Cargo.toml               # Rust project manifest
@@ -135,6 +189,9 @@ cargo run -- --interactive
 
 # Start REPL with bytecode execution
 cargo run -- --interactive --bytecode
+
+# Start REPL with identity context
+cargo run -- --interactive --identity member1
 ```
 
 REPL commands:
@@ -143,6 +200,8 @@ REPL commands:
 - `memory` - Show memory contents
 - `mode ast` - Switch to AST interpreter mode
 - `mode bytecode` - Switch to bytecode mode
+- `identity` - Show current identity context
+- `storage` - Show storage backend status
 - `exit` or `quit` - Exit the REPL
 
 ---
