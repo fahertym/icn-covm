@@ -14,20 +14,23 @@ The `Identity` structure represents a participant in the system:
 
 ```rust
 pub struct Identity {
-    // Unique identifier for this identity
+    /// Unique identifier for the identity
     pub id: String,
     
-    // Optional public key for cryptographic verification
+    /// Public key for cryptographic verification (optional)
     pub public_key: Option<Vec<u8>>,
     
-    // Cryptographic scheme used (e.g., "ed25519")
+    /// Type of identity (e.g., "cooperative", "member", "service")
+    pub identity_type: String,
+    
+    /// Cryptographic scheme used (e.g., "ed25519", "secp256k1")
     pub crypto_scheme: Option<String>,
     
-    // Metadata associated with this identity
+    /// Additional metadata about this identity
     pub metadata: HashMap<String, String>,
     
-    // Roles assigned to this identity
-    pub roles: Vec<String>,
+    /// Version information tracking this identity's history
+    pub version_info: Option<VersionInfo>,
 }
 ```
 
@@ -37,23 +40,31 @@ The `AuthContext` provides the authentication and authorization context for VM o
 
 ```rust
 pub struct AuthContext {
-    // The current caller identity
-    pub caller: Option<Identity>,
+    pub user_id: String,
     
-    // Registry of identities in the current context
-    pub identity_registry: HashMap<String, Identity>,
+    /// Namespace -> Roles mapping
+    roles: HashMap<String, Vec<String>>,
     
-    // Role assignments for namespaces
-    pub roles: HashMap<String, HashSet<String>>,
+    /// Delegate ID -> Delegator ID mapping
+    delegations: HashMap<String, String>,
     
-    // Member profiles
-    pub members: HashMap<String, MemberProfile>,
+    /// The current identity being used for operations
+    pub current_identity: Option<Identity>,
     
-    // Credentials in this context
-    pub credentials: HashMap<String, Credential>,
+    /// Registry of known identities
+    pub identity_registry: Option<HashMap<String, Identity>>,
     
-    // Delegations in this context
-    pub delegations: HashMap<String, DelegationLink>,
+    /// Registry of known delegations
+    pub delegation_registry: Option<HashMap<String, DelegationLink>>,
+    
+    /// Registry of member profiles
+    pub member_registry: Option<HashMap<String, MemberProfile>>,
+    
+    /// Registry of credentials
+    pub credential_registry: Option<HashMap<String, Credential>>,
+    
+    /// The cooperative ID context for execution
+    pub executing_cooperative_id: Option<String>,
 }
 ```
 
@@ -63,17 +74,23 @@ Extends an identity with member-specific information:
 
 ```rust
 pub struct MemberProfile {
-    // Core identity information
+    /// The core identity this profile is associated with
     pub identity: Identity,
     
-    // When the member joined
-    pub joined_at: i64,
-    
-    // Member-specific roles
+    /// Member-specific roles within their cooperative
     pub roles: Vec<String>,
     
-    // Member-specific metadata
-    pub profile: HashMap<String, String>,
+    /// Reputation score (if used by the cooperative)
+    pub reputation: Option<f64>,
+    
+    /// Joined timestamp
+    pub joined_at: u64,
+    
+    /// Additional profile attributes
+    pub attributes: HashMap<String, String>,
+    
+    /// Version information for this profile
+    pub version_info: Option<VersionInfo>,
 }
 ```
 
@@ -83,29 +100,32 @@ Represents a verifiable credential:
 
 ```rust
 pub struct Credential {
-    // Unique identifier for this credential
+    /// Unique identifier for this credential
     pub id: String,
     
-    // Type of credential (e.g., "membership")
+    /// Type of credential (e.g., "membership", "voting_right", "admin_access")
     pub credential_type: String,
     
-    // Identity that issued this credential
-    pub issuer: String,
+    /// Identity ID that issued this credential
+    pub issuer_id: String,
     
-    // Identity that holds this credential
-    pub holder: String,
+    /// Identity ID that holds this credential
+    pub holder_id: String,
     
-    // When this credential was issued
-    pub issued_at: i64,
+    /// Timestamp when issued
+    pub issued_at: u64,
     
-    // When this credential expires (if applicable)
-    pub expires_at: Option<i64>,
+    /// Optional expiration timestamp
+    pub expires_at: Option<u64>,
     
-    // Claims made in this credential
+    /// Cryptographic signature from the issuer
+    pub signature: Option<Vec<u8>>,
+    
+    /// Claims associated with this credential
     pub claims: HashMap<String, String>,
     
-    // Cryptographic signature (if verified)
-    pub signature: Option<Vec<u8>>,
+    /// Version information for this credential
+    pub version_info: Option<VersionInfo>,
 }
 ```
 
@@ -115,29 +135,35 @@ Represents a delegation of authority:
 
 ```rust
 pub struct DelegationLink {
-    // Unique identifier for this delegation
+    /// Unique identifier for this delegation
     pub id: String,
     
-    // Identity delegating authority
-    pub delegator: String,
+    /// Identity ID of the delegator
+    pub delegator_id: String,
     
-    // Identity receiving authority
-    pub delegate: String,
+    /// Identity ID of the delegate
+    pub delegate_id: String,
     
-    // Type of delegation (e.g., "voting")
+    /// Type of delegation (e.g., "voting", "admin", "full")
     pub delegation_type: String,
     
-    // When this delegation was created
-    pub created_at: i64,
-    
-    // When this delegation expires (if applicable)
-    pub expires_at: Option<i64>,
-    
-    // Permissions granted by this delegation
+    /// Permissions granted through this delegation
     pub permissions: Vec<String>,
     
-    // Cryptographic signature (if verified)
+    /// When the delegation was created
+    pub created_at: u64,
+    
+    /// When the delegation expires (if temporary)
+    pub expires_at: Option<u64>,
+    
+    /// Cryptographic signature from the delegator
     pub signature: Option<Vec<u8>>,
+    
+    /// Additional attributes for this delegation
+    pub attributes: HashMap<String, String>,
+    
+    /// Version information for this delegation
+    pub version_info: Option<VersionInfo>,
 }
 ```
 
@@ -160,18 +186,8 @@ requirerole "treasurer"
 # Verify that the caller is a specific identity
 requireidentity "member1"
 
-# Verify a cryptographic signature
-verifysignature
-```
-
-### Membership Operations
-
-```
-# Check if an identity is a member of a namespace
-checkmembership "member1" "coops/example_coop"
-
-# Check if a delegation exists
-checkdelegation "member1" "member2"
+# Verify an identity's signature 
+verifyidentity "member1" "message" "signature"
 ```
 
 ## DSL Examples
@@ -213,84 +229,78 @@ onerror:
 enderr
 ```
 
-### Delegation Verification
-
-```
-# Check if member2 has delegated to member1
-checkdelegation "member2" "member1"
-if:
-    # Perform delegated action
-    push "Voting on behalf of member2"
-    storep "votes/proposal1/member2"
-else:
-    emit "No delegation found"
-endif
-```
-
-## Integration with Storage
+### Integration with Storage
 
 The identity system integrates with the storage system to enable:
 
-1. **Permission Checking**: Storage operations verify permissions based on identity and roles
-2. **Persistent Identity Data**: Store identity information in persistent storage
-3. **Namespace Isolation**: Use identity-specific namespaces for data isolation
+1. **Permission Checking**: The VM uses `AuthContext` as the active permission context during execution.
+2. **Identity Enforcement**: Identity and role checks are enforced at the point of sensitive operations (e.g., persistent storage, governance actions).
+3. **Control Flow**: DSL identity operations influence control flow but not data injection—no identity data is directly injected into the stack unless explicitly stored using `getcaller`.
 
-Example:
+Example of identity integration with storage:
 
 ```
 # Store data in an identity-specific namespace
 begintx
+    # Verify the caller has the required role
     requirerole "member"
-    getcaller
-    store "user"
     
-    push 100
-    load "user"
-    concat "/profile/balance"
+    # Get the current caller ID
+    getcaller
+    store "user_id"
+    
+    # Create a user-specific storage key
+    push "users/"
+    load "user_id"
+    concat
+    push "/profile/balance"
+    concat
+    store "user_key"
+    
+    # Store data at the user-specific key
+    push 100.0
+    load "user_key"
     storep
 committx
 ```
 
 ## Testing and Mocking
 
-The identity system includes testing utilities:
-
-1. **Mock Identities**: Create identities for testing
-2. **Mock Signatures**: Test without real cryptography
-3. **Role Assignment**: Quickly assign roles for testing
-
-Example test setup:
+The identity system includes testing utilities for identity-based systems:
 
 ```rust
-// Create a test auth context
-let mut auth = AuthContext::new();
+// Create a test authentication context
+let mut auth = AuthContext::new("user1");
 
-// Add an identity
-let mut identity = Identity::new("user1", "test");
-identity.add_role("admin");
+// Add roles to the user
+auth.add_role("default", "admin");
+auth.add_role("coop/test_coop", "member");
+
+// Create and register an identity
+let mut identity = Identity::new("user1", "member");
+identity.add_metadata("coop_id", "test_coop");
 auth.register_identity(identity);
 
-// Set as caller
-auth.set_caller("user1");
-
-// Use in VM
+// Set up the VM with this auth context
 let mut vm = VM::new();
 vm.set_auth_context(auth);
+
+// Now VM operations will be executed in this identity context
 ```
 
 ## Security Considerations
 
 1. **Cryptographic Verification**: Always verify signatures for security-critical operations
-2. **Role Assignment**: Carefully manage role assignments
+2. **Role Assignment**: Carefully manage role assignments, especially for administrative access
 3. **Delegation Chains**: Watch for delegation cycles or excessive chain length
-4. **Expiration**: Consider expiring credentials and delegations
+4. **Expiration**: Consider expiring credentials and delegations to limit their lifetime
 
 ## Best Practices
 
 1. **Namespaced Roles**: Use namespace-prefixed roles like `coops/example_coop/admin`
-2. **Least Privilege**: Assign the minimum necessary roles
-3. **Audit Trail**: Log identity information for all operations
-4. **Verification**: Always verify credentials cryptographically in production
+2. **Least Privilege**: Assign the minimum necessary roles for each identity
+3. **Audit Trail**: Use the audit logs to track identity-based operations
+4. **Verification**: Always verify credentials cryptographically in production systems
 
 ## Future Extensions
 
