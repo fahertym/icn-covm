@@ -7,6 +7,7 @@ This document describes the governance primitives available in the ICN Cooperati
 1. [RankedVote](#rankedvote)
 2. [LiquidDelegate](#liquiddelegate)
 3. [VoteThreshold](#votethreshold)
+4. [Identity System](#identity-system)
 
 ## RankedVote
 
@@ -196,6 +197,154 @@ The operation will fail with an error if:
 - Fund distribution requiring sufficient stakeholder backing
 - Constitutional changes needing super-majority support
 - Quorum validation for vote legitimacy
+
+## Identity System
+
+The ICN-COVM identity system provides a foundation for secure, verifiable, and persistent cooperative identities. These primitives enable attributable decision-making, cryptographic verification, and delegated authority within cooperative governance.
+
+### Core Identity Objects
+
+#### Identity
+
+The fundamental identity structure representing any entity in the system.
+
+**Attributes**:
+- `id`: Unique identifier
+- `public_key`: Cryptographic public key (optional)
+- `identity_type`: Type of identity (e.g., "cooperative", "member", "service")
+- `crypto_scheme`: Cryptographic scheme used (e.g., "ed25519", "secp256k1")
+- `metadata`: Additional information about this identity
+- `version_info`: Version history for this identity
+
+#### MemberProfile
+
+Extended profile information for cooperative members.
+
+**Attributes**:
+- `identity`: The core identity this profile is associated with
+- `roles`: Member-specific roles within their cooperative
+- `reputation`: Optional reputation score
+- `joined_at`: Timestamp when the member joined
+- `attributes`: Additional profile fields
+- `version_info`: Version history for this profile
+
+#### Credential
+
+Verifiable credentials that can be issued to identities.
+
+**Attributes**:
+- `id`: Unique identifier for this credential
+- `credential_type`: Type of credential (e.g., "membership", "voting_right")
+- `issuer_id`: Identity that issued this credential
+- `holder_id`: Identity that holds this credential
+- `issued_at`: Timestamp when issued
+- `expires_at`: Optional expiration timestamp
+- `signature`: Cryptographic signature from the issuer
+- `claims`: Associated attributes/claims
+- `version_info`: Version history
+
+#### DelegationLink
+
+A cryptographically signed delegation from one identity to another.
+
+**Attributes**:
+- `id`: Unique identifier for this delegation
+- `delegator_id`: Identity of the delegator (who is delegating authority)
+- `delegate_id`: Identity of the delegate (who receives the authority)
+- `delegation_type`: Type of delegation (e.g., "voting", "admin")
+- `permissions`: Specific permissions granted
+- `created_at`: Timestamp when created
+- `expires_at`: Optional expiration timestamp
+- `signature`: Cryptographic signature from the delegator
+- `attributes`: Additional context for this delegation
+- `version_info`: Version history
+
+### Identity Operations
+
+#### `getcaller`
+
+Returns the ID of the current caller.
+
+**Stack Behavior**:
+```
+[] -> [caller_id]
+```
+
+#### `requirerole`
+
+Aborts execution if the caller does not have the specified role.
+
+**Signature**:
+```
+requirerole "role_name"
+```
+
+#### `hasrole`
+
+Checks if the caller has a specific role.
+
+**Signature**:
+```
+hasrole "role_name"
+```
+
+**Stack Behavior**:
+```
+[] -> [result]
+```
+
+Where `result` is:
+- `0.0` (truthy) if the caller has the role
+- `1.0` (falsey) if the caller does not have the role
+
+#### `verifysignature`
+
+Verifies a cryptographic signature against a message.
+
+**Signature**:
+```
+verifysignature
+```
+
+**Stack Behavior**:
+```
+[message, signature, public_key, scheme] -> [result]
+```
+
+Where `result` is:
+- `0.0` (truthy) if the signature is valid
+- `1.0` (falsey) if the signature is invalid
+
+### Namespaced Storage
+
+The identity system uses hierarchical namespaces for persistent storage:
+
+- **Cooperatives**: `coops/{coop_id}/`
+- **Members**: `coops/{coop_id}/members/{member_id}/` or `members/{member_id}/`
+- **Credentials**: `credentials/{credential_type}/{credential_id}/`
+- **Delegations**: `delegations/{delegation_type}/{delegation_id}/`
+
+Each namespace has configurable:
+- Resource quotas
+- Access control policies
+- Versioning for all stored objects
+
+### Integration with Governance Primitives
+
+The identity system enhances existing governance primitives:
+
+- **RankedVote**: Track who voted and verify voter eligibility
+- **LiquidDelegate**: Use cryptographically signed delegation links
+- **VoteThreshold**: Verify voter identities and credentials
+
+### Real-world Applications
+
+- Secure member onboarding and authentication
+- Role-based access control for cooperative resources
+- Transparent voting with cryptographic verification
+- Delegation chains with accountable authority transfer
+- Credential issuance and verification
+- Key rotation and revocation
 
 ## Combining Governance Operations
 

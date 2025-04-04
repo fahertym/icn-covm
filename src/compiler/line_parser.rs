@@ -206,6 +206,22 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
             // Create QuorumThreshold operation
             Ok(Op::QuorumThreshold(threshold))
         },
+        "storep" => {
+            let key = parts.next().ok_or(CompilerError::MissingVariable(
+                "storep".to_string(),
+                pos.line,
+                pos.column,
+            ))?;
+            Ok(Op::StoreP(key.to_string()))
+        },
+        "loadp" => {
+            let key = parts.next().ok_or(CompilerError::MissingVariable(
+                "loadp".to_string(),
+                pos.line,
+                pos.column,
+            ))?;
+            Ok(Op::LoadP(key.to_string()))
+        },
         _ => Err(CompilerError::UnknownCommand(
             command.to_string(),
             pos.line,

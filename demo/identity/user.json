@@ -1,0 +1,21 @@
+{
+  "id": "alice_cooper",
+  "crypto_scheme": "ed25519",
+  "public_key": "dGhpcyBpcyBhIHNhbXBsZSBwdWJsaWMga2V5",
+  "metadata": {
+    "display_name": "Alice Cooper",
+    "email": "alice@example.com",
+    "coop_id": "musicians_coop",
+    "joined_date": "2023-04-15"
+  },
+  "roles": [
+    "voter",
+    "contributor",
+    "committee_member"
+  ],
+  "attributes": {
+    "bio": "A musician and cooperative enthusiast",
+    "skills": "governance, music production, community building",
+    "location": "Los Angeles, CA"
+  }
+} 
