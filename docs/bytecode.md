@@ -93,6 +93,147 @@ The bytecode instruction set is designed to be simple yet complete. Each instruc
 - `AssertMemory(key, value)`: Assert a memory value
 - `AssertEqualStack(depth)`: Assert that values in the stack are equal
 
+## Function Implementation in Bytecode
+
+The bytecode system implements functions using a combination of function entries, calls, returns, and memory management operations.
+
+### Function Definition Compilation
+
+When a function definition is encountered in the AST:
+
+1. The compiler marks the entry point with `FunctionEntry(name, params)`
+2. The function body is compiled into a sequence of bytecode instructions
+3. The function ends with a `Return` instruction
+4. The function entry address is registered in the function table
+
+Example DSL:
+```
+def add(a, b):
+    load a
+    load b
+    add
+    return
+```
+
+Compiled bytecode:
+```
+0000: FunctionEntry("add", ["a", "b"])
+0001: Load("a")
+0002: Load("b")
+0003: Add
+0004: Return
+```
+
+### Function Call Implementation
+
+Function calls in bytecode involve:
+
+1. **Parameter Setup**: Values are pushed onto the stack
+2. **Function Call**: The `Call(name)` instruction saves current execution context and jumps to function entry
+3. **Memory Context Management**:
+   - The current memory context is saved
+   - A new memory context is created for the function
+   - Parameters are popped from the stack and stored in the new context
+4. **Execution**: The function body is executed
+5. **Return**: The `Return` instruction restores the original context and jumps back to the caller
+
+Example DSL:
+```
+push 5
+push 10
+call add
+```
+
+Compiled bytecode:
+```
+0100: Push(5.0)
+0101: Push(10.0)
+0102: Call("add")
+```
+
+### Memory Context During Function Calls
+
+The bytecode interpreter maintains a stack of memory contexts for handling function calls:
+
+1. **Context Saving**: When a function is called, the current memory context is pushed onto a context stack
+2. **New Context Creation**: A fresh memory context is created for the function
+3. **Parameter Binding**: Parameters are popped from the value stack and stored in the new context
+4. **Context Restoration**: When a function returns, the previous context is popped and restored
+
+This mechanism ensures proper memory isolation between function calls, preventing unintended variable access or modification across function boundaries.
+
+### Call Stack Management
+
+The bytecode interpreter manages a call stack recording the return addresses:
+
+1. **Call Instruction**: Pushes the next instruction address onto the call stack
+2. **Return Instruction**: Pops the return address from the call stack and jumps to it
+
+This enables proper execution flow during nested function calls and ensures each function returns to its correct caller.
+
+## Bytecode Example with Functions
+
+Consider this DSL program using nested functions:
+
+```
+def multiply(a, b):
+    load a
+    load b
+    mul
+    return
+
+def calculate(x, y):
+    load x
+    load y
+    add
+    push 2
+    push 3
+    call multiply
+    add
+    return
+
+push 5
+push 7
+call calculate
+```
+
+The compiled bytecode would look like:
+
+```
+# Function definitions
+0000: FunctionEntry("multiply", ["a", "b"])
+0001: Load("a")
+0002: Load("b")
+0003: Mul
+0004: Return
+
+0005: FunctionEntry("calculate", ["x", "y"])
+0006: Load("x")
+0007: Load("y")
+0008: Add
+0009: Push(2.0)
+0010: Push(3.0)
+0011: Call("multiply")
+0012: Add
+0013: Return
+
+# Main program
+0014: Push(5.0)
+0015: Push(7.0)
+0016: Call("calculate")
+```
+
+Execution flow:
+1. Push 5 and 7 onto stack
+2. Call `calculate` with x=7, y=5
+3. In `calculate`, load x and y, add them (result: 12)
+4. Push 2 and 3 onto stack
+5. Call `multiply` with a=3, b=2
+6. In `multiply`, load a and b, multiply them (result: 6)
+7. Return to `calculate` with 6 on stack
+8. Add 12 + 6 (result: 18)
+9. Return to main program with 18 on stack
+
 ## Usage
 
 ### Command Line
@@ -162,6 +303,7 @@ The bytecode compiler could implement several optimizations:
 - **Dead Code Elimination**: Remove unreachable code
 - **Peephole Optimization**: Replace instruction sequences with more efficient versions
 - **Register Allocation**: Use virtual registers instead of stack operations when possible
+- **Tail Call Optimization**: Optimize tail-recursive function calls
 
 ## Performance Considerations
 
@@ -174,43 +316,40 @@ The bytecode system offers best performance advantages in these scenarios:
 
 The compilation step adds initial overhead, so for very short or one-time programs, the AST interpreter might be faster.
 
-## Example
+### Function Call Performance
 
-Consider this DSL program:
+Function calls in bytecode mode benefit from:
 
-```
-push 0
-store sum
-loop 100:
-    load sum
-    push 1
-    add
-    store sum
-```
+1. **Direct Jumps**: Using instruction addresses rather than looking up functions by name
+2. **Optimized Memory Context**: More efficient context saving and restoration
+3. **Parameter Binding**: More efficient parameter passing
+4. **Inlining Potential**: Future optimization could inline small functions
 
-The AST representation is nested and recursive, while the bytecode is linear:
+## Common Patterns and Idioms
 
-```
-0000: Push(0.0)
-0001: Store("sum")
-0002: Push(100.0)
-0003: Store("__loop_counter_4")
-0004: Load("__loop_counter_4")
-0005: Push(0.0)
-0006: Gt
-0007: JumpIfZero(16)
-0008: Load("sum")
-0009: Push(1.0)
-0010: Add
-0011: Store("sum")
-0012: Load("__loop_counter_4")
-0013: Push(1.0)
-0014: Sub
-0015: Store("__loop_counter_4")
-0016: Jump(4)
-```
+### Function Return Value Handling
 
-This linear representation is more efficient to execute as it avoids the overhead of traversing a tree structure.
+Since function return values are left on the stack:
+
+1. **Single Value Return**: Functions should leave exactly one value on the stack
+2. **Multiple Value Return**: To return multiple values, combine them into a single value or use memory
+3. **No Return Value**: Push a dummy value (e.g., 0.0) if the function doesn't have a meaningful return
+
+### Error Handling in Functions
+
+Without exception handling, functions use these patterns for errors:
+
+1. **Return Code**: Push a success/error code value (0.0 for success, error code for failures)
+2. **Error Checking**: Caller checks the return value before proceeding
+3. **Assertions**: Use `AssertTop` or `AssertMemory` to validate critical assumptions
+
+### Function Parameter Ordering
+
+Parameters are pushed onto the stack in reverse order (last parameter first), which can affect code readability. Common approaches include:
+
+1. **Clear Naming**: Use descriptive comments to clarify parameter order
+2. **Consistent Order**: Establish conventions for parameter ordering
+3. **Limited Parameters**: Keep parameter counts small when possible
 
 ## Future Directions
 
@@ -220,4 +359,6 @@ Future enhancements to the bytecode system could include:
 - **Register-Based VM**: Transition from stack-based to register-based for better performance
 - **Optimizing Compiler**: Implement more sophisticated optimizations
 - **Bytecode Verification**: Add safety checks for loaded bytecode
-- **Cross-Platform Bytecode**: Ensure bytecode compatibility across platforms 
+- **Cross-Platform Bytecode**: Ensure bytecode compatibility across platforms
+- **Function Inlining**: Automatically inline small functions for performance
+- **Recursive Tail Calls**: Optimize tail-recursive function calls 
