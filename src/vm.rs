@@ -2580,4 +2580,243 @@ mod tests {
         let (mut vm, issuer_id, user_id) = setup_economic_environment();
         // ... existing code ...
     }
+
+    #[test]
+    fn test_op_burn() {
+        let (mut vm, issuer_id, user_id) = setup_economic_environment();
+
+        // First mint some tokens so we can burn them
+        let mint_ops = vec![Op::Mint {
+            resource_id: "token1".to_string(),
+            to_account: user_id.clone(),
+            amount: 100.0,
+            memo: Some("Initial allocation for burn test".to_string()),
+        }];
+
+        // Execute mint operation
+        let result = vm.execute(&mint_ops);
+        assert!(result.is_ok(), "Mint operation failed: {:?}", result);
+
+        // Test successful burn by the token owner
+        {
+            let burn_ops = vec![Op::Burn {
+                resource_id: "token1".to_string(),
+                from_account: user_id.clone(),
+                amount: 25.0,
+                memo: Some("Burning tokens as user".to_string()),
+            }];
+
+            // Execute burn operation
+            let result = vm.execute(&burn_ops);
+            assert!(result.is_ok(), "Burn operation failed: {:?}", result);
+
+            // Check the balance after burn
+            let storage = vm.storage_backend.as_ref().unwrap();
+            let auth = Some(vm.auth_context.as_ref().unwrap());
+
+            let balance_key = format!("balances/{}/{}", user_id, "token1");
+            let balance_result = storage.get(auth, "test_eco", &balance_key);
+            assert!(
+                balance_result.is_ok(),
+                "Failed to get balance: {:?}",
+                balance_result
+            );
+
+            let balance_bytes = balance_result.unwrap();
+            let balance: crate::storage::resource::ResourceBalance =
+                serde_json::from_slice(&balance_bytes).expect("Failed to deserialize balance");
+
+            assert_eq!(
+                balance.amount, 75.0,
+                "Balance should be 75.0 after burning 25.0 from 100.0"
+            );
+
+            // Verify the burn record was created
+            let transfers = storage
+                .list_keys(auth, "test_eco", Some("transfers/"))
+                .unwrap();
+            
+            // Find the relevant burn record
+            let mut found_burn = false;
+            for transfer_key in &transfers {
+                let transfer_result = storage.get(auth, "test_eco", transfer_key);
+                if let Ok(transfer_bytes) = transfer_result {
+                    let transfer: crate::storage::resource::ResourceTransfer =
+                        serde_json::from_slice(&transfer_bytes)
+                            .expect("Failed to deserialize transfer");
+
+                    if transfer.from_account == Some(user_id.clone())
+                        && transfer.to_account.is_none()
+                        && transfer.amount == 25.0
+                    {
+                        found_burn = true;
+                        assert_eq!(
+                            transfer.authorized_by, issuer_id,
+                            "Burn should be authorized by issuer"
+                        );
+                        break;
+                    }
+                }
+            }
+            assert!(
+                found_burn,
+                "Could not find the expected burn record for user_id"
+            );
+        }
+
+        // Test burn with invalid amount
+        {
+            // Test with zero amount
+            let burn_ops = vec![Op::Burn {
+                resource_id: "token1".to_string(),
+                from_account: user_id.clone(),
+                amount: 0.0,
+                memo: None,
+            }];
+
+            let result = vm.execute(&burn_ops);
+            assert!(result.is_err(), "Zero amount burn should fail");
+
+            match result {
+                Err(VMError::ParameterError(msg)) => {
+                    assert!(
+                        msg.contains("positive"),
+                        "Error should mention amount must be positive"
+                    );
+                }
+                _ => panic!("Expected ParameterError, got: {:?}", result),
+            }
+
+            // Test with negative amount
+            let burn_ops = vec![Op::Burn {
+                resource_id: "token1".to_string(),
+                from_account: user_id.clone(),
+                amount: -10.0,
+                memo: None,
+            }];
+
+            let result = vm.execute(&burn_ops);
+            assert!(result.is_err(), "Negative amount burn should fail");
+
+            match result {
+                Err(VMError::ParameterError(msg)) => {
+                    assert!(
+                        msg.contains("positive"),
+                        "Error should mention amount must be positive"
+                    );
+                }
+                _ => panic!("Expected ParameterError, got: {:?}", result),
+            }
+        }
+
+        // Test with non-existent resource
+        {
+            let burn_ops = vec![Op::Burn {
+                resource_id: "nonexistent".to_string(),
+                from_account: user_id.clone(),
+                amount: 10.0,
+                memo: None,
+            }];
+
+            let result = vm.execute(&burn_ops);
+            assert!(result.is_err(), "Burn of non-existent resource should fail");
+
+            match result {
+                Err(VMError::StorageError(msg)) => {
+                    assert!(
+                        msg.contains("Failed to fetch resource"),
+                        "Error should mention resource not found"
+                    );
+                }
+                _ => panic!("Expected StorageError, got: {:?}", result),
+            }
+        }
+
+        // Test insufficient balance
+        {
+            let burn_ops = vec![Op::Burn {
+                resource_id: "token1".to_string(),
+                from_account: user_id.clone(),
+                amount: 100.0, // Try to burn more than remaining balance (75.0)
+                memo: None,
+            }];
+
+            let result = vm.execute(&burn_ops);
+            assert!(result.is_err(), "Burning more than balance should fail");
+
+            match result {
+                Err(VMError::ParameterError(msg)) => {
+                    assert!(
+                        msg.contains("Insufficient balance"),
+                        "Error should mention insufficient balance"
+                    );
+                }
+                _ => panic!("Expected ParameterError, got: {:?}", result),
+            }
+        }
+
+        // Test burn by issuer (resource admin)
+        {
+            // Change the auth context to issuer
+            reset_auth_context(&mut vm, &issuer_id);
+
+            let burn_ops = vec![Op::Burn {
+                resource_id: "token1".to_string(),
+                from_account: user_id.clone(),
+                amount: 25.0,
+                memo: Some("Burning tokens as issuer".to_string()),
+            }];
+
+            let result = vm.execute(&burn_ops);
+            assert!(result.is_ok(), "Burn by issuer failed: {:?}", result);
+
+            // Check the balance after burn
+            let storage = vm.storage_backend.as_ref().unwrap();
+            let auth = Some(vm.auth_context.as_ref().unwrap());
+            let balance_key = format!("balances/{}/{}", user_id, "token1");
+            let balance_result = storage.get(auth, "test_eco", &balance_key);
+            assert!(balance_result.is_ok(), "Failed to get balance");
+
+            let balance_bytes = balance_result.unwrap();
+            let balance: crate::storage::resource::ResourceBalance =
+                serde_json::from_slice(&balance_bytes).expect("Failed to deserialize balance");
+
+            assert_eq!(
+                balance.amount, 50.0,
+                "Balance should be 50.0 after burning another 25.0"
+            );
+        }
+
+        // Test unauthorized burn (by another user)
+        {
+            // Create another user account
+            let other_user_id = "user2".to_string();
+            let storage = vm.storage_backend.as_mut().unwrap();
+            let auth = Some(vm.auth_context.as_ref().unwrap());
+            let _ = storage.create_account(auth, &other_user_id, 1_000_000);
+
+            // Change the auth context to the other user
+            reset_auth_context(&mut vm, &other_user_id);
+
+            let burn_ops = vec![Op::Burn {
+                resource_id: "token1".to_string(),
+                from_account: user_id.clone(), // Try to burn from the original user's account
+                amount: 10.0,
+                memo: None,
+            }];
+
+            let result = vm.execute(&burn_ops);
+            assert!(result.is_err(), "Unauthorized burn should fail");
+
+            match result {
+                Err(VMError::PermissionDenied(msg)) => {
+                    assert!(
+                        msg.contains("not authorized"),
+                        "Error should mention not authorized"
+                    );
+                }
+                _ => panic!("Expected PermissionDenied error, got: {:?}", result),
+            }
+        }
+    }
 }
