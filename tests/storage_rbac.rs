@@ -41,9 +41,11 @@ fn test_inmemory_storage() {
     // Create admin user
     let mut admin = AuthContext::new("admin");
     admin.add_role("global", "admin");
+    admin.add_role("test", "writer");
+    admin.add_role("test", "reader");
     
-    // Create account
-    assert!(storage.create_account(&admin, "admin", 1000).is_ok());
+    // Create account with quota for the user
+    storage.create_account(&admin, "admin", 1000).unwrap();
     
     // Set a value
     let key = "test_key";

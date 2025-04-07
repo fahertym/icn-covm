@@ -112,6 +112,7 @@ fn test_vm_storage_integration() {
     let mut auth = AuthContext::new("test_user");
     auth.add_role("global", "admin");
     auth.add_role("default", "writer");
+    auth.add_role("default", "reader");
     vm.set_auth_context(auth.clone());
     
     // Create a user account in the VM's storage
@@ -144,6 +145,7 @@ fn test_vm_storage_persistence() {
     let mut auth = AuthContext::new("test_user");
     auth.add_role("global", "admin");
     auth.add_role("default", "writer");
+    auth.add_role("default", "reader");
     vm.set_auth_context(auth.clone());
     
     // Create a user account in the VM's storage
@@ -184,6 +186,7 @@ fn test_vm_storage_arithmetic() {
     let mut auth = AuthContext::new("test_user");
     auth.add_role("global", "admin");
     auth.add_role("default", "writer");
+    auth.add_role("default", "reader");
     vm.set_auth_context(auth.clone());
     
     // Create a user account in the VM's storage

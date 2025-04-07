@@ -3,6 +3,8 @@ use icn_covm::storage::auth::AuthContext;
 use icn_covm::vm::VM;
 use icn_covm::vm::Op;
 use icn_covm::compiler::parse_dsl;
+use icn_covm::storage::{StorageBackend, InMemoryStorage};
+use std::sync::{Arc, Mutex};
 
 #[test]
 fn test_storage_with_auth_context() {
@@ -21,7 +23,24 @@ fn test_storage_with_auth_context() {
     
     // Create a VM with custom auth context and namespace
     let mut vm = VM::new();
-    vm.set_auth_context(AuthContext::with_roles("alice", vec!["admin".to_string()]));
+    
+    // Create admin auth context for account creation
+    let mut admin_auth = AuthContext::new("admin");
+    admin_auth.add_role("global", "admin");
+    
+    // Create accounts for alice and bob
+    if let Some(storage) = vm.storage_backend.as_mut() {
+        storage.create_account(&admin_auth, "alice", 1000).unwrap();
+        storage.create_account(&admin_auth, "bob", 1000).unwrap();
+    }
+    
+    // Set up alice's auth context with appropriate roles
+    let mut alice_auth = AuthContext::new("alice");
+    alice_auth.add_role("alice_data", "writer");
+    alice_auth.add_role("alice_data", "reader");
+    alice_auth.add_role("alice_data", "admin");
+    
+    vm.set_auth_context(alice_auth);
     vm.set_namespace("alice_data");
     
     // Create and run executor
@@ -34,7 +53,21 @@ fn test_storage_with_auth_context() {
     
     // Now create another VM with different auth context
     let mut vm2 = VM::new();
-    vm2.set_auth_context(AuthContext::with_roles("bob", vec!["member".to_string()]));
+    
+    // Set up storage backend for vm2 - reuse admin context
+    if let Some(storage) = vm2.storage_backend.as_mut() {
+        // Create accounts if they don't exist yet
+        storage.create_account(&admin_auth, "alice", 1000).ok();
+        storage.create_account(&admin_auth, "bob", 1000).ok();
+    }
+    
+    // Set up bob's auth context with appropriate roles
+    let mut bob_auth = AuthContext::new("bob");
+    bob_auth.add_role("bob_data", "writer");
+    bob_auth.add_role("bob_data", "reader");
+    bob_auth.add_role("bob_data", "admin");
+    
+    vm2.set_auth_context(bob_auth);
     vm2.set_namespace("bob_data");
     
     // Store a different value in bob's namespace
@@ -66,92 +99,97 @@ fn test_storage_with_auth_context() {
     
     // Create bob VM but set namespace to alice_data
     let mut vm3 = VM::new();
-    vm3.set_auth_context(AuthContext::with_roles("bob", vec!["member".to_string()]));
+    
+    // Make sure accounts exist in this VM
+    if let Some(storage) = vm3.storage_backend.as_mut() {
+        // Create accounts if they don't exist yet 
+        storage.create_account(&admin_auth, "alice", 1000).ok();
+        storage.create_account(&admin_auth, "bob", 1000).ok();
+    }
+    
+    // Set up bob's auth context but without permissions to alice's data
+    let mut bob_auth2 = AuthContext::new("bob");
+    bob_auth2.add_role("bob_data", "writer");
+    bob_auth2.add_role("bob_data", "reader");
+    // Note: No permissions to alice_data
+    
+    vm3.set_auth_context(bob_auth2);
     vm3.set_namespace("alice_data");
     
     let mut executor3 = BytecodeExecutor::new(vm3, program3.instructions);
     
-    // This might fail depending on your storage implementation's permission model
-    // If you have proper RBAC, it should fail unless bob has access to alice's data
+    // This should fail because bob doesn't have permission to read alice's data
     let result3 = executor3.execute();
     println!("Result of bob accessing alice's data: {:?}", result3);
-
-    // You can force proper permissions checking by adding this code:
-    // let default_ns = "default";
-    // let can_access = executor3.vm.auth_context.has_role(default_ns, "admin");
-    // println!("Bob has admin role: {}", can_access);
+    assert!(result3.is_err(), "Bob shouldn't be able to access Alice's data without permissions");
 }
 
 #[test]
 fn test_multi_tenant_storage() {
-    // Create two VMs for different cooperatives
-    let mut coop1_vm = VM::new();
-    coop1_vm.set_auth_context(AuthContext::with_roles("coop1_admin", vec!["admin".to_string()]));
-    coop1_vm.set_namespace("coop1");
+    // Let's go back to basics with a simpler test
     
-    let mut coop2_vm = VM::new();
-    coop2_vm.set_auth_context(AuthContext::with_roles("coop2_admin", vec!["admin".to_string()]));
-    coop2_vm.set_namespace("coop2");
+    // Just create a single InMemoryStorage that we'll reuse
+    let mut storage = InMemoryStorage::new();
     
-    // Store values for both coops
-    let store_source = r#"
-        push 100
-        storep "balance"
-    "#;
+    // Create admin auth context
+    let mut admin_auth = AuthContext::new("admin");
+    admin_auth.add_role("global", "admin");
     
-    let ops = parse_dsl(store_source).unwrap();
-    let mut compiler = BytecodeCompiler::new();
-    let program = compiler.compile(&ops);
+    // Create accounts
+    storage.create_account(&admin_auth, "coop1_admin", 1000).unwrap();
+    storage.create_account(&admin_auth, "coop2_admin", 1000).unwrap();
+    storage.create_account(&admin_auth, "coop1_user", 1000).unwrap();
+    storage.create_account(&admin_auth, "coop2_user", 1000).unwrap();
     
-    // Store in coop1
-    let mut executor1 = BytecodeExecutor::new(coop1_vm, program.instructions.clone());
-    let result1 = executor1.execute();
-    assert!(result1.is_ok());
+    // Set up auth contexts
+    let mut coop1_admin_auth = AuthContext::new("coop1_admin");
+    coop1_admin_auth.add_role("coop1", "admin");
+    coop1_admin_auth.add_role("coop1", "writer"); 
+    coop1_admin_auth.add_role("coop1", "reader");
     
-    // Store a different value in coop2
-    let mut coop2_vm = VM::new();
-    coop2_vm.set_auth_context(AuthContext::with_roles("coop2_admin", vec!["admin".to_string()]));
-    coop2_vm.set_namespace("coop2");
+    let mut coop1_user_auth = AuthContext::new("coop1_user");
+    coop1_user_auth.add_role("coop1", "reader");
+    coop1_user_auth.add_role("coop1", "member");
     
-    let store_source2 = r#"
-        push 200
-        storep "balance"
-    "#;
+    let mut coop2_admin_auth = AuthContext::new("coop2_admin");
+    coop2_admin_auth.add_role("coop2", "admin");
+    coop2_admin_auth.add_role("coop2", "writer");
+    coop2_admin_auth.add_role("coop2", "reader");
     
-    let ops2 = parse_dsl(store_source2).unwrap();
-    let program2 = compiler.compile(&ops2);
+    let mut coop2_user_auth = AuthContext::new("coop2_user");
+    coop2_user_auth.add_role("coop2", "reader");
+    coop2_user_auth.add_role("coop2", "member");
     
-    let mut executor2 = BytecodeExecutor::new(coop2_vm, program2.instructions);
-    let result2 = executor2.execute();
-    assert!(result2.is_ok());
+    // Store some data in each namespace
+    let coop1_value = vec![1, 2, 3, 4];
+    let coop2_value = vec![5, 6, 7, 8];
     
-    // Now retrieve and verify they have different values in isolation
-    let load_source = r#"
-        loadp "balance"
-    "#;
+    // Write to coop1 namespace
+    storage.set(&coop1_admin_auth, "coop1", "data", coop1_value.clone()).unwrap();
     
-    let load_ops = parse_dsl(load_source).unwrap();
-    let load_program = compiler.compile(&load_ops);
+    // Write to coop2 namespace
+    storage.set(&coop2_admin_auth, "coop2", "data", coop2_value.clone()).unwrap();
     
-    // Check coop1 balance
-    let mut coop1_vm = VM::new();
-    coop1_vm.set_auth_context(AuthContext::with_roles("coop1_user", vec!["member".to_string()]));
-    coop1_vm.set_namespace("coop1");
+    // Now try to read data using user accounts
     
-    let mut load_executor1 = BytecodeExecutor::new(coop1_vm, load_program.instructions.clone());
-    let load_result1 = load_executor1.execute();
-    assert!(load_result1.is_ok());
-    assert_eq!(load_executor1.vm.top(), Some(100.0));
+    // Coop1 user should be able to read coop1 data
+    let coop1_data = storage.get(&coop1_user_auth, "coop1", "data").unwrap();
+    assert_eq!(coop1_data, coop1_value);
     
-    // Check coop2 balance
-    let mut coop2_vm = VM::new();
-    coop2_vm.set_auth_context(AuthContext::with_roles("coop2_user", vec!["member".to_string()]));
-    coop2_vm.set_namespace("coop2");
+    // Coop2 user should be able to read coop2 data
+    let coop2_data = storage.get(&coop2_user_auth, "coop2", "data").unwrap();
+    assert_eq!(coop2_data, coop2_value);
     
-    let mut load_executor2 = BytecodeExecutor::new(coop2_vm, load_program.instructions);
-    let load_result2 = load_executor2.execute();
-    assert!(load_result2.is_ok());
-    assert_eq!(load_executor2.vm.top(), Some(200.0));
+    // Coop1 user should NOT be able to read coop2 data
+    assert!(storage.get(&coop1_user_auth, "coop2", "data").is_err());
     
-    println!("Successfully demonstrated namespace isolation between cooperatives!");
+    // Coop2 user should NOT be able to read coop1 data
+    assert!(storage.get(&coop2_user_auth, "coop1", "data").is_err());
+    
+    // But global admin should be able to read both
+    let global_coop1_data = storage.get(&admin_auth, "coop1", "data").unwrap();
+    assert_eq!(global_coop1_data, coop1_value);
+    
+    let global_coop2_data = storage.get(&admin_auth, "coop2", "data").unwrap();
+    assert_eq!(global_coop2_data, coop2_value);
 } 

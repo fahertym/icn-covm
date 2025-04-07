@@ -1,4 +1,5 @@
 use icn_covm::{Op, VM};
+use icn_covm::storage::auth::AuthContext;
 use std::fs;
 use std::path::Path;
 
@@ -11,6 +12,19 @@ fn test_program_json_runs_correctly() -> Result<(), Box<dyn std::error::Error>> 
 
     // Create and run VM
     let mut vm = VM::new();
+    
+    // Set up auth context for the VM
+    let mut auth = AuthContext::new("test_user");
+    auth.add_role("global", "admin");
+    auth.add_role("default", "writer");
+    auth.add_role("default", "reader");
+    vm.set_auth_context(auth.clone());
+    
+    // Create account for storage operations if needed
+    if let Some(storage) = vm.storage_backend.as_mut() {
+        storage.create_account(&auth, "test_user", 1000).unwrap();
+    }
+    
     vm.execute(&ops)?;
 
     // Print debug info
@@ -108,6 +122,19 @@ fn test_governance_operations() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create and run VM
     let mut vm = VM::new();
+    
+    // Set up auth context for the VM
+    let mut auth = AuthContext::new("test_user");
+    auth.add_role("global", "admin");
+    auth.add_role("default", "writer");
+    auth.add_role("default", "reader");
+    vm.set_auth_context(auth.clone());
+    
+    // Create account for storage operations if needed
+    if let Some(storage) = vm.storage_backend.as_mut() {
+        storage.create_account(&auth, "test_user", 1000).unwrap();
+    }
+    
     vm.execute(&ops)?;
 
     // Verify results
