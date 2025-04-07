@@ -216,7 +216,7 @@ fn test_typed_storage_operations() {
         storage_backend.create_account(&auth, "test_user", 1000).unwrap();
     }
     
-    // Store a typed value (integer)
+    // Test 1: Store and load integer value
     let store_program = vec![
         Op::Push(42.0),
         Op::StorePTyped {
@@ -225,9 +225,8 @@ fn test_typed_storage_operations() {
         },
     ];
     let result = vm.execute(&store_program);
-    assert!(result.is_ok(), "Store typed operation failed: {:?}", result);
+    assert!(result.is_ok(), "Store integer typed operation failed: {:?}", result);
     
-    // Load the typed value
     let load_program = vec![
         Op::LoadPTyped {
             key: "int_key".to_string(),
@@ -235,11 +234,11 @@ fn test_typed_storage_operations() {
         },
     ];
     let result = vm.execute(&load_program);
-    assert!(result.is_ok(), "Load typed operation failed: {:?}", result);
-    assert_eq!(vm.top(), Some(42.0), "Expected value 42.0");
+    assert!(result.is_ok(), "Load integer typed operation failed: {:?}", result);
+    assert_eq!(vm.top(), Some(42.0), "Expected integer value 42.0");
     vm.stack.clear();
     
-    // Attempt to store a non-integer with integer type (should fail)
+    // Test 2: Attempt to store a non-integer with integer type (should fail)
     let invalid_store_program = vec![
         Op::Push(42.5), // Not an integer
         Op::StorePTyped {
@@ -250,25 +249,113 @@ fn test_typed_storage_operations() {
     let result = vm.execute(&invalid_store_program);
     assert!(result.is_err(), "Expected error when storing float as integer");
     
-    // But storing as float should work
+    // Test 3: Store and load a float as number
     let float_store_program = vec![
         Op::Push(42.5),
         Op::StorePTyped {
-            key: "float_key".to_string(),
-            expected_type: "float".to_string(),
+            key: "number_key".to_string(),
+            expected_type: "number".to_string(),
         },
     ];
     let result = vm.execute(&float_store_program);
-    assert!(result.is_ok(), "Store float typed operation failed: {:?}", result);
+    assert!(result.is_ok(), "Store number typed operation failed: {:?}", result);
     
-    // Load the float value
     let float_load_program = vec![
         Op::LoadPTyped {
-            key: "float_key".to_string(),
-            expected_type: "float".to_string(),
+            key: "number_key".to_string(),
+            expected_type: "number".to_string(),
         },
     ];
     let result = vm.execute(&float_load_program);
-    assert!(result.is_ok(), "Load float typed operation failed: {:?}", result);
-    assert_eq!(vm.top(), Some(42.5), "Expected value 42.5");
+    assert!(result.is_ok(), "Load number typed operation failed: {:?}", result);
+    assert_eq!(vm.top(), Some(42.5), "Expected number value 42.5");
+    vm.stack.clear();
+    
+    // Test 4: Store and load boolean (true)
+    let bool_true_store_program = vec![
+        Op::Push(1.0),  // non-zero = true in VM convention
+        Op::StorePTyped {
+            key: "bool_true_key".to_string(),
+            expected_type: "boolean".to_string(),
+        },
+    ];
+    let result = vm.execute(&bool_true_store_program);
+    assert!(result.is_ok(), "Store boolean (true) operation failed: {:?}", result);
+    
+    let bool_true_load_program = vec![
+        Op::LoadPTyped {
+            key: "bool_true_key".to_string(),
+            expected_type: "boolean".to_string(),
+        },
+    ];
+    let result = vm.execute(&bool_true_load_program);
+    assert!(result.is_ok(), "Load boolean (true) operation failed: {:?}", result);
+    assert_eq!(vm.top(), Some(1.0), "Expected boolean value 1.0 (true)");
+    vm.stack.clear();
+    
+    // Test 5: Store and load boolean (false)
+    let bool_false_store_program = vec![
+        Op::Push(0.0),  // zero = false in VM convention
+        Op::StorePTyped {
+            key: "bool_false_key".to_string(),
+            expected_type: "boolean".to_string(),
+        },
+    ];
+    let result = vm.execute(&bool_false_store_program);
+    assert!(result.is_ok(), "Store boolean (false) operation failed: {:?}", result);
+    
+    let bool_false_load_program = vec![
+        Op::LoadPTyped {
+            key: "bool_false_key".to_string(),
+            expected_type: "boolean".to_string(),
+        },
+    ];
+    let result = vm.execute(&bool_false_load_program);
+    assert!(result.is_ok(), "Load boolean (false) operation failed: {:?}", result);
+    assert_eq!(vm.top(), Some(0.0), "Expected boolean value 0.0 (false)");
+    vm.stack.clear();
+    
+    // Test 6: Store and load string
+    let string_store_program = vec![
+        Op::Push(123.0),  // Will be converted to string "123"
+        Op::StorePTyped {
+            key: "string_key".to_string(),
+            expected_type: "string".to_string(),
+        },
+    ];
+    let result = vm.execute(&string_store_program);
+    assert!(result.is_ok(), "Store string typed operation failed: {:?}", result);
+    
+    let string_load_program = vec![
+        Op::LoadPTyped {
+            key: "string_key".to_string(),
+            expected_type: "string".to_string(),
+        },
+    ];
+    let result = vm.execute(&string_load_program);
+    assert!(result.is_ok(), "Load string typed operation failed: {:?}", result);
+    assert_eq!(vm.top(), Some(3.0), "Expected string length 3.0"); // "123" has length 3
+    vm.stack.clear();
+    
+    // Test 7: Store and load null
+    let null_store_program = vec![
+        Op::Push(0.0),  // Value will be ignored for null type
+        Op::StorePTyped {
+            key: "null_key".to_string(),
+            expected_type: "null".to_string(),
+        },
+    ];
+    let result = vm.execute(&null_store_program);
+    assert!(result.is_ok(), "Store null typed operation failed: {:?}", result);
+    
+    let null_load_program = vec![
+        Op::LoadPTyped {
+            key: "null_key".to_string(),
+            expected_type: "null".to_string(),
+        },
+    ];
+    let result = vm.execute(&null_load_program);
+    assert!(result.is_ok(), "Load null typed operation failed: {:?}", result);
+    assert_eq!(vm.top(), Some(0.0), "Expected null value 0.0");
+    vm.stack.clear();
 } 

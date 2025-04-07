@@ -12,6 +12,8 @@ use thiserror::Error;
 use crate::bytecode::BytecodeOp;
 use base64;
 use ed25519_dalek::{PublicKey, Signature, Verifier};
+use serde_json;
+use serde_json::{json, Value as JsonValue};
 
 /// Error variants that can occur during VM execution
 #[derive(Debug, Error, Clone, PartialEq)]
@@ -708,24 +710,66 @@ impl VM {
     
     // Helper method for typed storage operations
     pub fn execute_store_p_typed(&mut self, key: &str, expected_type: &str) -> Result<(), VMError> {
-        // In a typed system, we'd need to validate the type here
-        // For now, we'll just convert to string as a basic representation
         let value = self.pop_one("StorePTyped")?;
         
-        // Type validation would happen here, using expected_type
-        // For now we're just checking if it's an integer
-        if expected_type == "integer" && value.fract() != 0.0 {
-            return Err(VMError::StorageError(
-                format!("Expected integer for key '{}', but got {}", key, value)
-            ));
-        }
+        // Create a JSON object with type and value
+        let json_value = match expected_type {
+            "number" => {
+                json!({
+                    "type": "number",
+                    "value": value
+                })
+            },
+            "integer" => {
+                if value.fract() != 0.0 {
+                    return Err(VMError::StorageError(
+                        format!("Expected integer for key '{}', but got {}", key, value)
+                    ));
+                }
+                json!({
+                    "type": "integer",
+                    "value": value as i64
+                })
+            },
+            "boolean" => {
+                // In our VM convention, 0.0 is false, anything else is true
+                json!({
+                    "type": "boolean",
+                    "value": value != 0.0
+                })
+            },
+            "string" => {
+                // Use string representation of the number
+                json!({
+                    "type": "string",
+                    "value": value.to_string()
+                })
+            },
+            "null" => {
+                // Ignore the value on the stack and store null
+                json!({
+                    "type": "null",
+                    "value": null
+                })
+            },
+            _ => {
+                // Default to number for unknown types
+                json!({
+                    "type": "number",
+                    "value": value
+                })
+            }
+        };
         
-        let value_str = value.to_string();
+        // Serialize the JSON to a string
+        let serialized = serde_json::to_string(&json_value)
+            .map_err(|e| VMError::StorageError(format!("Failed to serialize value: {}", e)))?;
+        
         let auth_context = self.auth_context.clone();
         let namespace = self.namespace.clone();
         
         self.storage_operation("StorePTyped", |storage| {
-            storage.set(&auth_context, &namespace, key, value_str.into_bytes())
+            storage.set(&auth_context, &namespace, key, serialized.into_bytes())
         })
     }
     
@@ -742,22 +786,83 @@ impl VM {
         let value_str = String::from_utf8(result)
             .map_err(|e| VMError::StorageError(format!("Invalid UTF-8 data: {}", e)))?;
             
-        // Type validation based on expected_type
+        // Parse the JSON string
+        let json_value: JsonValue = serde_json::from_str(&value_str)
+            .map_err(|e| VMError::StorageError(format!("Failed to parse JSON: {}", e)))?;
+            
+        // Check if the JSON has the expected structure
+        let stored_type = json_value["type"].as_str()
+            .ok_or_else(|| VMError::StorageError("Missing 'type' field in stored value".to_string()))?;
+            
+        // Convert to stack value (f64) based on expected_type
         match expected_type {
-            "integer" => {
-                let value = value_str.parse::<i64>()
-                    .map_err(|e| VMError::StorageError(format!("Invalid integer data: {}", e)))?;
-                self.stack.push(value as f64);
-            },
-            "float" => {
-                let value = value_str.parse::<f64>()
-                    .map_err(|e| VMError::StorageError(format!("Invalid float data: {}", e)))?;
+            "number" => {
+                if stored_type != "number" && stored_type != "integer" {
+                    return Err(VMError::StorageError(
+                        format!("Type mismatch: expected number, found {}", stored_type)
+                    ));
+                }
+                
+                let value = json_value["value"].as_f64()
+                    .ok_or_else(|| VMError::StorageError("Invalid number value".to_string()))?;
                 self.stack.push(value);
             },
-            // We could add more types here, but for now just default to float
+            "integer" => {
+                if stored_type != "integer" && stored_type != "number" {
+                    return Err(VMError::StorageError(
+                        format!("Type mismatch: expected integer, found {}", stored_type)
+                    ));
+                }
+                
+                let value = json_value["value"].as_f64()
+                    .ok_or_else(|| VMError::StorageError("Invalid integer value".to_string()))?;
+                    
+                if value.fract() != 0.0 {
+                    return Err(VMError::StorageError(
+                        format!("Expected integer for key '{}', but got {}", key, value)
+                    ));
+                }
+                self.stack.push(value);
+            },
+            "boolean" => {
+                if stored_type != "boolean" {
+                    return Err(VMError::StorageError(
+                        format!("Type mismatch: expected boolean, found {}", stored_type)
+                    ));
+                }
+                
+                let value = json_value["value"].as_bool()
+                    .ok_or_else(|| VMError::StorageError("Invalid boolean value".to_string()))?;
+                self.stack.push(if value { 1.0 } else { 0.0 });
+            },
+            "string" => {
+                if stored_type != "string" {
+                    return Err(VMError::StorageError(
+                        format!("Type mismatch: expected string, found {}", stored_type)
+                    ));
+                }
+                
+                let s = json_value["value"].as_str()
+                    .ok_or_else(|| VMError::StorageError("Invalid string value".to_string()))?;
+                self.stack.push(s.len() as f64);
+                // Optionally output the string for visibility
+                self.output += &format!("Loaded string: {}\n", s);
+            },
+            "null" => {
+                if stored_type != "null" {
+                    return Err(VMError::StorageError(
+                        format!("Type mismatch: expected null, found {}", stored_type)
+                    ));
+                }
+                // Null is represented as 0.0 on the stack
+                self.stack.push(0.0);
+            },
             _ => {
-                let value = value_str.parse::<f64>()
-                    .map_err(|e| VMError::StorageError(format!("Invalid numeric data: {}", e)))?;
+                // Default to treating as number
+                let value = json_value["value"].as_f64()
+                    .ok_or_else(|| VMError::StorageError(
+                        format!("Cannot convert {} to number", stored_type)
+                    ))?;
                 self.stack.push(value);
             }
         }
