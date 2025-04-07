@@ -21,12 +21,7 @@ fn test_basic_storage_operations() {
         storage_backend.create_account(&auth, "test_user", 1000).unwrap();
     }
     
-    // Begin a transaction
-    let begin_tx_program = vec![Op::BeginTx];
-    let result = vm.execute(&begin_tx_program);
-    assert!(result.is_ok(), "Begin transaction failed: {:?}", result);
-    
-    // Store a value
+    // Store a value outside of transaction first
     let store_program = vec![
         Op::Push(42.0),
         Op::StoreP("test_key".to_string()),
@@ -34,37 +29,10 @@ fn test_basic_storage_operations() {
     let result = vm.execute(&store_program);
     assert!(result.is_ok(), "Store operation failed: {:?}", result);
     
-    // Check if key exists
-    let exists_program = vec![
-        Op::KeyExistsP("test_key".to_string()),
-    ];
-    let result = vm.execute(&exists_program);
-    assert!(result.is_ok(), "Key exists operation failed: {:?}", result);
-    assert_eq!(vm.top(), Some(1.0), "Expected key to exist (1.0)");
-    vm.stack.clear();
-    
-    // List keys
-    let list_program = vec![
-        Op::ListKeysP("test".to_string()),
-    ];
-    let result = vm.execute(&list_program);
-    assert!(result.is_ok(), "List keys operation failed: {:?}", result);
-    // The count may include system keys, so we just check that it's a positive number
-    if let Some(count) = vm.top() {
-        assert!(count > 0.0, "Expected at least one key, got {}", count);
-    } else {
-        panic!("Expected a number on the stack after ListKeysP");
-    }
-    vm.stack.clear();
-    
-    // Load the value
-    let load_program = vec![
-        Op::LoadP("test_key".to_string()),
-    ];
-    let result = vm.execute(&load_program);
-    assert!(result.is_ok(), "Load operation failed: {:?}", result);
-    assert_eq!(vm.top(), Some(42.0), "Expected value 42.0");
-    vm.stack.clear();
+    // Begin a transaction
+    let begin_tx_program = vec![Op::BeginTx];
+    let result = vm.execute(&begin_tx_program);
+    assert!(result.is_ok(), "Begin transaction failed: {:?}", result);
     
     // Store another value
     let store_program2 = vec![
@@ -95,17 +63,35 @@ fn test_basic_storage_operations() {
     let result = vm.execute(&rollback_program);
     assert!(result.is_ok(), "Rollback transaction failed: {:?}", result);
     
-    // Note: Currently, the implementation doesn't restore deleted keys after rollback
-    // Verify test_key doesn't exist after rollback (actual behavior)
+    // DEBUGGING: Directly access the storage backend and list all keys
+    if let Some(storage_backend) = vm.storage_backend.as_ref() {
+        println!("===== AFTER ROLLBACK =====");
+        let keys = storage_backend.list_keys(&auth, "test_namespace", None).unwrap();
+        println!("Keys in storage: {:?}", keys);
+        let exists = storage_backend.contains(&auth, "test_namespace", "test_key").unwrap();
+        println!("test_key exists directly in backend: {}", exists);
+    }
+    
+    // Verify test_key exists after rollback (it should be restored)
     let exists_program3 = vec![
         Op::KeyExistsP("test_key".to_string()),
     ];
     let result = vm.execute(&exists_program3);
     assert!(result.is_ok(), "Key exists check after rollback failed: {:?}", result);
-    assert_eq!(vm.top(), Some(0.0), "Expected key to not exist after rollback (0.0)");
+    println!("KeyExistsP result: {:?}", vm.top());
+    assert_eq!(vm.top(), Some(1.0), "Expected key to exist after rollback (1.0)");
     vm.stack.clear();
     
-    // Verify another_key does not exist after rollback
+    // Verify the value of the restored key
+    let load_after_rollback = vec![
+        Op::LoadP("test_key".to_string()),
+    ];
+    let result = vm.execute(&load_after_rollback);
+    assert!(result.is_ok(), "Load after rollback failed: {:?}", result);
+    assert_eq!(vm.top(), Some(42.0), "Expected original value 42.0 to be restored");
+    vm.stack.clear();
+    
+    // Verify another_key does not exist after rollback (it was added in transaction)
     let exists_program4 = vec![
         Op::KeyExistsP("another_key".to_string()),
     ];
@@ -357,5 +343,69 @@ fn test_typed_storage_operations() {
     let result = vm.execute(&null_load_program);
     assert!(result.is_ok(), "Load null typed operation failed: {:?}", result);
     assert_eq!(vm.top(), Some(0.0), "Expected null value 0.0");
+    vm.stack.clear();
+}
+
+// Create a fresh test to verify single key storage and rollback
+#[test]
+fn test_simple_transaction_rollback() {
+    // Create storage backend and VM
+    let mut storage = InMemoryStorage::new();
+    let mut vm = VM::with_storage_backend(storage);
+    
+    // Set up auth context with proper roles
+    let mut auth = AuthContext::new("test_user");
+    auth.add_role("global", "admin"); // Need admin to create accounts
+    auth.add_role("test_namespace", "writer"); // Can read and write
+    vm.set_auth_context(auth.clone());
+    vm.set_namespace("test_namespace");
+    
+    // Create an account for the test user
+    if let Some(storage_backend) = vm.storage_backend.as_mut() {
+        storage_backend.create_account(&auth, "test_user", 1000).unwrap();
+    }
+    
+    // Store a value outside of a transaction
+    let initial_store = vec![
+        Op::Push(42.0),
+        Op::StoreP("test_key".to_string()),
+    ];
+    vm.execute(&initial_store).expect("Initial store should succeed");
+    
+    // Verify key exists
+    let exists_check = vec![
+        Op::KeyExistsP("test_key".to_string()),
+    ];
+    vm.execute(&exists_check).expect("Initial key exists check should succeed");
+    assert_eq!(vm.top(), Some(1.0), "Key should exist after initial store");
+    vm.stack.clear();
+    
+    // Begin a transaction
+    vm.execute(&vec![Op::BeginTx]).expect("Begin transaction should succeed");
+    
+    // Delete the key
+    vm.execute(&vec![Op::DeleteP("test_key".to_string())]).expect("Delete should succeed");
+    
+    // Verify key is gone
+    vm.execute(&exists_check).expect("Key exists check after delete should succeed");
+    assert_eq!(vm.top(), Some(0.0), "Key should not exist after delete");
+    vm.stack.clear();
+    
+    // Rollback transaction
+    vm.execute(&vec![Op::RollbackTx]).expect("Rollback should succeed");
+    
+    // DEBUGGING: Directly access storage backend
+    if let Some(storage_backend) = vm.storage_backend.as_ref() {
+        println!("===== AFTER ROLLBACK IN SIMPLE TEST =====");
+        let keys = storage_backend.list_keys(&auth, "test_namespace", None).unwrap();
+        println!("Keys in storage: {:?}", keys);
+        let exists = storage_backend.contains(&auth, "test_namespace", "test_key").unwrap();
+        println!("test_key exists directly in backend: {}", exists);
+    }
+    
+    // Verify key is restored
+    vm.execute(&exists_check).expect("Key exists check after rollback should succeed");
+    println!("KeyExistsP result after rollback: {:?}", vm.top());
+    assert_eq!(vm.top(), Some(1.0), "Key should exist after rollback");
     vm.stack.clear();
 } 
