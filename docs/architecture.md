@@ -10,7 +10,8 @@ Key components include:
 - **Modular compiler** that transforms DSL code into operations
 - **Stack-based virtual machine** that executes operations
 - **Bytecode compiler and interpreter** for optimized execution
-- **Optional typed value system** for enhanced type safety
+- **Persistent storage system** with role-based access control
+- **Identity management system** for authentication and authorization
 - **Standard library** of common functions
 
 ## Execution Flow
@@ -148,7 +149,7 @@ The bytecode interpreter executes operations sequentially:
 
 ## Typed Value System
 
-When enabled via the `typed-values` feature flag, the VM supports a basic type system:
+The VM includes a JSON-based typed value system for storage operations:
 
 - **Number**: 64-bit floating-point values
 - **Boolean**: true/false values
@@ -156,9 +157,57 @@ When enabled via the `typed-values` feature flag, the VM supports a basic type s
 - **Null**: Represents absence of a value
 
 The typed system includes:
-- Type coercion rules for mixed-type operations
-- Type-specific operations (e.g., string concatenation)
-- Type error handling and reporting
+- JSON serialization for storage operations
+- Type checking during store/load operations
+- Type-specific value handling and error reporting
+
+## Storage Operations
+
+The VM includes comprehensive storage operations:
+
+### Basic Operations
+
+```
+StoreP(key)   # Store a value in persistent storage
+LoadP(key)    # Load a value from persistent storage
+DeleteP(key)  # Remove a key from persistent storage
+KeyExistsP(key) # Check if a key exists in storage
+```
+
+### Typed Operations
+
+```
+StorePTyped(key, expected_type) # Store with type validation
+LoadPTyped(key, expected_type)  # Load with type validation
+```
+
+### Transaction Support
+
+```
+BeginTx     # Begin a transaction
+CommitTx    # Commit the current transaction
+RollbackTx  # Rollback the current transaction
+```
+
+### Authentication Integration
+
+All storage operations require an `AuthContext` that provides:
+- User identity information
+- Role-based access control
+- Resource usage accounting
+- Audit trail capabilities
+
+## Identity Operations
+
+The VM includes operations for identity management:
+
+```
+GetCaller         # Get the ID of the calling user
+HasRole(role)     # Check if the caller has a specific role
+RequireRole(role) # Abort if the caller lacks a role
+RequireIdentity(id) # Abort if not the specified identity
+VerifySignature   # Verify a cryptographic signature
+```
 
 ## Governance Operations
 

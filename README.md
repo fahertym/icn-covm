@@ -5,7 +5,8 @@ A lightweight cooperative virtual machine for executing a domain-specific langua
 ## New Features
 
 - **Bytecode Compiler & Interpreter**: Faster execution through bytecode compilation
-- **Typed Value System**: Optional support for multiple data types (numbers, booleans, strings)
+- **Storage Integration**: Persistent storage with authentication, roles, and transactions
+- **Identity System**: Authentication, role-based access control, and signature verification
 - **Comprehensive Documentation**: Improved inline documentation and architecture docs
 - **Performance Benchmarking**: Compare AST interpretation vs bytecode execution
 
@@ -64,22 +65,14 @@ cargo run -- --program demo/benchmark/loop.dsl --benchmark
 
 ## Typed Value System
 
-The typed value system extends nano-cvm with support for multiple data types:
+The VM includes JSON-based typed values for storage operations:
 
 - Numbers (f64)
 - Booleans (true/false)
 - Strings (text)
 - Null (absence of a value)
 
-This feature is disabled by default for backward compatibility. To enable it:
-
-```bash
-# Build with typed values support
-cargo build --features typed-values
-
-# Run with typed values support
-cargo run --features typed-values -- --program demo/typed/string_operations.dsl
-```
+These types are handled through JSON serialization in storage operations like `StorePTyped` and `LoadPTyped`, ensuring type safety when storing and retrieving data.
 
 ---
 
@@ -91,7 +84,8 @@ Comprehensive documentation is available:
 - **API Documentation**: `make doc` or `cargo doc --open`
 - **Architecture Overview**: `docs/architecture.md`
 - **Bytecode System**: `docs/bytecode.md`
-- **Typed Value System**: `docs/typed-values.md`
+- **Storage System**: `docs/icn_storage_architecture.md`
+- **Identity System**: `docs/identity_system_plan.md`
 
 ---
 
@@ -104,19 +98,19 @@ Comprehensive documentation is available:
 │   ├── functions/           # Function examples
 │   ├── parser/              # Parser test cases
 │   ├── stdlib/              # Standard library demos
-│   └── typed/               # Typed value system demos
+│   └── storage/             # Storage and identity demos
 ├── docs/                    # Documentation
 │   ├── architecture.md      # System architecture overview
 │   ├── bytecode.md          # Bytecode system documentation
-│   └── typed-values.md      # Typed value system documentation
+│   ├── icn_storage_architecture.md # Storage system documentation
+│   └── identity_system_plan.md # Identity system documentation
 ├── scripts/                 # Dev utility scripts
 ├── src/                     # Source code
 │   ├── bytecode.rs          # Bytecode compiler and interpreter
 │   ├── compiler/            # Modular parser components
 │   ├── events.rs            # Event system for logging
+│   ├── storage/             # Storage implementations
 │   ├── lib.rs               # Library exports
-│   ├── main.rs              # Command-line interface
-│   ├── typed.rs             # Typed value system (feature-flagged)
 │   └── vm.rs                # Virtual machine implementation
 ├── Cargo.toml               # Rust project manifest
 ├── Makefile                 # Build automation for common tasks

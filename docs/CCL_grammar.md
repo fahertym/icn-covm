@@ -64,10 +64,35 @@ CCL uses indentation (similar to Python) to denote blocks of code. Each block st
 push <number>              # Push a number onto the stack
 push <string>              # Push a string onto the stack (internally converted to an ID)
 pop                        # Remove the top value from the stack
-store <name>               # Pop a value and store it in memory with the given name
-load <name>                # Push the value of a variable onto the stack
+store <n>               # Pop a value and store it in memory with the given name
+load <n>                # Push the value of a variable onto the stack
 emit <string>              # Output a string to the console
 emitevent <category> <msg> # Emit a categorized event
+```
+
+### Storage Operations
+
+```
+storep <key>              # Store a value to persistent storage with the given key
+loadp <key>               # Load a value from persistent storage with the given key
+deletep <key>             # Delete a key from persistent storage
+keyexistsp <key>          # Check if a key exists in persistent storage (pushes 1.0 if exists, 0.0 if not)
+listkeys <prefix>         # List keys that match the given prefix (returns array size on stack)
+storepTyped <key> <type>  # Store a value to persistent storage with type checking (number, integer, boolean, string, null)
+loadpTyped <key> <type>   # Load a value from persistent storage with type checking
+begintx                   # Begin a storage transaction
+committx                  # Commit the current storage transaction
+rollbacktx                # Rollback the current storage transaction
+```
+
+### Identity Operations
+
+```
+getcaller                  # Push the ID of the calling user onto the stack
+hasrole <role>             # Check if the caller has a role (pushes 1.0 if true, 0.0 if false)
+requirerole <role>         # Abort execution if the caller doesn't have the role
+requireidentity <id>       # Abort execution if the caller isn't the specified identity
+verifysignature            # Verify a cryptographic signature (pops public_key, signature, message, scheme from stack)
 ```
 
 ### Arithmetic and Logic

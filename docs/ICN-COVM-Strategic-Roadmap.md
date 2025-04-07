@@ -23,7 +23,7 @@ This document outlines our progress to date, strategic direction, and concrete i
 
 ## Current State
 
-### Core Capabilities (v0.5.0)
+### Core Capabilities (v0.5.0 - v0.6.0)
 
 The ICN-COVM has successfully implemented:
 
@@ -43,6 +43,19 @@ The ICN-COVM has successfully implemented:
   - **RankedVote**: Instant-runoff voting implementation
   - **VoteThreshold**: Support threshold verification
   - **QuorumThreshold**: Participation threshold verification
+
+- **Persistent Storage System**
+  - Transactional storage operations with ACID guarantees
+  - Role-based access control for storage operations
+  - Typed storage operations using JSON serialization
+  - Resource accounting for storage usage
+  - Namespace-based data organization
+
+- **Identity and Authorization System**
+  - User identification and role management
+  - Role-based access control for operations
+  - Cryptographic signature verification
+  - Authorization checks integrated with storage
 
 - **Development Tools**
   - Comprehensive test suite
@@ -74,29 +87,29 @@ Our vision for ICN-COVM is to create the foundation for a new generation of coop
 
 ## Near-Term Goals
 
-Our immediate focus is on v0.6.0, which will introduce two critical capabilities:
+Our focus has evolved with the completion of v0.6.0, which introduced two critical capabilities:
 
-### 1. Persistent Storage System
+### ✅ 1. Persistent Storage System (Completed)
 
-The current VM operates with ephemeral memory that is lost when a program terminates. For meaningful governance, we need to persist state across executions. The persistent storage system will:
+The persistent storage system has been implemented with these capabilities:
 
 - Store governance state, voting history, and delegation relationships
 - Support atomic transactions for consistent state updates
 - Use a namespaced approach to organize cooperative data
 - Integrate with identity permissions for secure access control
 
-### 2. Identity and Authorization System
+### ✅ 2. Identity and Authorization System (Completed)
 
-To secure governance operations, we need robust identity verification. The identity system will:
+The identity system has been implemented with these capabilities:
 
 - Verify member identities cryptographically
 - Support role-based permissions for governance operations
-- Enable secure delegation and voting with clear provenance
+- Enable secure verification of signatures
 - Create audit trails for all governance actions
 
 ### Future Goals (v0.7.0 and beyond)
 
-Following v0.6.0, we plan to focus on:
+Following the completion of v0.6.0, we will now focus on:
 
 1. **Economic Operations**: Add primitives for cooperative resource allocation
 2. **Federation Primitives**: Enable cross-cooperative governance
@@ -105,29 +118,23 @@ Following v0.6.0, we plan to focus on:
 
 ## Implementation Roadmap
 
-### v0.6.0: Persistent Storage and Identity (April-June 2025)
+### ✅ v0.6.0: Persistent Storage and Identity (Completed)
 
-#### Phase 1: Core Interfaces (2 weeks)
-- Define StorageBackend trait
-- Create Identity and AuthContext structures
-- Add storage and identity fields to VM
+The following features have been successfully implemented:
 
-#### Phase 2: Basic Operations (2 weeks)
-- Implement StoreP/LoadP operations
-- Add GetCaller/HasRole operations
-- Update DSL parser for new operations
+- **Persistent Storage**
+  - `StorageBackend` trait with transaction support
+  - Authentication and authorization for storage operations
+  - Typed storage operations (`StorePTyped`, `LoadPTyped`)
+  - Resource accounting with quotas
 
-#### Phase 3: Advanced Features (2 weeks)
-- Implement transactions and namespaces
-- Add role-based access control
-- Create integration points between systems
+- **Identity System**
+  - `AuthContext` with user identification and roles
+  - Role-based access control by namespace
+  - Identity operations (`GetCaller`, `HasRole`, `RequireRole`, etc.)
+  - Cryptographic signature verification
 
-#### Phase 4: Integration and Testing (2 weeks)
-- Finalize integration between systems
-- Comprehensive testing
-- Documentation and examples
-
-### v0.7.0: Economic Operations and Federation (July-September 2025)
+### v0.7.0: Economic Operations and Federation (Upcoming)
 
 #### Phase 1: Economic Primitives (3 weeks)
 - Define economic operation model
