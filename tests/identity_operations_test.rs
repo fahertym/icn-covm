@@ -1,6 +1,9 @@
 use icn_covm::storage::auth::AuthContext;
 use icn_covm::storage::implementations::in_memory::InMemoryStorage;
 use icn_covm::vm::{VM, Op, VMError};
+use ed25519_dalek::{Keypair, Signer};
+use rand::rngs::OsRng;
+use base64;
 
 #[test]
 fn test_get_caller() {
@@ -9,7 +12,7 @@ fn test_get_caller() {
     let mut vm = VM::with_storage_backend(storage);
     
     // Create auth context with a specific user ID
-    let mut auth = AuthContext::new("test_user_123");
+    let auth = AuthContext::new("test_user_123");
     vm.set_auth_context(auth);
     
     // Test GetCaller operation
@@ -157,29 +160,104 @@ fn test_verify_signature() {
     let storage = InMemoryStorage::new();
     let mut vm = VM::with_storage_backend(storage);
     
-    // Test simplified VerifySignature operation
-    // Note: Our implementation doesn't actually verify signatures,
-    // it just pops 4 values and always returns valid (1.0)
-    let program = vec![
-        // Push values representing message, signature, public key, and scheme
-        Op::Push(10.0), // Message length
-        Op::Push(64.0), // Signature length (typical for ed25519)
-        Op::Push(32.0), // Public key length (typical for ed25519)
-        Op::Push(7.0),  // Scheme name length (for "ed25519")
+    // Generate a real Ed25519 keypair for testing
+    let mut csprng = OsRng{};
+    let keypair: Keypair = Keypair::generate(&mut csprng);
+    
+    // Create a test message and sign it
+    let message = "Hello, world!";
+    let signature = keypair.sign(message.as_bytes());
+    
+    // Encode the public key and signature as base64 for the VM
+    let public_key_b64 = base64::encode(keypair.public.as_bytes());
+    let signature_b64 = base64::encode(signature.to_bytes());
+    let scheme = "ed25519";
+    
+    // First, test with a valid signature
+    
+    // Store numeric IDs for the string values
+    vm.memory.insert("string_1".to_string(), 1.0); // Scheme
+    vm.memory.insert("1".to_string(), 1.0); // Use a placeholder numeric value
+    
+    vm.memory.insert("string_2".to_string(), 2.0); // Public key
+    vm.memory.insert("2".to_string(), 2.0); 
+    
+    vm.memory.insert("string_3".to_string(), 3.0); // Signature
+    vm.memory.insert("3".to_string(), 3.0);
+    
+    vm.memory.insert("string_4".to_string(), 4.0); // Message
+    vm.memory.insert("4".to_string(), 4.0);
+    
+    // Use a custom approach to store the actual string values
+    // We'll add a mapping from the numeric values to string constants
+    vm.memory.insert("str_val_1".to_string(), 1.0); // We use these as flags to know these are string constants
+    vm.memory.insert("str_val_2".to_string(), 1.0);
+    vm.memory.insert("str_val_3".to_string(), 1.0);
+    vm.memory.insert("str_val_4".to_string(), 1.0);
+    
+    // Update the VM implementation to handle this convention
+    // This is a simple workaround for the VM's number-only memory
+    
+    // Valid signature test program
+    let valid_program = vec![
+        // Set string constants
+        Op::Emit(format!("SET_STRING:1:{}", scheme)),
+        Op::Emit(format!("SET_STRING:2:{}", public_key_b64)),
+        Op::Emit(format!("SET_STRING:3:{}", signature_b64)),
+        Op::Emit(format!("SET_STRING:4:{}", message)),
         
-        // Verify signature operation
+        // Push reference IDs for the strings
+        Op::Push(4.0),  // Message 
+        Op::Push(3.0),  // Signature (base64)
+        Op::Push(2.0),  // Public key (base64)
+        Op::Push(1.0),  // Scheme ("ed25519")
+        
+        // Verify the signature
         Op::VerifySignature,
     ];
     
-    let result = vm.execute(&program);
+    let result = vm.execute(&valid_program);
     assert!(result.is_ok(), "Program execution failed: {:?}", result);
     
-    // The result should be 1.0 (valid signature)
+    // Should push 1.0 for a valid signature
     assert_eq!(vm.top(), Some(1.0), "Expected 1.0 (valid signature)");
     
-    // Output should mention signature verification
+    // Clear the stack
+    vm.stack.clear();
+    
+    // Now test with an invalid signature (tampered message)
+    let tampered_message = "Tampered message!";
+    
+    vm.memory.insert("string_5".to_string(), 5.0); // Tampered message
+    vm.memory.insert("5".to_string(), 5.0);
+    vm.memory.insert("str_val_5".to_string(), 1.0);
+    
+    // Invalid signature test program
+    let invalid_program = vec![
+        // Set tampered message
+        Op::Emit(format!("SET_STRING:5:{}", tampered_message)),
+        
+        // Push reference IDs for the strings, but with tampered message
+        Op::Push(5.0), // Tampered message
+        Op::Push(3.0), // Same signature
+        Op::Push(2.0), // Same public key
+        Op::Push(1.0), // Same scheme
+        
+        // Verify the signature - should fail
+        Op::VerifySignature,
+    ];
+    
+    let result = vm.execute(&invalid_program);
+    assert!(result.is_ok(), "Program execution failed: {:?}", result);
+    
+    // Should push 0.0 for an invalid signature
+    assert_eq!(vm.top(), Some(0.0), "Expected 0.0 (invalid signature)");
+    
+    // Test output should contain verification information
     assert!(vm.output.contains("Verify signature:"), 
             "Output should contain signature verification info");
+    assert!(vm.output.contains("Signature verification failed"), 
+            "Output should mention signature verification failure");
 }
 
 #[test]

@@ -10,6 +10,8 @@ use std::collections::HashMap;
 use std::fmt;
 use thiserror::Error;
 use crate::bytecode::BytecodeOp;
+use base64;
+use ed25519_dalek::{PublicKey, Signature, Verifier};
 
 /// Error variants that can occur during VM execution
 #[derive(Debug, Error, Clone, PartialEq)]
@@ -818,10 +820,7 @@ impl VM {
         // 1. Cryptographic scheme (e.g., "ed25519")
         // 2. Public key (encoded as base64)
         // 3. Signature (encoded as base64)
-        // 4. Message (as bytes length)
-        
-        // Since our stack only supports f64 values, this is a simplified implementation
-        // In a real implementation, we would need a way to handle strings or byte arrays
+        // 4. Message (as bytes)
         
         // Check if we have at least 4 items on the stack
         if self.stack.len() < 4 {
@@ -829,21 +828,110 @@ impl VM {
         }
         
         // Pop the items (in reverse order as they're on the stack)
-        let scheme_len = self.pop_one("VerifySignature scheme")? as usize;
-        let pubkey_len = self.pop_one("VerifySignature pubkey")? as usize;
-        let sig_len = self.pop_one("VerifySignature signature")? as usize;
-        let msg_len = self.pop_one("VerifySignature message")? as usize;
+        let scheme_id = self.pop_one("VerifySignature scheme")? as usize;
+        let pubkey_id = self.pop_one("VerifySignature pubkey")? as usize;
+        let sig_id = self.pop_one("VerifySignature signature")? as usize;
+        let msg_id = self.pop_one("VerifySignature message")? as usize;
+        
+        // Get the string values from our string registry (created via SET_STRING commands)
+        let scheme_str = self.get_string_value(scheme_id)
+            .ok_or_else(|| VMError::ParameterNotFound(format!("String ID {} not found", scheme_id)))?;
+            
+        let public_key_b64 = self.get_string_value(pubkey_id)
+            .ok_or_else(|| VMError::ParameterNotFound(format!("String ID {} not found", pubkey_id)))?;
+            
+        let signature_b64 = self.get_string_value(sig_id)
+            .ok_or_else(|| VMError::ParameterNotFound(format!("String ID {} not found", sig_id)))?;
+            
+        let message = self.get_string_value(msg_id)
+            .ok_or_else(|| VMError::ParameterNotFound(format!("String ID {} not found", msg_id)))?;
         
         // Log the values for debugging
-        self.output += &format!("Verify signature: scheme_len={}, pubkey_len={}, sig_len={}, msg_len={}\n", 
-                               scheme_len, pubkey_len, sig_len, msg_len);
+        self.output += &format!("Verify signature: scheme={}, message=\"{}\", signature_len={}, pubkey_len={}\n", 
+                              scheme_str, message, signature_b64.len(), public_key_b64.len());
         
-        // Simplified implementation: always return valid (1.0)
-        // In a real implementation, we would need to integrate with a crypto library
-        self.stack.push(1.0); // 1.0 means valid signature
+        // Only handle "ed25519" scheme for now
+        if scheme_str != "ed25519" {
+            self.output += &format!("Unsupported signature scheme: {}\n", scheme_str);
+            self.stack.push(0.0); // 0.0 means invalid signature
+            return Ok(());
+        }
         
-        self.output += "NOTE: Signature verification is not fully implemented. Always returns valid.\n";
+        // Attempt actual verification based on the scheme
+        let verification_result = match scheme_str.as_str() {
+            "ed25519" => {
+                // Decode base64 public key and signature
+                let pubkey_bytes = match base64::decode(&public_key_b64) {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        self.output += &format!("Failed to decode public key: {}\n", e);
+                        self.stack.push(0.0); // Invalid signature due to decode error
+                        return Ok(());
+                    }
+                };
+                
+                let signature_bytes = match base64::decode(&signature_b64) {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        self.output += &format!("Failed to decode signature: {}\n", e);
+                        self.stack.push(0.0); // Invalid signature due to decode error
+                        return Ok(());
+                    }
+                };
+                
+                // Create PublicKey from bytes
+                let public_key = match PublicKey::from_bytes(&pubkey_bytes) {
+                    Ok(pk) => pk,
+                    Err(e) => {
+                        self.output += &format!("Invalid public key format: {:?}\n", e);
+                        self.stack.push(0.0); // Invalid signature due to key error
+                        return Ok(());
+                    }
+                };
+                
+                // Create Signature from bytes
+                let signature = match Signature::from_bytes(&signature_bytes) {
+                    Ok(sig) => sig,
+                    Err(e) => {
+                        self.output += &format!("Invalid signature format: {:?}\n", e);
+                        self.stack.push(0.0); // Invalid signature due to format error
+                        return Ok(());
+                    }
+                };
+                
+                // Verify the signature
+                match public_key.verify(message.as_bytes(), &signature) {
+                    Ok(_) => {
+                        self.output += "Signature verification succeeded\n";
+                        true
+                    },
+                    Err(e) => {
+                        self.output += &format!("Signature verification failed: {:?}\n", e);
+                        false
+                    }
+                }
+            },
+            _ => {
+                self.output += &format!("Unsupported signature scheme: {}\n", scheme_str);
+                false
+            }
+        };
+        
+        // Push the result onto the stack: 1.0 for valid, 0.0 for invalid
+        self.stack.push(if verification_result { 1.0 } else { 0.0 });
+        
         Ok(())
+    }
+    
+    // Helper method to get a string value stored via SET_STRING
+    fn get_string_value(&self, id: usize) -> Option<String> {
+        // Look in our string registry (stored in the output)
+        for line in self.output.lines() {
+            if line.starts_with(&format!("SET_STRING:{}:", id)) {
+                return Some(line[format!("SET_STRING:{}:", id).len()..].to_string());
+            }
+        }
+        None
     }
 
     fn execute_inner(&mut self, ops: &[Op]) -> Result<(), VMError> {
@@ -869,8 +957,15 @@ impl VM {
                     self.stack.push(value);
                 },
                 Op::Emit(msg) => {
-                    let event = Event::info("emit", msg);
-                    event.emit().map_err(|e| VMError::IOError(e.to_string()))?;
+                    // Check if this is a SET_STRING command
+                    if msg.starts_with("SET_STRING:") {
+                        // No need to modify the actual memory, we'll store it in the output
+                        // and parse it when needed
+                        self.output += &format!("{}\n", msg);
+                    } else {
+                        let event = Event::info("emit", msg);
+                        event.emit().map_err(|e| VMError::IOError(e.to_string()))?;
+                    }
                 },
                 Op::Add => { let (a, b) = self.pop_two("Add")?; self.stack.push(a + b); },
                 Op::Sub => { let (a, b) = self.pop_two("Sub")?; self.stack.push(b - a); },
@@ -939,7 +1034,7 @@ impl VM {
                 },
                 Op::Negate => { let value = self.pop_one("Negate")?; self.stack.push(-value); },
                 Op::Call(name) => {
-                    let (params, body) = self.functions.get(name).ok_or_else(|| VMError::FunctionNotFound(name.clone()))?.clone();
+                    let (_params, body) = self.functions.get(name).ok_or_else(|| VMError::FunctionNotFound(name.clone()))?.clone();
                     let result = self.execute_inner(&body);
                     result?;
                 },
@@ -1000,7 +1095,7 @@ impl VM {
                     );
                     event.emit().map_err(|e| VMError::IOError(e.to_string()))?;
                 },
-                Op::LiquidDelegate { from, to } => {
+                Op::LiquidDelegate { from: _from, to: _to } => {
                     // self.perform_liquid_delegation(from.as_str(), to.as_str())?; // Method removed or needs reimplementation
                     println!("WARN: LiquidDelegate Op ignored - method not found/implemented."); // Add a warning
                 },
