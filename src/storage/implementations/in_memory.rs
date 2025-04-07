@@ -40,19 +40,12 @@ impl InMemoryStorage {
     // Records an operation for potential rollback if a transaction is active
     fn record_for_rollback(&mut self, namespace: &str, key: &str, old_value: Option<Vec<u8>>) {
         if let Some(current_transaction) = self.transaction_stack.last_mut() {
-            // Check if this key already has a record in the current transaction
-            let already_recorded = current_transaction.iter().any(|(ns, k, _)| 
-                ns == namespace && k == key
-            );
-            
-            // Only record if this is the first operation on this key in this transaction
-            if !already_recorded {
-                println!("Recording for rollback: {}:{} -> {:?}", namespace, key, 
-                    old_value.as_ref().map(|v| v.len()).unwrap_or(0));
-                current_transaction.push((namespace.to_string(), key.to_string(), old_value));
-            } else {
-                println!("Skipping duplicate rollback record for: {}:{}", namespace, key);
-            }
+            // Remove the check for already recorded operations
+            // We want to record *all* operations in the exact order they occurred
+            // so we can properly rollback in reverse order
+            println!("Recording for rollback: {}:{} -> {:?}", namespace, key, 
+                old_value.as_ref().map(|v| v.len()).unwrap_or(0));
+            current_transaction.push((namespace.to_string(), key.to_string(), old_value));
         }
     }
 
@@ -268,7 +261,7 @@ impl StorageBackend for InMemoryStorage {
                     
                     match old_value_opt {
                         Some(old_value) => {
-                            // Key existed before transaction - restore its previous value
+                            // Key existed before transaction or was modified during transaction - restore its previous value
                             println!("Rollback: Restoring existing key '{}' with value length {}", key, old_value.len());
                             
                             // Ensure namespace exists
@@ -280,7 +273,7 @@ impl StorageBackend for InMemoryStorage {
                             // TODO: Rollback resource account usage?
                         }
                         None => {
-                            // Key didn't exist before transaction - remove it if it was added
+                            // Key didn't exist before the operation - remove it completely
                             println!("Rollback: Removing newly added key '{}'", key);
                             
                             if let Some(ns_data) = self.data.get_mut(&namespace) {

@@ -123,19 +123,12 @@ impl FileStorage {
     // Records an operation for potential rollback if a transaction is active
     fn record_for_rollback(&mut self, namespace: &str, key: &str, old_value: Option<Vec<u8>>) {
         if let Some(current_transaction) = self.transaction_stack.last_mut() {
-            // Check if this key already has a record in the current transaction
-            let already_recorded = current_transaction.iter().any(|(ns, k, _)| 
-                ns == namespace && k == key
-            );
-            
-            // Only record if this is the first operation on this key in this transaction
-            if !already_recorded {
-                println!("FileStorage: Recording for rollback: {}:{} -> {:?}", 
-                    namespace, key, old_value.as_ref().map(|v| v.len()).unwrap_or(0));
-                current_transaction.push((namespace.to_string(), key.to_string(), old_value));
-            } else {
-                println!("FileStorage: Skipping duplicate rollback record for: {}:{}", namespace, key);
-            }
+            // Remove the check for already recorded operations
+            // We want to record *all* operations in the exact order they occurred
+            // so we can properly rollback in reverse order
+            println!("FileStorage: Recording for rollback: {}:{} -> {:?}", 
+                namespace, key, old_value.as_ref().map(|v| v.len()).unwrap_or(0));
+            current_transaction.push((namespace.to_string(), key.to_string(), old_value));
         }
     }
 }
@@ -392,7 +385,7 @@ impl StorageBackend for FileStorage {
                 
                 match old_value {
                     Some(data) => {
-                        // Key existed before the transaction - restore it with previous value
+                        // Key existed before the transaction or was modified - restore it with previous value
                         println!("FileStorage Rollback: Restoring existing key '{}' with value length {}", key, data.len());
                         
                         if let Some(parent) = path.parent() {
@@ -405,7 +398,7 @@ impl StorageBackend for FileStorage {
                         })?;
                     }
                     None => {
-                        // Key didn't exist before - remove it if present
+                        // Key didn't exist before the operation - remove it completely
                         println!("FileStorage Rollback: Removing newly added key '{}'", key);
                         
                         if path.exists() {
