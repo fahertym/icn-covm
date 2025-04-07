@@ -78,8 +78,8 @@ loadp <key>               # Load a value from persistent storage with the given 
 deletep <key>             # Delete a key from persistent storage
 keyexistsp <key>          # Check if a key exists in persistent storage (pushes 1.0 if exists, 0.0 if not)
 listkeys <prefix>         # List keys that match the given prefix (returns array size on stack)
-storepTyped <key> <type>  # Store a value to persistent storage with type checking (number, integer, boolean, string, null)
-loadpTyped <key> <type>   # Load a value from persistent storage with type checking
+storepTyped <key> <type>  # Store a value to persistent storage as JSON with type checking (number, boolean, string, null, object, array)
+loadpTyped <key> <type>   # Load a value from persistent storage as JSON with type checking
 begintx                   # Begin a storage transaction
 committx                  # Commit the current storage transaction
 rollbacktx                # Rollback the current storage transaction

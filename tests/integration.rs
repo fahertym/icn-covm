@@ -26,8 +26,8 @@ fn test_program_json_runs_correctly() -> Result<(), Box<dyn std::error::Error>> 
         Op::Push(2.0),  // Stack: [42.0, 420.0, 1.0, 2.0]
         Op::Push(3.0),  // Stack: [42.0, 420.0, 1.0, 2.0, 3.0]
         Op::Dup,        // Stack: [42.0, 420.0, 1.0, 2.0, 3.0, 3.0]
-        Op::Swap,       // Stack: [42.0, 420.0, 1.0, 2.0, 3.0, 3.0] (Swap last two values)
-        Op::Over,       // Stack: [42.0, 420.0, 1.0, 2.0, 3.0, 3.0, 3.0]
+        Op::Swap,       // Stack: [42.0, 420.0, 1.0, 2.0, 3.0, 3.0] => [42.0, 420.0, 1.0, 2.0, 3.0, 3.0]
+        Op::Over,       // Stack: [42.0, 420.0, 1.0, 2.0, 3.0, 3.0] => [42.0, 420.0, 1.0, 2.0, 3.0, 3.0, 2.0]
     ];
 
     // Create and run VM
@@ -63,8 +63,8 @@ fn test_program_json_runs_correctly() -> Result<(), Box<dyn std::error::Error>> 
     assert_eq!(stack[2], 1.0);
     assert_eq!(stack[3], 2.0);
     assert_eq!(stack[4], 3.0);
-    assert_eq!(stack[5], 3.0); // After Swap (this was incorrectly 2.0 before)
-    assert_eq!(stack[6], 3.0); // After Over
+    assert_eq!(stack[5], 3.0); // After Dup
+    assert_eq!(stack[6], 3.0); // After Over (copies the second value from top)
     
     // Verify memory
     assert_eq!(vm.get_memory("x"), Some(42.0));
@@ -99,8 +99,9 @@ fn test_governance_operations() -> Result<(), Box<dyn std::error::Error>> {
         },
         
         // Test AssertEqualStack
-        Op::Dup,
-        Op::Dup,
+        Op::Push(42.0),
+        Op::Push(42.0),
+        Op::Push(42.0),
         Op::AssertEqualStack { depth: 3 },
         
         // Test EmitEvent

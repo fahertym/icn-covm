@@ -242,4 +242,83 @@ This allows governance scripts (DSL) to interact with the persistent storage lay
 2. **Smart Contract Integration**: Storage-aware contracts for automated governance
 3. **Encrypted Storage**: End-to-end encryption for sensitive cooperative data
 4. **Proof of Cooperation**: Resource contribution tracking across federations
-5. **Mobile & Edge Support**: Lightweight storage backends for mobile/edge devices 
+5. **Mobile & Edge Support**: Lightweight storage backends for mobile/edge devices
+
+## Technical Implementation
+
+### Storage Operations
+
+The ICN-COVM storage system implements these core operations:
+
+```rust
+trait StorageBackend {
+    fn get(&self, auth_context: &AuthContext, key: &str) -> Result<Option<JsonValue>, StorageError>;
+    fn set(&mut self, auth_context: &AuthContext, key: &str, value: JsonValue) -> Result<(), StorageError>;
+    fn delete(&mut self, auth_context: &AuthContext, key: &str) -> Result<(), StorageError>;
+    fn contains(&self, auth_context: &AuthContext, key: &str) -> Result<bool, StorageError>;
+    fn list_keys(&self, auth_context: &AuthContext, prefix: &str) -> Result<Vec<String>, StorageError>;
+    fn begin_transaction(&mut self) -> Result<(), StorageError>;
+    fn commit_transaction(&mut self) -> Result<(), StorageError>;
+    fn rollback_transaction(&mut self) -> Result<(), StorageError>;
+}
+```
+
+All operations integrate with the identity system via the `AuthContext` parameter, which provides:
+- Identity information for the caller
+- Role-based access control verification
+- Resource accounting attribution
+- Audit trail capabilities
+
+### DSL Operations
+
+The following operations are available in the Cooperative Contract Language:
+
+```
+# Basic storage
+storep     # Store a value in persistent storage
+loadp      # Load a value from persistent storage
+deletep    # Remove a key from persistent storage
+keyexistsp # Check if a key exists
+
+# Typed storage (JSON-based)
+storep_typed # Store with type validation
+loadp_typed  # Load with type validation
+
+# Transaction support
+begintx    # Begin a transaction
+committx   # Commit a transaction
+rollbacktx # Abort a transaction
+
+# Key management
+listkeys   # List keys with a prefix
+```
+
+### Storage Backends
+
+The storage system includes these implementations:
+
+1. **InMemoryStorage**: Non-persistent storage for testing
+2. **FileStorage**: JSON-based persistent storage using files
+
+Future implementations may include database storage and distributed storage options.
+
+### Type System
+
+The storage system uses JSON for typed values, supporting:
+- Numbers (f64)
+- Booleans
+- Strings
+- Objects
+- Arrays
+- Null values
+
+This enables storage of complex data structures while maintaining type safety.
+
+### Authentication Integration
+
+Storage operations enforce access controls based on:
+1. **Identity**: Who is making the request
+2. **Roles**: What permissions they have
+3. **Namespace**: Which data areas they can access
+
+The `AuthContext` structure is passed to all storage operations to enable these checks. 

@@ -2,13 +2,13 @@
 
 A lightweight cooperative virtual machine for executing a domain-specific language (DSL) with support for stack-based operations, memory isolation, functions, loops, conditionals, and governance-oriented extensions.
 
-## New Features
+## Features
 
-- **Bytecode Compiler & Interpreter**: Faster execution through bytecode compilation
-- **Storage Integration**: Persistent storage with authentication, roles, and transactions
-- **Identity System**: Authentication, role-based access control, and signature verification
-- **Comprehensive Documentation**: Improved inline documentation and architecture docs
-- **Performance Benchmarking**: Compare AST interpretation vs bytecode execution
+- **Bytecode Compiler and Interpreter**: Transform DSL operations into optimized bytecode
+- **Storage Integration**: Persistent storage with transactional support and role-based access
+- **Identity System**: Secure authentication with cryptographic verification and role-based access control
+- **Comprehensive Documentation**: Architecture docs, tutorials, and examples
+- **Performance Benchmarking**: Tools for measuring execution performance
 
 ---
 
@@ -65,14 +65,15 @@ cargo run -- --program demo/benchmark/loop.dsl --benchmark
 
 ## Typed Value System
 
-The VM includes JSON-based typed values for storage operations:
+The VM supports a JSON-based typed value system, particularly useful for storage operations:
 
-- Numbers (f64)
-- Booleans (true/false)
-- Strings (text)
-- Null (absence of a value)
+- **Number**: 64-bit floating-point values (stack native)
+- **Boolean**: true/false values
+- **String**: Text values
+- **Object**: Complex JSON objects
+- **Array**: JSON arrays for sequences
 
-These types are handled through JSON serialization in storage operations like `StorePTyped` and `LoadPTyped`, ensuring type safety when storing and retrieving data.
+Storage operations use JSON serialization for type preservation and complex data structures.
 
 ---
 

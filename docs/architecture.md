@@ -155,15 +155,17 @@ The VM includes a JSON-based typed value system for storage operations:
 - **Boolean**: true/false values
 - **String**: Text values
 - **Null**: Represents absence of a value
+- **Object**: JSON objects for complex data
+- **Array**: JSON arrays for sequences
 
 The typed system includes:
-- JSON serialization for storage operations
+- JSON serialization and deserialization for storage operations
 - Type checking during store/load operations
 - Type-specific value handling and error reporting
 
 ## Storage Operations
 
-The VM includes comprehensive storage operations:
+The VM includes a comprehensive persistent storage system with authentication:
 
 ### Basic Operations
 
@@ -172,6 +174,7 @@ StoreP(key)   # Store a value in persistent storage
 LoadP(key)    # Load a value from persistent storage
 DeleteP(key)  # Remove a key from persistent storage
 KeyExistsP(key) # Check if a key exists in storage
+ListKeys(prefix) # List all keys with a given prefix
 ```
 
 ### Typed Operations
@@ -193,21 +196,42 @@ RollbackTx  # Rollback the current transaction
 
 All storage operations require an `AuthContext` that provides:
 - User identity information
-- Role-based access control
+- Role-based access control for namespaces
 - Resource usage accounting
 - Audit trail capabilities
 
+### Storage Backend Implementations
+
+- **InMemoryStorage**: Non-persistent storage for testing
+- **FileStorage**: JSON-file based persistent storage
+- Other backends can be implemented via the `StorageBackend` trait
+
 ## Identity Operations
 
-The VM includes operations for identity management:
+The VM includes a robust identity management system:
 
 ```
-GetCaller         # Get the ID of the calling user
+GetCaller         # Get the identity of the calling user
 HasRole(role)     # Check if the caller has a specific role
 RequireRole(role) # Abort if the caller lacks a role
 RequireIdentity(id) # Abort if not the specified identity
 VerifySignature   # Verify a cryptographic signature
 ```
+
+### AuthContext
+
+The `AuthContext` structure includes:
+- **caller**: The identity making the request
+- **roles**: Set of permissions granted to the caller
+- **timestamp**: When the request was initiated
+- **signature**: Optional cryptographic proof of identity
+
+### Role-Based Access Control
+
+Storage operations are protected by role-based permissions:
+- Each namespace can have specific role requirements
+- Different operations (read/write/delete) can have different role requirements
+- The `RequireRole` operation enforces these permissions programmatically
 
 ## Governance Operations
 
