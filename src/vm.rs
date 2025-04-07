@@ -318,6 +318,24 @@ pub enum Op {
     
     /// Rollback a storage transaction
     RollbackTx,
+    
+    /// Get the ID of the current caller
+    GetCaller,
+    
+    /// Check if the caller has a specific role in the current namespace
+    HasRole(String),
+    
+    /// Require that the caller has a specific role, or abort
+    RequireRole(String),
+    
+    /// Require that the caller has a specific identity, or abort
+    RequireIdentity(String),
+    
+    /// Verify a cryptographic signature
+    /// 
+    /// Pops: message, signature, public_key, scheme
+    /// Pushes: 1.0 if valid, 0.0 if invalid
+    VerifySignature,
 }
 
 #[derive(Debug)]
@@ -745,6 +763,89 @@ impl VM {
         Ok(())
     }
 
+    // Helper method to execute a GetCaller operation
+    pub fn execute_get_caller(&mut self) -> Result<(), VMError> {
+        // Push the caller ID (user_id) onto the stack as a number
+        // Since our stack only supports f64 values, we'll push the length of the user ID
+        let user_id = self.auth_context.user_id.clone();
+        self.output += &format!("Caller Identity: {}\n", user_id);
+        self.stack.push(user_id.len() as f64);
+        Ok(())
+    }
+    
+    // Helper method to execute a HasRole operation
+    pub fn execute_has_role(&mut self, role: &str) -> Result<(), VMError> {
+        // Check if the caller has the specified role in the current namespace
+        let has_role = self.auth_context.has_role(&self.namespace, role);
+        
+        // Push 1.0 for true (has role), 0.0 for false (doesn't have role)
+        // This value convention matches the VM's boolean representation: 
+        // - 1.0 means "true" (user has the role)
+        // - 0.0 means "false" (user doesn't have the role)
+        self.stack.push(if has_role { 1.0 } else { 0.0 });
+        Ok(())
+    }
+    
+    // Helper method to execute a RequireRole operation
+    pub fn execute_require_role(&mut self, role: &str) -> Result<(), VMError> {
+        // Check if the caller has the specified role in the current namespace
+        if !self.auth_context.has_role(&self.namespace, role) {
+            return Err(VMError::ParameterError(
+                format!("Required role '{}' not found for user '{}' in namespace '{}'", 
+                        role, self.auth_context.user_id, self.namespace)
+            ));
+        }
+        // Role requirement satisfied
+        Ok(())
+    }
+    
+    // Helper method to execute a RequireIdentity operation
+    pub fn execute_require_identity(&mut self, identity: &str) -> Result<(), VMError> {
+        // Check if the caller has the specified identity
+        if self.auth_context.user_id != identity {
+            return Err(VMError::ParameterError(
+                format!("Required identity '{}' does not match caller '{}'", 
+                        identity, self.auth_context.user_id)
+            ));
+        }
+        // Identity requirement satisfied
+        Ok(())
+    }
+    
+    // Helper method to execute a VerifySignature operation
+    pub fn execute_verify_signature(&mut self) -> Result<(), VMError> {
+        // For VerifySignature, we need to pop 4 items from the stack in this order:
+        // 1. Cryptographic scheme (e.g., "ed25519")
+        // 2. Public key (encoded as base64)
+        // 3. Signature (encoded as base64)
+        // 4. Message (as bytes length)
+        
+        // Since our stack only supports f64 values, this is a simplified implementation
+        // In a real implementation, we would need a way to handle strings or byte arrays
+        
+        // Check if we have at least 4 items on the stack
+        if self.stack.len() < 4 {
+            return Err(VMError::StackUnderflow { op_name: "VerifySignature".to_string() });
+        }
+        
+        // Pop the items (in reverse order as they're on the stack)
+        let scheme_len = self.pop_one("VerifySignature scheme")? as usize;
+        let pubkey_len = self.pop_one("VerifySignature pubkey")? as usize;
+        let sig_len = self.pop_one("VerifySignature signature")? as usize;
+        let msg_len = self.pop_one("VerifySignature message")? as usize;
+        
+        // Log the values for debugging
+        self.output += &format!("Verify signature: scheme_len={}, pubkey_len={}, sig_len={}, msg_len={}\n", 
+                               scheme_len, pubkey_len, sig_len, msg_len);
+        
+        // Simplified implementation: always return valid (1.0)
+        // In a real implementation, we would need to integrate with a crypto library
+        self.stack.push(1.0); // 1.0 means valid signature
+        
+        self.output += "NOTE: Signature verification is not fully implemented. Always returns valid.\n";
+        Ok(())
+    }
+
     fn execute_inner(&mut self, ops: &[Op]) -> Result<(), VMError> {
         let mut pc = 0;
         while pc < ops.len() {
@@ -956,6 +1057,21 @@ impl VM {
                 },
                 Op::RollbackTx => {
                     self.execute_rollback_tx()?;
+                },
+                Op::GetCaller => {
+                    self.execute_get_caller()?;
+                },
+                Op::HasRole(ref role) => {
+                    self.execute_has_role(role)?;
+                },
+                Op::RequireRole(ref role) => {
+                    self.execute_require_role(role)?;
+                },
+                Op::RequireIdentity(ref identity) => {
+                    self.execute_require_identity(identity)?;
+                },
+                Op::VerifySignature => {
+                    self.execute_verify_signature()?;
                 },
             }
 

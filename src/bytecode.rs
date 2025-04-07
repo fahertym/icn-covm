@@ -180,6 +180,21 @@ pub enum BytecodeOp {
     
     /// Rollback a storage transaction
     RollbackTx,
+    
+    /// Get the identity of the current caller
+    GetCaller,
+    
+    /// Check if the caller has a specific role in the current namespace
+    HasRole(String),
+    
+    /// Require that the caller has a specific role, abort if not
+    RequireRole(String),
+    
+    /// Require that the caller has a specific identity, abort if not
+    RequireIdentity(String),
+    
+    /// Verify a cryptographic signature
+    VerifySignature,
 }
 
 /// The bytecode program with flattened instructions and a function lookup table
@@ -416,6 +431,11 @@ impl BytecodeCompiler {
                 Op::BeginTx => self.program.instructions.push(BytecodeOp::BeginTx),
                 Op::CommitTx => self.program.instructions.push(BytecodeOp::CommitTx),
                 Op::RollbackTx => self.program.instructions.push(BytecodeOp::RollbackTx),
+                Op::GetCaller => self.program.instructions.push(BytecodeOp::GetCaller),
+                Op::HasRole(role) => self.program.instructions.push(BytecodeOp::HasRole(role.clone())),
+                Op::RequireRole(role) => self.program.instructions.push(BytecodeOp::RequireRole(role.clone())),
+                Op::RequireIdentity(identity) => self.program.instructions.push(BytecodeOp::RequireIdentity(identity.clone())),
+                Op::VerifySignature => self.program.instructions.push(BytecodeOp::VerifySignature),
             }
         }
     }
@@ -932,8 +952,7 @@ impl BytecodeExecutor {
                 }
             },
             BytecodeOp::AssertEq => {
-                let b = self.vm.pop_one("AssertEq")?;
-                let a = self.vm.pop_one("AssertEq")?;
+                let (a, b) = self.vm.pop_two("AssertEq")?;
                 if (a - b).abs() > f64::EPSILON {
                     return Err(VMError::AssertionFailed { message: format!("Assertion failed: Expected {} but found {}", a, b) });
                 }
@@ -1010,6 +1029,31 @@ impl BytecodeExecutor {
             BytecodeOp::RollbackTx => {
                 // Call VM execute_rollback_tx
                 self.vm.execute_rollback_tx()?;
+            }
+            
+            BytecodeOp::GetCaller => {
+                // Call the VM's execute_get_caller method
+                self.vm.execute_get_caller()?;
+            }
+            
+            BytecodeOp::HasRole(role) => {
+                // Call the VM's execute_has_role method
+                self.vm.execute_has_role(&role)?;
+            }
+            
+            BytecodeOp::RequireRole(role) => {
+                // Call the VM's execute_require_role method
+                self.vm.execute_require_role(&role)?;
+            }
+            
+            BytecodeOp::RequireIdentity(identity) => {
+                // Call the VM's execute_require_identity method
+                self.vm.execute_require_identity(&identity)?;
+            }
+            
+            BytecodeOp::VerifySignature => {
+                // Call the VM's execute_verify_signature method
+                self.vm.execute_verify_signature()?;
             }
         }
         

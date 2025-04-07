@@ -305,8 +305,13 @@ impl StorageBackend for FileStorage {
     }
 
     fn check_permission(&self, auth: &AuthContext, action: &str, namespace: &str) -> StorageResult<()> {
+        // Global admin bypasses all checks
+        if auth.has_role("global", "admin") {
+            return Ok(());
+        }
+        
         // System namespace requires admin
-        if namespace.starts_with("system/") && !auth.has_role("global", "admin") {
+        if namespace.starts_with("system/") {
             return Err(StorageError::PermissionDenied {
                 user_id: auth.user_id.clone(),
                 action: action.to_string(),
@@ -314,16 +319,32 @@ impl StorageBackend for FileStorage {
             });
         }
         
-        // Check specific namespace permissions
-        if !auth.has_role(namespace, action) && !auth.has_role("global", "admin") {
-            return Err(StorageError::PermissionDenied {
+        // Check namespace admin (can do anything in their namespace)
+        if auth.has_role(namespace, "admin") {
+            return Ok(());
+        }
+        
+        // Role-based checks
+        let required_roles = match action {
+            "read" => vec!["reader", "writer"], // Both readers and writers can read
+            "write" => vec!["writer"],          // Only writers can write
+            _ => return Err(StorageError::PermissionDenied { 
+                user_id: auth.user_id.clone(),
+                action: format!("unknown action: {}", action),
+                key: format!("{}:*", namespace),
+            })
+        };
+        
+        // Check if user has any of the required roles
+        if required_roles.iter().any(|role| auth.has_role(namespace, role)) {
+            Ok(())
+        } else {
+            Err(StorageError::PermissionDenied {
                 user_id: auth.user_id.clone(),
                 action: action.to_string(),
                 key: format!("{}:*", namespace),
-            });
+            })
         }
-        
-        Ok(())
     }
 
     fn begin_transaction(&mut self) -> StorageResult<()> {
