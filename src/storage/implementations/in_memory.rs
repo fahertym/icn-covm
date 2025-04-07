@@ -40,8 +40,19 @@ impl InMemoryStorage {
     // Records an operation for potential rollback if a transaction is active
     fn record_for_rollback(&mut self, namespace: &str, key: &str, old_value: Option<Vec<u8>>) {
         if let Some(current_transaction) = self.transaction_stack.last_mut() {
-            // Avoid recording the same key multiple times in one transaction? Maybe not necessary.
-            current_transaction.push((namespace.to_string(), key.to_string(), old_value));
+            // Check if this key already has a record in the current transaction
+            let already_recorded = current_transaction.iter().any(|(ns, k, _)| 
+                ns == namespace && k == key
+            );
+            
+            // Only record if this is the first operation on this key in this transaction
+            if !already_recorded {
+                println!("Recording for rollback: {}:{} -> {:?}", namespace, key, 
+                    old_value.as_ref().map(|v| v.len()).unwrap_or(0));
+                current_transaction.push((namespace.to_string(), key.to_string(), old_value));
+            } else {
+                println!("Skipping duplicate rollback record for: {}:{}", namespace, key);
+            }
         }
     }
 
@@ -249,24 +260,53 @@ impl StorageBackend for InMemoryStorage {
     fn rollback_transaction(&mut self) -> StorageResult<()> {
         match self.transaction_stack.pop() {
             Some(ops) => {
+                println!("Rollback: Operations to rollback: {}", ops.len());
+                
                 // Apply rollbacks in reverse order
                 for (namespace, key, old_value_opt) in ops.into_iter().rev() {
-                    let ns_data = self.data.entry(namespace).or_default();
+                    println!("Rollback: Processing key '{}' in namespace '{}'", key, namespace);
+                    
                     match old_value_opt {
                         Some(old_value) => {
-                            // Restore previous value
+                            // Key existed before transaction - restore its previous value
+                            println!("Rollback: Restoring existing key '{}' with value length {}", key, old_value.len());
+                            
+                            // Ensure namespace exists
+                            let ns_data = self.data.entry(namespace.clone()).or_default();
+                            // Put the old value back
                             ns_data.insert(key, old_value);
+                            
                             // TODO: Rollback version info? This is complex.
                             // TODO: Rollback resource account usage?
                         }
                         None => {
-                            // Key didn't exist before, remove it
-                            ns_data.remove(&key);
+                            // Key didn't exist before transaction - remove it if it was added
+                            println!("Rollback: Removing newly added key '{}'", key);
+                            
+                            if let Some(ns_data) = self.data.get_mut(&namespace) {
+                                ns_data.remove(&key);
+                                
+                                // If namespace is now empty, remove it too
+                                if ns_data.is_empty() {
+                                    println!("Rollback: Removing empty namespace '{}'", namespace);
+                                    self.data.remove(&namespace);
+                                }
+                            }
                             // TODO: Rollback version info?
                             // TODO: Rollback resource account usage?
                         }
                     }
                 }
+                
+                // Print the current state after rollback
+                let namespaces = self.data.keys().cloned().collect::<Vec<_>>();
+                println!("After rollback: Namespaces: {:?}", namespaces);
+                for ns in &namespaces {
+                    if let Some(ns_data) = self.data.get(ns) {
+                        println!("After rollback: Keys in '{}': {:?}", ns, ns_data.keys().collect::<Vec<_>>());
+                    }
+                }
+                
                 Ok(())
             }
             None => Err(StorageError::TransactionError {
@@ -313,21 +353,27 @@ impl StorageBackend for InMemoryStorage {
 
         let internal_key = Self::make_internal_key(namespace, key);
         
-        // Record for potential rollback *before* making changes
+        // Get existing value if it exists (for rollback)
         let existing_value = self.data.get(namespace).and_then(|ns| ns.get(key)).cloned();
+        
+        if existing_value.is_none() {
+            // If the key doesn't exist, there's nothing to delete
+            return Err(StorageError::NotFound { 
+                key: internal_key 
+            });
+        }
+        
+        // Record the existing value for rollback before deletion
         self.record_for_rollback(namespace, key, existing_value);
         
         // Delete data
         if let Some(ns_data) = self.data.get_mut(namespace) {
-            if ns_data.remove(key).is_none() {
-                return Err(StorageError::NotFound { 
-                    key: internal_key 
-                });
+            ns_data.remove(key);
+            
+            // Clean up empty namespace (though this is optional)
+            if ns_data.is_empty() {
+                self.data.remove(namespace);
             }
-        } else {
-            return Err(StorageError::NotFound { 
-                key: internal_key 
-            });
         }
         
         // Emit Audit Event
@@ -345,18 +391,9 @@ impl StorageBackend for InMemoryStorage {
     fn contains(&self, auth: &AuthContext, namespace: &str, key: &str) -> StorageResult<bool> {
         self.check_permission(auth, "read", namespace)?;
         
-        // Check transaction data first if in a transaction
-        if let Some(transaction) = &self.transaction_stack.last() {
-            // Check if this key was modified in the transaction
-            for (tx_ns, tx_key, _) in transaction.iter() {
-                if tx_ns == namespace && tx_key == key {
-                    // The key exists if it was part of the transaction and is in data
-                    return Ok(self.data.get(namespace).map_or(false, |ns| ns.contains_key(key)));
-                }
-            }
-        }
-        
-        // Otherwise check main data
+        // Simply check if the key exists in the data map
+        // We don't need special transaction handling here - 
+        // by the time this is called after a rollback, the transaction is already processed
         Ok(self.data.get(namespace).map_or(false, |ns| ns.contains_key(key)))
     }
     
