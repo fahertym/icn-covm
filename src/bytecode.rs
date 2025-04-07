@@ -195,6 +195,66 @@ pub enum BytecodeOp {
     
     /// Verify a cryptographic signature
     VerifySignature,
+
+    /// Create a new economic resource
+    CreateResource(String),
+    
+    /// Mint new units of a resource and assign to an account
+    Mint { 
+        /// Resource identifier
+        resource: String, 
+        
+        /// Account identifier
+        account: String, 
+        
+        /// Amount to mint
+        amount: f64, 
+        
+        /// Optional reason for minting
+        reason: Option<String> 
+    },
+    
+    /// Transfer resource units between accounts
+    Transfer { 
+        /// Resource identifier
+        resource: String, 
+        
+        /// Source account
+        from: String, 
+        
+        /// Destination account
+        to: String, 
+        
+        /// Amount to transfer
+        amount: f64, 
+        
+        /// Optional reason for transfer
+        reason: Option<String> 
+    },
+    
+    /// Burn/destroy resource units from an account
+    Burn { 
+        /// Resource identifier
+        resource: String, 
+        
+        /// Account to burn from
+        account: String, 
+        
+        /// Amount to burn
+        amount: f64, 
+        
+        /// Optional reason for burning
+        reason: Option<String> 
+    },
+    
+    /// Get the balance of a resource for an account
+    Balance { 
+        /// Resource identifier
+        resource: String, 
+        
+        /// Account to check
+        account: String 
+    },
 }
 
 /// The bytecode program with flattened instructions and a function lookup table
@@ -436,6 +496,30 @@ impl BytecodeCompiler {
                 Op::RequireRole(role) => self.program.instructions.push(BytecodeOp::RequireRole(role.clone())),
                 Op::RequireIdentity(identity) => self.program.instructions.push(BytecodeOp::RequireIdentity(identity.clone())),
                 Op::VerifySignature => self.program.instructions.push(BytecodeOp::VerifySignature),
+                Op::CreateResource(resource) => self.program.instructions.push(BytecodeOp::CreateResource(resource.clone())),
+                Op::Mint { resource, account, amount, reason } => self.program.instructions.push(BytecodeOp::Mint {
+                    resource: resource.clone(),
+                    account: account.clone(),
+                    amount,
+                    reason: reason.clone(),
+                }),
+                Op::Transfer { resource, from, to, amount, reason } => self.program.instructions.push(BytecodeOp::Transfer {
+                    resource: resource.clone(),
+                    from: from.clone(),
+                    to: to.clone(),
+                    amount,
+                    reason: reason.clone(),
+                }),
+                Op::Burn { resource, account, amount, reason } => self.program.instructions.push(BytecodeOp::Burn {
+                    resource: resource.clone(),
+                    account: account.clone(),
+                    amount,
+                    reason: reason.clone(),
+                }),
+                Op::Balance { resource, account } => self.program.instructions.push(BytecodeOp::Balance {
+                    resource: resource.clone(),
+                    account: account.clone(),
+                }),
             }
         }
     }
@@ -1054,6 +1138,36 @@ impl BytecodeExecutor {
             BytecodeOp::VerifySignature => {
                 // Call the VM's execute_verify_signature method
                 self.vm.execute_verify_signature()?;
+            }
+
+            BytecodeOp::CreateResource(resource) => {
+                // Implementation for creating a new resource
+                // This is a placeholder and should be replaced with actual implementation
+                println!("Creating resource: {}", resource);
+            }
+            
+            BytecodeOp::Mint { resource, account, amount, reason } => {
+                // Implementation for minting new units of a resource
+                // This is a placeholder and should be replaced with actual implementation
+                println!("Minting {} units of resource {} to account {} with reason: {:?}", amount, resource, account, reason);
+            }
+            
+            BytecodeOp::Transfer { resource, from, to, amount, reason } => {
+                // Implementation for transferring resource units between accounts
+                // This is a placeholder and should be replaced with actual implementation
+                println!("Transferring {} units of resource {} from account {} to account {} with reason: {:?}", amount, resource, from, to, reason);
+            }
+            
+            BytecodeOp::Burn { resource, account, amount, reason } => {
+                // Implementation for burning resource units from an account
+                // This is a placeholder and should be replaced with actual implementation
+                println!("Burning {} units of resource {} from account {} with reason: {:?}", amount, resource, account, reason);
+            }
+            
+            BytecodeOp::Balance { resource, account } => {
+                // Implementation for getting the balance of a resource for an account
+                // This is a placeholder and should be replaced with actual implementation
+                println!("Getting balance of resource {} for account {}", resource, account);
             }
         }
         

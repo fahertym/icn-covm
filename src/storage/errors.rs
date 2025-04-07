@@ -73,6 +73,18 @@ pub enum StorageError {
         feature: String 
     },
     
+    /// Resource metadata not found
+    ResourceMetadataNotFound(String),
+    
+    /// Resource not found
+    ResourceNotFound(String),
+    
+    /// Insufficient balance for economic operation
+    InsufficientBalance(String, String),
+    
+    /// Invalid storage data format
+    InvalidStorageData(String),
+    
     /// Generic error for cases not covered by other variants
     Other { 
         details: String 
@@ -121,6 +133,18 @@ impl fmt::Display for StorageError {
                 
             StorageError::NotImplemented { feature } => 
                 write!(f, "Feature not implemented: {}", feature),
+                
+            StorageError::ResourceMetadataNotFound(resource_id) =>
+                write!(f, "Resource metadata not found for resource '{}'", resource_id),
+                
+            StorageError::ResourceNotFound(resource_id) =>
+                write!(f, "Resource not found: '{}'", resource_id),
+                
+            StorageError::InsufficientBalance(account, resource) =>
+                write!(f, "Insufficient balance for account '{}' of resource '{}'", account, resource),
+                
+            StorageError::InvalidStorageData(details) =>
+                write!(f, "Invalid storage data: {}", details),
                 
             StorageError::Other { details } => 
                 write!(f, "Storage error: {}", details),

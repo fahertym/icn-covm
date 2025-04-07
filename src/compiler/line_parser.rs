@@ -222,6 +222,152 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
             ))?;
             Ok(Op::LoadP(key.to_string()))
         },
+        "createresource" => {
+            let resource_id = parts.next().ok_or(CompilerError::MissingVariable(
+                "createresource".to_string(),
+                pos.line,
+                pos.column,
+            ))?;
+            Ok(Op::CreateResource(resource_id.to_string()))
+        },
+        "mint" => {
+            let resource = parts.next().ok_or(CompilerError::MissingVariable(
+                "mint (resource)".to_string(),
+                pos.line,
+                pos.column,
+            ))?;
+            
+            let account = parts.next().ok_or(CompilerError::MissingVariable(
+                "mint (account)".to_string(),
+                pos.line,
+                pos.column,
+            ))?;
+            
+            let amount_str = parts.next().ok_or(CompilerError::MissingVariable(
+                "mint (amount)".to_string(),
+                pos.line,
+                pos.column,
+            ))?;
+            
+            let amount = amount_str.parse::<f64>().map_err(|_| {
+                CompilerError::InvalidFunctionFormat(
+                    format!("Invalid mint amount: {}", amount_str),
+                    pos.line,
+                    pos.column,
+                )
+            })?;
+            
+            // Reason is optional
+            let reason = if let Some(inner) = line.find('"') {
+                let inner = &line[inner + 1..line.rfind('"').unwrap_or(line.len())];
+                Some(inner.to_string())
+            } else {
+                None
+            };
+            
+            Ok(Op::Mint { resource: resource.to_string(), account: account.to_string(), amount, reason })
+        },
+        "transfer" => {
+            let resource = parts.next().ok_or(CompilerError::MissingVariable(
+                "transfer (resource)".to_string(),
+                pos.line,
+                pos.column,
+            ))?;
+            
+            let from = parts.next().ok_or(CompilerError::MissingVariable(
+                "transfer (from)".to_string(),
+                pos.line,
+                pos.column,
+            ))?;
+            
+            let to = parts.next().ok_or(CompilerError::MissingVariable(
+                "transfer (to)".to_string(),
+                pos.line,
+                pos.column,
+            ))?;
+            
+            let amount_str = parts.next().ok_or(CompilerError::MissingVariable(
+                "transfer (amount)".to_string(),
+                pos.line,
+                pos.column,
+            ))?;
+            
+            let amount = amount_str.parse::<f64>().map_err(|_| {
+                CompilerError::InvalidFunctionFormat(
+                    format!("Invalid transfer amount: {}", amount_str),
+                    pos.line,
+                    pos.column,
+                )
+            })?;
+            
+            // Reason is optional
+            let reason = if let Some(inner) = line.find('"') {
+                let inner = &line[inner + 1..line.rfind('"').unwrap_or(line.len())];
+                Some(inner.to_string())
+            } else {
+                None
+            };
+            
+            Ok(Op::Transfer { 
+                resource: resource.to_string(), 
+                from: from.to_string(), 
+                to: to.to_string(), 
+                amount, 
+                reason 
+            })
+        },
+        "burn" => {
+            let resource = parts.next().ok_or(CompilerError::MissingVariable(
+                "burn (resource)".to_string(),
+                pos.line,
+                pos.column,
+            ))?;
+            
+            let account = parts.next().ok_or(CompilerError::MissingVariable(
+                "burn (account)".to_string(),
+                pos.line,
+                pos.column,
+            ))?;
+            
+            let amount_str = parts.next().ok_or(CompilerError::MissingVariable(
+                "burn (amount)".to_string(),
+                pos.line,
+                pos.column,
+            ))?;
+            
+            let amount = amount_str.parse::<f64>().map_err(|_| {
+                CompilerError::InvalidFunctionFormat(
+                    format!("Invalid burn amount: {}", amount_str),
+                    pos.line,
+                    pos.column,
+                )
+            })?;
+            
+            // Reason is optional
+            let reason = if let Some(inner) = line.find('"') {
+                let inner = &line[inner + 1..line.rfind('"').unwrap_or(line.len())];
+                Some(inner.to_string())
+            } else {
+                None
+            };
+            
+            Ok(Op::Burn { resource: resource.to_string(), account: account.to_string(), amount, reason })
+        },
+        "balance" => {
+            let resource = parts.next().ok_or(CompilerError::MissingVariable(
+                "balance (resource)".to_string(),
+                pos.line,
+                pos.column,
+            ))?;
+            
+            let account = parts.next().ok_or(CompilerError::MissingVariable(
+                "balance (account)".to_string(),
+                pos.line,
+                pos.column,
+            ))?;
+            
+            Ok(Op::Balance { resource: resource.to_string(), account: account.to_string() })
+        },
         _ => Err(CompilerError::UnknownCommand(
             command.to_string(),
             pos.line,

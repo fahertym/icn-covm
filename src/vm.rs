@@ -340,6 +340,82 @@ pub enum Op {
     /// Pops: message, signature, public_key, scheme
     /// Pushes: 1.0 if valid, 0.0 if invalid
     VerifySignature,
+
+    /// Create a new economic resource
+    ///
+    /// This operation creates a new economic resource with the specified identifier.
+    /// The resource details should be stored in persistent storage.
+    CreateResource(String),
+    
+    /// Mint new units of a resource and assign to an account
+    ///
+    /// This operation creates new units of an existing resource and
+    /// assigns them to a specified account. It can be used for initial
+    /// allocation or ongoing issuance of resources.
+    Mint {
+        /// Resource identifier
+        resource: String,
+        
+        /// Account identifier
+        account: String,
+        
+        /// Amount to mint
+        amount: f64,
+        
+        /// Optional reason for minting
+        reason: Option<String>,
+    },
+    
+    /// Transfer resource units between accounts
+    ///
+    /// This operation moves units of a resource from one account to another.
+    /// It checks that the source account has sufficient balance.
+    Transfer {
+        /// Resource identifier
+        resource: String,
+        
+        /// Source account
+        from: String,
+        
+        /// Destination account
+        to: String,
+        
+        /// Amount to transfer
+        amount: f64,
+        
+        /// Optional reason for transfer
+        reason: Option<String>,
+    },
+    
+    /// Burn/destroy resource units from an account
+    ///
+    /// This operation removes units of a resource from circulation by
+    /// "burning" them from a specified account.
+    Burn {
+        /// Resource identifier
+        resource: String,
+        
+        /// Account to burn from
+        account: String,
+        
+        /// Amount to burn
+        amount: f64,
+        
+        /// Optional reason for burning
+        reason: Option<String>,
+    },
+    
+    /// Get the balance of a resource for an account
+    ///
+    /// This operation queries the current balance of a specified resource
+    /// for a given account and pushes the result onto the stack.
+    Balance {
+        /// Resource identifier
+        resource: String,
+        
+        /// Account to check
+        account: String,
+    },
 }
 
 #[derive(Debug)]
@@ -1273,6 +1349,21 @@ impl VM {
                 Op::VerifySignature => {
                     self.execute_verify_signature()?;
                 },
+                Op::CreateResource(ref resource_id) => {
+                    self.execute_create_resource(resource_id)?;
+                },
+                Op::Mint { resource, account, amount, reason } => {
+                    self.execute_mint(resource, account, amount, reason)?;
+                },
+                Op::Transfer { resource, from, to, amount, reason } => {
+                    self.execute_transfer(resource, from, to, amount, reason)?;
+                },
+                Op::Burn { resource, account, amount, reason } => {
+                    self.execute_burn(resource, account, amount, reason)?;
+                },
+                Op::Balance { resource, account } => {
+                    self.execute_balance(resource, account)?;
+                },
             }
 
             pc += 1;
@@ -1299,5 +1390,237 @@ impl VM {
     /// Get the current storage namespace
     pub fn get_namespace(&self) -> &str {
         &self.namespace
+    }
+
+    /// Create a new economic resource
+    pub fn execute_create_resource(&mut self, resource_id: &str) -> Result<(), VMError> {
+        // Check if we're in a storage context
+        self.storage_operation("CreateResource", |storage| {
+            // Resource metadata should be in memory as a JSON string
+            let metadata = match self.memory.get("resource_metadata") {
+                Some(data_ptr) => {
+                    // Attempt to get string from memory at the given pointer
+                    let metadata_key = format!("_str_{}", data_ptr);
+                    match self.memory.get(&metadata_key) {
+                        Some(_) => metadata_key,
+                        None => return Err(StorageError::ResourceMetadataNotFound(resource_id.to_string())),
+                    }
+                },
+                None => return Err(StorageError::ResourceMetadataNotFound(resource_id.to_string())),
+            };
+
+            // Store the resource metadata
+            let key = format!("resources/{}", resource_id);
+            let auth = self.auth_context.clone();
+            let namespace = self.namespace.clone();
+            
+            // Get the actual metadata string from memory
+            let metadata_value = match self.memory.get(&metadata) {
+                Some(value) => value.to_string(),
+                None => return Err(StorageError::ResourceMetadataNotFound(resource_id.to_string())),
+            };
+            
+            // Store the resource metadata
+            storage.set(&auth, &namespace, &key, metadata_value.as_bytes().to_vec())?;
+            
+            // Create empty balances for this resource
+            let balances_key = format!("resources/{}/balances", resource_id);
+            storage.set(&auth, &namespace, &balances_key, "{}".as_bytes().to_vec())?;
+            
+            // Log the resource creation
+            let event = format!("Created resource: {}", resource_id);
+            self.events.push(VMEvent {
+                category: "economic".to_string(),
+                message: event,
+                timestamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+            });
+            
+            Ok(())
+        })
+    }
+    
+    /// Mint new units of a resource and assign to an account
+    pub fn execute_mint(&mut self, resource: &str, account: &str, amount: f64, reason: &Option<String>) -> Result<(), VMError> {
+        if amount <= 0.0 {
+            return Err(VMError::ParameterError("Mint amount must be positive".to_string()));
+        }
+        
+        // Check if we're in a storage context
+        self.storage_operation("Mint", |storage| {
+            let auth = self.auth_context.clone();
+            let namespace = self.namespace.clone();
+            
+            // Check if resource exists
+            let resource_key = format!("resources/{}", resource);
+            if !storage.contains(&auth, &namespace, &resource_key)? {
+                return Err(StorageError::ResourceNotFound(resource.to_string()));
+            }
+            
+            // Get current balances for this resource
+            let balances_key = format!("resources/{}/balances", resource);
+            let balances_bytes = storage.get(&auth, &namespace, &balances_key)?;
+            let mut balances: serde_json::Value = serde_json::from_slice(&balances_bytes)
+                .map_err(|e| StorageError::InvalidStorageData(format!("Failed to parse balances: {}", e)))?;
+            
+            // Update the account balance
+            let account_balance = balances[account].as_f64().unwrap_or(0.0) + amount;
+            balances[account] = json!(account_balance);
+            
+            // Store updated balances
+            let updated_balances = serde_json::to_string(&balances)
+                .map_err(|e| StorageError::InvalidStorageData(format!("Failed to serialize balances: {}", e)))?;
+            storage.set(&auth, &namespace, &balances_key, updated_balances.as_bytes().to_vec())?;
+            
+            // Log the mint operation
+            let event = match reason {
+                Some(r) => format!("Minted {} units of {} to {} with reason: {}", amount, resource, account, r),
+                None => format!("Minted {} units of {} to {}", amount, resource, account),
+            };
+            
+            self.events.push(VMEvent {
+                category: "economic".to_string(),
+                message: event,
+                timestamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+            });
+            
+            Ok(())
+        })
+    }
+    
+    /// Transfer resource units between accounts
+    pub fn execute_transfer(&mut self, resource: &str, from: &str, to: &str, amount: f64, reason: &Option<String>) -> Result<(), VMError> {
+        if amount <= 0.0 {
+            return Err(VMError::ParameterError("Transfer amount must be positive".to_string()));
+        }
+        
+        // Check if we're in a storage context
+        self.storage_operation("Transfer", |storage| {
+            let auth = self.auth_context.clone();
+            let namespace = self.namespace.clone();
+            
+            // Check if resource exists
+            let resource_key = format!("resources/{}", resource);
+            if !storage.contains(&auth, &namespace, &resource_key)? {
+                return Err(StorageError::ResourceNotFound(resource.to_string()));
+            }
+            
+            // Get current balances for this resource
+            let balances_key = format!("resources/{}/balances", resource);
+            let balances_bytes = storage.get(&auth, &namespace, &balances_key)?;
+            let mut balances: serde_json::Value = serde_json::from_slice(&balances_bytes)
+                .map_err(|e| StorageError::InvalidStorageData(format!("Failed to parse balances: {}", e)))?;
+            
+            // Check if source account has sufficient balance
+            let from_balance = balances[from].as_f64().unwrap_or(0.0);
+            if from_balance < amount {
+                return Err(StorageError::InsufficientBalance(from.to_string(), resource.to_string()));
+            }
+            
+            // Update balances
+            balances[from] = json!(from_balance - amount);
+            let to_balance = balances[to].as_f64().unwrap_or(0.0) + amount;
+            balances[to] = json!(to_balance);
+            
+            // Store updated balances
+            let updated_balances = serde_json::to_string(&balances)
+                .map_err(|e| StorageError::InvalidStorageData(format!("Failed to serialize balances: {}", e)))?;
+            storage.set(&auth, &namespace, &balances_key, updated_balances.as_bytes().to_vec())?;
+            
+            // Log the transfer operation
+            let event = match reason {
+                Some(r) => format!("Transferred {} units of {} from {} to {} with reason: {}", amount, resource, from, to, r),
+                None => format!("Transferred {} units of {} from {} to {}", amount, resource, from, to),
+            };
+            
+            self.events.push(VMEvent {
+                category: "economic".to_string(),
+                message: event,
+                timestamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+            });
+            
+            Ok(())
+        })
+    }
+    
+    /// Burn/destroy resource units from an account
+    pub fn execute_burn(&mut self, resource: &str, account: &str, amount: f64, reason: &Option<String>) -> Result<(), VMError> {
+        if amount <= 0.0 {
+            return Err(VMError::ParameterError("Burn amount must be positive".to_string()));
+        }
+        
+        // Check if we're in a storage context
+        self.storage_operation("Burn", |storage| {
+            let auth = self.auth_context.clone();
+            let namespace = self.namespace.clone();
+            
+            // Check if resource exists
+            let resource_key = format!("resources/{}", resource);
+            if !storage.contains(&auth, &namespace, &resource_key)? {
+                return Err(StorageError::ResourceNotFound(resource.to_string()));
+            }
+            
+            // Get current balances for this resource
+            let balances_key = format!("resources/{}/balances", resource);
+            let balances_bytes = storage.get(&auth, &namespace, &balances_key)?;
+            let mut balances: serde_json::Value = serde_json::from_slice(&balances_bytes)
+                .map_err(|e| StorageError::InvalidStorageData(format!("Failed to parse balances: {}", e)))?;
+            
+            // Check if account has sufficient balance
+            let account_balance = balances[account].as_f64().unwrap_or(0.0);
+            if account_balance < amount {
+                return Err(StorageError::InsufficientBalance(account.to_string(), resource.to_string()));
+            }
+            
+            // Update balance
+            balances[account] = json!(account_balance - amount);
+            
+            // Store updated balances
+            let updated_balances = serde_json::to_string(&balances)
+                .map_err(|e| StorageError::InvalidStorageData(format!("Failed to serialize balances: {}", e)))?;
+            storage.set(&auth, &namespace, &balances_key, updated_balances.as_bytes().to_vec())?;
+            
+            // Log the burn operation
+            let event = match reason {
+                Some(r) => format!("Burned {} units of {} from {} with reason: {}", amount, resource, account, r),
+                None => format!("Burned {} units of {} from {}", amount, resource, account),
+            };
+            
+            self.events.push(VMEvent {
+                category: "economic".to_string(),
+                message: event,
+                timestamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+            });
+            
+            Ok(())
+        })
+    }
+    
+    /// Get the balance of a resource for an account
+    pub fn execute_balance(&mut self, resource: &str, account: &str) -> Result<(), VMError> {
+        // Check if we're in a storage context
+        self.storage_operation("Balance", |storage| {
+            let auth = self.auth_context.clone();
+            let namespace = self.namespace.clone();
+            
+            // Check if resource exists
+            let resource_key = format!("resources/{}", resource);
+            if !storage.contains(&auth, &namespace, &resource_key)? {
+                return Err(StorageError::ResourceNotFound(resource.to_string()));
+            }
+            
+            // Get current balances for this resource
+            let balances_key = format!("resources/{}/balances", resource);
+            let balances_bytes = storage.get(&auth, &namespace, &balances_key)?;
+            let balances: serde_json::Value = serde_json::from_slice(&balances_bytes)
+                .map_err(|e| StorageError::InvalidStorageData(format!("Failed to parse balances: {}", e)))?;
+            
+            // Get account balance
+            let account_balance = balances[account].as_f64().unwrap_or(0.0);
+            
+            // Push balance to the stack
+            self.stack.push(account_balance);
+            
+            Ok(())
+        })
     }
 }
