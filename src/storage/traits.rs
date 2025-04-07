@@ -20,6 +20,18 @@ pub trait StorageBackend {
     /// Updates version information.
     fn set(&mut self, auth: &AuthContext, namespace: &str, key: &str, value: Vec<u8>) -> StorageResult<()>;
 
+    /// Deletes a key from storage
+    /// Performs permission checks
+    fn delete(&mut self, auth: &AuthContext, namespace: &str, key: &str) -> StorageResult<()>;
+    
+    /// Checks if a key exists in storage
+    /// Performs permission checks
+    fn contains(&self, auth: &AuthContext, namespace: &str, key: &str) -> StorageResult<bool>;
+    
+    /// Lists keys in storage with optional prefix filtering
+    /// Performs permission checks
+    fn list_keys(&self, auth: &AuthContext, namespace: &str, prefix: Option<&str>) -> StorageResult<Vec<String>>;
+
     /// Creates a resource account for a user.
     /// Typically requires administrative privileges.
     fn create_account(&mut self, auth: &AuthContext, user_id: &str, quota_bytes: u64) -> StorageResult<()>;

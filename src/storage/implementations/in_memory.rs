@@ -307,6 +307,81 @@ impl StorageBackend for InMemoryStorage {
         // Let's return latest first.
         Ok(results)
     }
+
+    fn delete(&mut self, auth: &AuthContext, namespace: &str, key: &str) -> StorageResult<()> {
+        self.check_permission(auth, "write", namespace)?;
+
+        let internal_key = Self::make_internal_key(namespace, key);
+        
+        // Record for potential rollback *before* making changes
+        let existing_value = self.data.get(namespace).and_then(|ns| ns.get(key)).cloned();
+        self.record_for_rollback(namespace, key, existing_value);
+        
+        // Delete data
+        if let Some(ns_data) = self.data.get_mut(namespace) {
+            if ns_data.remove(key).is_none() {
+                return Err(StorageError::NotFound { 
+                    key: internal_key 
+                });
+            }
+        } else {
+            return Err(StorageError::NotFound { 
+                key: internal_key 
+            });
+        }
+        
+        // Emit Audit Event
+        self.emit_event(
+            "delete",
+            auth,
+            namespace,
+            key,
+            "Value deleted",
+        );
+        
+        Ok(())
+    }
+    
+    fn contains(&self, auth: &AuthContext, namespace: &str, key: &str) -> StorageResult<bool> {
+        self.check_permission(auth, "read", namespace)?;
+        
+        // Check transaction data first if in a transaction
+        if let Some(transaction) = &self.transaction_stack.last() {
+            // Check if this key was modified in the transaction
+            for (tx_ns, tx_key, _) in transaction.iter() {
+                if tx_ns == namespace && tx_key == key {
+                    // The key exists if it was part of the transaction and is in data
+                    return Ok(self.data.get(namespace).map_or(false, |ns| ns.contains_key(key)));
+                }
+            }
+        }
+        
+        // Otherwise check main data
+        Ok(self.data.get(namespace).map_or(false, |ns| ns.contains_key(key)))
+    }
+    
+    fn list_keys(&self, auth: &AuthContext, namespace: &str, prefix: Option<&str>) -> StorageResult<Vec<String>> {
+        self.check_permission(auth, "read", namespace)?;
+        
+        // Get all keys in the namespace
+        let keys = self.data.get(namespace)
+            .map(|ns| {
+                ns.keys()
+                    .filter(|k| {
+                        // Apply prefix filter if provided
+                        if let Some(prefix) = prefix {
+                            k.starts_with(prefix)
+                        } else {
+                            true
+                        }
+                    })
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+            
+        Ok(keys)
+    }
 }
 
 // Add unit tests for InMemoryStorage here

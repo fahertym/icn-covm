@@ -282,6 +282,42 @@ pub enum Op {
     /// using the specified key and pushes it onto the stack.
     /// If the key does not exist, an error is returned.
     LoadP(String),
+
+    /// Store a typed value in persistent storage with the given key
+    StorePTyped {
+        /// Storage key
+        key: String,
+        
+        /// Expected type for the value
+        expected_type: String,
+    },
+    
+    /// Load a typed value from persistent storage with the given key
+    LoadPTyped {
+        /// Storage key
+        key: String,
+        
+        /// Expected type for the value
+        expected_type: String, 
+    },
+    
+    /// Check if a key exists in persistent storage
+    KeyExistsP(String),
+    
+    /// Delete a key from persistent storage
+    DeleteP(String),
+    
+    /// List keys in persistent storage with a given prefix
+    ListKeysP(String),
+    
+    /// Begin a storage transaction
+    BeginTx,
+    
+    /// Commit a storage transaction
+    CommitTx,
+    
+    /// Rollback a storage transaction
+    RollbackTx,
 }
 
 #[derive(Debug)]
@@ -535,6 +571,180 @@ impl VM {
         Ok((b, a))
     }
 
+    /// Helper method to interact with storage while providing proper error handling
+    fn storage_operation<F, T>(&mut self, operation_name: &str, f: F) -> Result<T, VMError>
+    where
+        F: FnOnce(&mut Box<dyn StorageBackend + Send + Sync>) -> StorageResult<T>,
+    {
+        let storage = self.storage_backend.as_mut().ok_or(VMError::StorageUnavailable)?;
+        
+        f(storage).map_err(|e| {
+            VMError::StorageError(format!("{} operation failed: {}", operation_name, e))
+        })
+    }
+
+    // Helper method to execute a StoreP operation
+    fn execute_store_p(&mut self, key: &str) -> Result<(), VMError> {
+        let value = self.pop_one("StoreP")?;
+        
+        // Convert to string representation appropriate for storage
+        let value_str = value.to_string();
+        let auth_context = self.auth_context.clone();
+        let namespace = self.namespace.clone();
+        
+        self.storage_operation("StoreP", |storage| {
+            storage.set(&auth_context, &namespace, key, value_str.into_bytes())
+        })
+    }
+    
+    // Helper method to execute a LoadP operation
+    fn execute_load_p(&mut self, key: &str) -> Result<(), VMError> {
+        let auth_context = self.auth_context.clone();
+        let namespace = self.namespace.clone();
+        
+        let result = self.storage_operation("LoadP", |storage| {
+            storage.get(&auth_context, &namespace, key)
+        })?;
+        
+        // Convert from bytes to string to f64
+        let value_str = String::from_utf8(result)
+            .map_err(|e| VMError::StorageError(format!("Invalid UTF-8 data: {}", e)))?;
+            
+        let value = value_str.parse::<f64>()
+            .map_err(|e| VMError::StorageError(format!("Invalid numeric data: {}", e)))?;
+            
+        self.stack.push(value);
+        Ok(())
+    }
+
+    // Helper method to execute a DeleteP operation
+    pub fn execute_delete_p(&mut self, key: &str) -> Result<(), VMError> {
+        let auth_context = self.auth_context.clone();
+        let namespace = self.namespace.clone();
+        
+        self.storage_operation("DeleteP", |storage| {
+            storage.delete(&auth_context, &namespace, key)
+        })
+    }
+    
+    // Helper method to execute a KeyExistsP operation
+    pub fn execute_key_exists_p(&mut self, key: &str) -> Result<(), VMError> {
+        let auth_context = self.auth_context.clone();
+        let namespace = self.namespace.clone();
+        
+        let result = self.storage_operation("KeyExistsP", |storage| {
+            storage.contains(&auth_context, &namespace, key)
+        })?;
+        
+        // Push 1.0 for true, 0.0 for false
+        self.stack.push(if result { 1.0 } else { 0.0 });
+        Ok(())
+    }
+    
+    // Helper method to execute a ListKeysP operation
+    pub fn execute_list_keys_p(&mut self, prefix: &str) -> Result<(), VMError> {
+        let auth_context = self.auth_context.clone();
+        let namespace = self.namespace.clone();
+        
+        let keys = self.storage_operation("ListKeysP", |storage| {
+            storage.list_keys(&auth_context, &namespace, Some(prefix))
+        })?;
+        
+        // For each key, we push its string representation onto the stack
+        // TODO: Consider a more VM-friendly way to represent multiple results
+        let count = keys.len() as f64;
+        self.stack.push(count); // Push the count first
+        
+        // Push keys in reverse order so they're retrieved in correct order
+        for key in keys.into_iter().rev() {
+            // We'd need a way to handle strings on the stack
+            // This is a simplification; in practice, we might need typed values
+            self.stack.push(key.len() as f64); // Push length as placeholder
+        }
+        
+        Ok(())
+    }
+    
+    // Helper method to execute a BeginTx operation
+    pub fn execute_begin_tx(&mut self) -> Result<(), VMError> {
+        self.storage_operation("BeginTx", |storage| {
+            storage.begin_transaction()
+        })
+    }
+    
+    // Helper method to execute a CommitTx operation
+    pub fn execute_commit_tx(&mut self) -> Result<(), VMError> {
+        self.storage_operation("CommitTx", |storage| {
+            storage.commit_transaction()
+        })
+    }
+    
+    // Helper method to execute a RollbackTx operation
+    pub fn execute_rollback_tx(&mut self) -> Result<(), VMError> {
+        self.storage_operation("RollbackTx", |storage| {
+            storage.rollback_transaction()
+        })
+    }
+    
+    // Helper method for typed storage operations
+    pub fn execute_store_p_typed(&mut self, key: &str, expected_type: &str) -> Result<(), VMError> {
+        // In a typed system, we'd need to validate the type here
+        // For now, we'll just convert to string as a basic representation
+        let value = self.pop_one("StorePTyped")?;
+        
+        // Type validation would happen here, using expected_type
+        // For now we're just checking if it's an integer
+        if expected_type == "integer" && value.fract() != 0.0 {
+            return Err(VMError::StorageError(
+                format!("Expected integer for key '{}', but got {}", key, value)
+            ));
+        }
+        
+        let value_str = value.to_string();
+        let auth_context = self.auth_context.clone();
+        let namespace = self.namespace.clone();
+        
+        self.storage_operation("StorePTyped", |storage| {
+            storage.set(&auth_context, &namespace, key, value_str.into_bytes())
+        })
+    }
+    
+    // Helper method for typed load operations
+    pub fn execute_load_p_typed(&mut self, key: &str, expected_type: &str) -> Result<(), VMError> {
+        let auth_context = self.auth_context.clone();
+        let namespace = self.namespace.clone();
+        
+        let result = self.storage_operation("LoadPTyped", |storage| {
+            storage.get(&auth_context, &namespace, key)
+        })?;
+        
+        // Convert from bytes to string
+        let value_str = String::from_utf8(result)
+            .map_err(|e| VMError::StorageError(format!("Invalid UTF-8 data: {}", e)))?;
+            
+        // Type validation based on expected_type
+        match expected_type {
+            "integer" => {
+                let value = value_str.parse::<i64>()
+                    .map_err(|e| VMError::StorageError(format!("Invalid integer data: {}", e)))?;
+                self.stack.push(value as f64);
+            },
+            "float" => {
+                let value = value_str.parse::<f64>()
+                    .map_err(|e| VMError::StorageError(format!("Invalid float data: {}", e)))?;
+                self.stack.push(value);
+            },
+            // We could add more types here, but for now just default to float
+            _ => {
+                let value = value_str.parse::<f64>()
+                    .map_err(|e| VMError::StorageError(format!("Invalid numeric data: {}", e)))?;
+                self.stack.push(value);
+            }
+        }
+        
+        Ok(())
+    }
+
     fn execute_inner(&mut self, ops: &[Op]) -> Result<(), VMError> {
         let mut pc = 0;
         while pc < ops.len() {
@@ -717,28 +927,35 @@ impl VM {
                         self.stack.push(1.0);
                     }
                 },
-                Op::StoreP(key) => {
-                    let value = self.pop_one("StoreP")?;
-                    let value_bytes = value.to_string().into_bytes(); // Convert f64 to bytes via String
-                    if let Some(backend) = self.storage_backend.as_mut() {
-                        backend.set(&self.auth_context, &self.namespace, key, value_bytes)
-                            .map_err(|e| VMError::StorageError(e.to_string()))?;
-                    } else {
-                        return Err(VMError::StorageUnavailable); // Use correct variant
-                    }
+                Op::StoreP(ref key) => {
+                    self.execute_store_p(key)?;
                 },
-                Op::LoadP(key) => {
-                    let value_bytes = if let Some(backend) = self.storage_backend.as_ref() {
-                        backend.get(&self.auth_context, &self.namespace, key)
-                            .map_err(|e| VMError::StorageError(e.to_string()))?
-                    } else {
-                        return Err(VMError::StorageUnavailable); // Use correct variant
-                    };
-                    let value_str = String::from_utf8(value_bytes)
-                        .map_err(|e| VMError::StorageError(format!("Invalid UTF-8 data in storage for key '{}': {}", key, e)))?;
-                    let value = value_str.parse::<f64>()
-                        .map_err(|_| VMError::StorageError(format!("Invalid numeric value in storage: {}", value_str)))?;
-                    self.stack.push(value);
+                Op::LoadP(ref key) => {
+                    self.execute_load_p(key)?;
+                },
+                Op::StorePTyped { ref key, ref expected_type } => {
+                    self.execute_store_p_typed(key, expected_type)?;
+                },
+                Op::LoadPTyped { ref key, ref expected_type } => {
+                    self.execute_load_p_typed(key, expected_type)?;
+                },
+                Op::KeyExistsP(ref key) => {
+                    self.execute_key_exists_p(key)?;
+                },
+                Op::DeleteP(ref key) => {
+                    self.execute_delete_p(key)?;
+                },
+                Op::ListKeysP(ref prefix) => {
+                    self.execute_list_keys_p(prefix)?;
+                },
+                Op::BeginTx => {
+                    self.execute_begin_tx()?;
+                },
+                Op::CommitTx => {
+                    self.execute_commit_tx()?;
+                },
+                Op::RollbackTx => {
+                    self.execute_rollback_tx()?;
                 },
             }
 

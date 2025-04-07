@@ -144,6 +144,42 @@ pub enum BytecodeOp {
     
     /// Modulo operation
     Mod,
+    
+    /// Store a typed value in persistent storage with the given key
+    StorePTyped {
+        /// Storage key
+        key: String,
+        
+        /// Expected type for the value
+        expected_type: String,
+    },
+    
+    /// Load a typed value from persistent storage with the given key
+    LoadPTyped {
+        /// Storage key
+        key: String,
+        
+        /// Expected type for the value
+        expected_type: String, 
+    },
+    
+    /// Check if a key exists in persistent storage
+    KeyExistsP(String),
+    
+    /// Delete a key from persistent storage
+    DeleteP(String),
+    
+    /// List keys in persistent storage with a given prefix
+    ListKeysP(String),
+    
+    /// Begin a storage transaction
+    BeginTx,
+    
+    /// Commit a storage transaction
+    CommitTx,
+    
+    /// Rollback a storage transaction
+    RollbackTx,
 }
 
 /// The bytecode program with flattened instructions and a function lookup table
@@ -318,14 +354,18 @@ impl BytecodeCompiler {
                 Op::Sub => self.program.instructions.push(BytecodeOp::Sub),
                 Op::Mul => self.program.instructions.push(BytecodeOp::Mul),
                 Op::Div => self.program.instructions.push(BytecodeOp::Div),
-                Op::Store(name) => self
-                    .program
-                    .instructions
-                    .push(BytecodeOp::Store(name.clone())),
-                Op::Load(name) => self
-                    .program
-                    .instructions
-                    .push(BytecodeOp::Load(name.clone())),
+                Op::Mod => self.program.instructions.push(BytecodeOp::Mod),
+                Op::Store(key) => self.program.instructions.push(BytecodeOp::Store(key.clone())),
+                Op::Load(key) => self.program.instructions.push(BytecodeOp::Load(key.clone())),
+                Op::If { condition, then, else_ } => self.compile_if(condition, then, else_),
+                Op::While { condition, body } => self.compile_while(condition, body),
+                Op::Loop { count, body } => self.compile_loop(*count, body),
+                Op::Emit(msg) => self.program.instructions.push(BytecodeOp::Emit(msg.clone())),
+                Op::Negate => self.program.instructions.push(BytecodeOp::Negate),
+                Op::AssertTop(val) => self.program.instructions.push(BytecodeOp::AssertTop(*val)),
+                Op::DumpStack => self.program.instructions.push(BytecodeOp::Emit("DumpStack operation".to_string())),
+                Op::DumpMemory => self.program.instructions.push(BytecodeOp::Emit("DumpMemory operation".to_string())),
+                Op::AssertMemory { key, expected } => self.program.instructions.push(BytecodeOp::AssertMemory(key.clone(), *expected)),
                 Op::Pop => self.program.instructions.push(BytecodeOp::Pop),
                 Op::Eq => self.program.instructions.push(BytecodeOp::Eq),
                 Op::Gt => self.program.instructions.push(BytecodeOp::Gt),
@@ -335,87 +375,47 @@ impl BytecodeCompiler {
                 Op::Or => self.program.instructions.push(BytecodeOp::Or),
                 Op::Dup => self.program.instructions.push(BytecodeOp::Dup),
                 Op::Swap => self.program.instructions.push(BytecodeOp::Swap),
-                Op::Over => self.program.instructions.push(BytecodeOp::Return),
-                Op::Negate => self.program.instructions.push(BytecodeOp::Negate),
-                Op::Call(name) => self
-                    .program
-                    .instructions
-                    .push(BytecodeOp::Call(name.clone())),
+                Op::Over => {
+                    // Over can be implemented with Dup and Swap
+                    self.program.instructions.push(BytecodeOp::Dup);
+                    self.program.instructions.push(BytecodeOp::Swap);
+                },
+                Op::Def { name, params, body } => self.compile_def(name, params, body),
+                Op::Call(name) => self.program.instructions.push(BytecodeOp::Call(name.clone())),
                 Op::Return => self.program.instructions.push(BytecodeOp::Return),
-                Op::Nop => self.program.instructions.push(BytecodeOp::Return),
+                Op::Nop => {}, // No operation, do nothing
+                Op::Match { value, cases, default } => self.compile_match(value, cases, default),
                 Op::Break => self.program.instructions.push(BytecodeOp::Break),
                 Op::Continue => self.program.instructions.push(BytecodeOp::Continue),
-                Op::Emit(msg) => self
-                    .program
-                    .instructions
-                    .push(BytecodeOp::Emit(msg.clone())),
-                Op::EmitEvent { category, message } => self
-                    .program
-                    .instructions
-                    .push(BytecodeOp::EmitEvent(category.clone(), message.clone())),
-                Op::DumpStack => self.program.instructions.push(BytecodeOp::Return),
-                Op::DumpMemory => self.program.instructions.push(BytecodeOp::Return),
-                Op::DumpState => self.program.instructions.push(BytecodeOp::Return),
-                Op::AssertTop(val) => self.program.instructions.push(BytecodeOp::AssertTop(*val)),
-                Op::AssertMemory { key, expected } => self
-                    .program
-                    .instructions
-                    .push(BytecodeOp::AssertMemory(key.clone(), *expected)),
-                Op::AssertEqualStack { depth } => self
-                    .program
-                    .instructions
-                    .push(BytecodeOp::AssertEqualStack(*depth)),
-                Op::Mod => self.program.instructions.push(BytecodeOp::Mod),
+                Op::EmitEvent { category, message } => self.program.instructions.push(BytecodeOp::EmitEvent(category.clone(), message.clone())),
+                Op::AssertEqualStack { depth } => self.program.instructions.push(BytecodeOp::AssertEqualStack(*depth)),
+                Op::DumpState => self.program.instructions.push(BytecodeOp::Emit("DumpState operation".to_string())),
                 Op::RankedVote { candidates, ballots } => {
-                    // Skip for now until we implement RankedVote properly in BytecodeOp
-                    // or convert the structure as needed
-                    self.program.instructions.push(BytecodeOp::Return); // NOP for now
+                    self.program.instructions.push(BytecodeOp::Emit(format!("RankedVote with {} candidates and {} ballots", candidates, ballots)));
                 },
-                Op::StoreP(key) => self
-                    .program
-                    .instructions
-                    .push(BytecodeOp::StoreStorage(key.clone())),
-                Op::LoadP(key) => self
-                    .program
-                    .instructions
-                    .push(BytecodeOp::LoadStorage(key.clone())),
-                Op::LiquidDelegate { from, to } => self
-                    .program
-                    .instructions
-                    .push(BytecodeOp::LiquidDelegate(from.clone(), to.clone())),
-                Op::VoteThreshold(threshold) => self
-                    .program
-                    .instructions
-                    .push(BytecodeOp::VoteThreshold(*threshold)),
-                Op::QuorumThreshold(threshold) => self
-                    .program
-                    .instructions
-                    .push(BytecodeOp::QuorumThreshold(*threshold)),
-
-                // Handle more complex operations
-                Op::If {
-                    condition,
-                    then,
-                    else_,
-                } => {
-                    self.compile_if(condition, then, else_);
-                }
-                Op::While { condition, body } => {
-                    self.compile_while(condition, body);
-                }
-                Op::Loop { count, body } => {
-                    self.compile_loop(*count, body);
-                }
-                Op::Def { name, params, body } => {
-                    self.compile_def(name, params, body);
-                }
-                Op::Match {
-                    value,
-                    cases,
-                    default,
-                } => {
-                    self.compile_match(value, cases, default);
-                }
+                Op::LiquidDelegate { from, to } => self.program.instructions.push(BytecodeOp::LiquidDelegate(from.clone(), to.clone())),
+                Op::VoteThreshold(threshold) => self.program.instructions.push(BytecodeOp::VoteThreshold(*threshold)),
+                Op::QuorumThreshold(threshold) => self.program.instructions.push(BytecodeOp::QuorumThreshold(*threshold)),
+                Op::StoreP(key) => self.program.instructions.push(BytecodeOp::StoreP(key.clone())),
+                Op::LoadP(key) => self.program.instructions.push(BytecodeOp::LoadP(key.clone())),
+                Op::StorePTyped { key, expected_type } => {
+                    self.program.instructions.push(BytecodeOp::StorePTyped {
+                        key: key.clone(),
+                        expected_type: expected_type.clone(),
+                    });
+                },
+                Op::LoadPTyped { key, expected_type } => {
+                    self.program.instructions.push(BytecodeOp::LoadPTyped {
+                        key: key.clone(),
+                        expected_type: expected_type.clone(),
+                    });
+                },
+                Op::KeyExistsP(key) => self.program.instructions.push(BytecodeOp::KeyExistsP(key.clone())),
+                Op::DeleteP(key) => self.program.instructions.push(BytecodeOp::DeleteP(key.clone())),
+                Op::ListKeysP(key) => self.program.instructions.push(BytecodeOp::ListKeysP(key.clone())),
+                Op::BeginTx => self.program.instructions.push(BytecodeOp::BeginTx),
+                Op::CommitTx => self.program.instructions.push(BytecodeOp::CommitTx),
+                Op::RollbackTx => self.program.instructions.push(BytecodeOp::RollbackTx),
             }
         }
     }
@@ -972,6 +972,45 @@ impl BytecodeExecutor {
                 let a = self.vm.pop_one("Mod")?;
                 self.vm.stack.push(a % b);
             },
+            BytecodeOp::StorePTyped { key, expected_type } => {
+                // Call VM execute_store_p_typed
+                self.vm.execute_store_p_typed(&key, &expected_type)?;
+            }
+            
+            BytecodeOp::LoadPTyped { key, expected_type } => {
+                // Call VM execute_load_p_typed
+                self.vm.execute_load_p_typed(&key, &expected_type)?;
+            }
+            
+            BytecodeOp::KeyExistsP(key) => {
+                // Call VM execute_key_exists_p
+                self.vm.execute_key_exists_p(&key)?;
+            }
+            
+            BytecodeOp::DeleteP(key) => {
+                // Call VM execute_delete_p
+                self.vm.execute_delete_p(&key)?;
+            }
+            
+            BytecodeOp::ListKeysP(prefix) => {
+                // Call VM execute_list_keys_p
+                self.vm.execute_list_keys_p(&prefix)?;
+            }
+            
+            BytecodeOp::BeginTx => {
+                // Call VM execute_begin_tx
+                self.vm.execute_begin_tx()?;
+            }
+            
+            BytecodeOp::CommitTx => {
+                // Call VM execute_commit_tx
+                self.vm.execute_commit_tx()?;
+            }
+            
+            BytecodeOp::RollbackTx => {
+                // Call VM execute_rollback_tx
+                self.vm.execute_rollback_tx()?;
+            }
         }
         
         Ok(())
