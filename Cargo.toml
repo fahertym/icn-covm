@@ -20,4 +20,3 @@ rand = "0.7"
 
 [features]
 default = []
-typed-values = []

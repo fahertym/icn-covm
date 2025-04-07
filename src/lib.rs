@@ -4,9 +4,6 @@ pub mod events;
 pub mod storage;
 pub mod vm;
 
-#[cfg(feature = "typed-values")]
-pub mod typed;
-
 // Use specific imports rather than assuming re-exports for clarity
 pub use crate::compiler::{parse_dsl, parse_dsl_with_stdlib, CompilerError, SourcePosition};
 pub use crate::events::{set_log_file, set_log_format, Event, LogFormat};
