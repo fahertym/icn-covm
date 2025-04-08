@@ -12,6 +12,9 @@ Key components include:
 - **Bytecode compiler and interpreter** for optimized execution
 - **Optional typed value system** for enhanced type safety
 - **Standard library** of common functions
+- **Identity-aware execution** for secure, authenticated operations
+- **Persistent storage** with file-based and in-memory backends
+- **Federation layer** for node discovery and communication
 
 ## Execution Flow
 
@@ -128,6 +131,7 @@ The VM is responsible for executing operations. It maintains:
 2. **Memory**: Storage for variables (key-value pairs)
 3. **Function Table**: Registry of defined functions
 4. **Call Frames**: Stack frames for function calls
+5. **Auth Context**: Identity and authorization information for secure operations
 
 ### AST Interpreter
 
@@ -145,6 +149,53 @@ The bytecode interpreter executes operations sequentially:
 2. Processes instructions one at a time, updating the PC
 3. Uses jump instructions for control flow
 4. Maintains a call stack for function calls
+
+## Identity System
+
+The identity system provides secure authentication and authorization:
+
+1. **Identity Structures**: Represents participants with properties like ID, public key, and roles
+2. **AuthContext**: Provides the authentication and authorization context for VM operations
+3. **Credential Verification**: Validates credentials like membership status
+4. **Delegation Links**: Represents authority delegation between identities
+
+Key integration points:
+- Identity verification operations like `getcaller` and `hasrole`
+- Storage permission enforcement based on identity
+- Secure delegation chains for liquid democracy voting
+
+## Storage System
+
+The storage system enables persistent state across VM executions:
+
+1. **Storage Backend Interface**: Common API for all storage implementations
+2. **InMemoryStorage**: For testing and development (non-persistent)
+3. **FileStorage**: Persistent disk-based storage with versioning and locking
+4. **Namespace Structure**: Organizes data in logical containers
+5. **Identity-Aware Authorization**: Enforces access control based on identity and roles
+
+Key features:
+- Transaction support for atomic operations
+- Resource usage tracking and quotas
+- Audit logging for operations
+- File locking for concurrent access
+- Improved error handling with context
+
+## Federation Layer
+
+The federation layer enables communication between ICN-COVM nodes:
+
+1. **Network Node**: Core component managing peer connections and messaging
+2. **Peer Discovery**: Finds other nodes using Kademlia DHT and mDNS
+3. **Secure Channels**: Establishes encrypted connections using Noise protocol
+4. **Message Exchange**: Handles communication between nodes
+
+Key components:
+- **libp2p Integration**: Uses the libp2p framework for P2P networking
+- **Event System**: Tracks network events like peer discovery and connections
+- **Node Configuration**: Configures ports, bootstrap nodes, and capabilities
+
+This layer forms the foundation for future federated governance functionality.
 
 ## Typed Value System
 

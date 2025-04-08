@@ -51,16 +51,15 @@ The authorization model is built around clearly defined roles:
 - **member**: Can vote on proposals, delegate voting power, access governance data.
 - **observer**: Read-only access to non-sensitive governance data.
 
-Every storage operation is checked against the caller's roles before execution through the `AuthContext` structure:
+The storage system now uses an identity-aware API pattern with `Option<&AuthContext>` for all operations, allowing for flexible authentication handling:
 
 ```rust
-pub struct AuthContext {
-    pub caller: String,     // The ID of the caller
-    pub roles: Vec<String>, // Roles associated with the caller
-    pub timestamp: u64,     // Timestamp of the request
-    pub delegation_chain: Vec<String>, // Optional delegation chain
-}
+fn get(&self, auth: Option<&AuthContext>, namespace: &str, key: &str) -> StorageResult<Vec<u8>>;
+fn set(&mut self, auth: Option<&AuthContext>, namespace: &str, key: &str, value: &[u8]) -> StorageResult<()>;
+fn delete(&mut self, auth: Option<&AuthContext>, namespace: &str, key: &str) -> StorageResult<()>;
 ```
+
+This design allows operations to be performed with or without authentication context, while ensuring proper permission checks when auth is provided.
 
 ## 4. Decentralization & Federation Support
 
@@ -173,7 +172,18 @@ This promotes:
 The storage architecture currently includes:
 
 1. **InMemoryStorage**: For testing and development
-2. **FileStorage**: Simple file-based persistence (in progress)
+2. **FileStorage**: Robust file-based persistence with:
+   - File locking for concurrent access safety
+   - Improved contextual error handling
+   - Atomic operations through transaction support
+   - Directory structure mirroring namespaces
+
+The FileStorage backend has been significantly improved in v0.6.x with:
+- File locking using the `fs2` crate to prevent concurrent modification issues
+- Enhanced error handling with additional context for debugging
+- Robust transaction implementation with journaling for atomic operations
+- Improved testing for concurrent access scenarios
+- Directory structure validation and automatic creation
 
 Future planned backends include:
 - **DatabaseStorage**: SQL database backend for larger datasets
@@ -192,12 +202,12 @@ let mut storage = InMemoryStorage::new();
 let auth = AuthContext::with_roles("member001", vec!["admin".to_string()]);
 
 // Store a proposal with authorization check
-storage.set_with_auth(&auth, 
+storage.set(Some(&auth), 
     &GovernanceNamespace::proposals("prop-001"), 
-    "Proposal content")?;
+    "Proposal content".as_bytes())?;
 
 // Retrieve the proposal
-let proposal = storage.get_with_auth(&auth, 
+let proposal = storage.get(Some(&auth), 
     &GovernanceNamespace::proposals("prop-001"))?;
 ```
 
@@ -208,7 +218,10 @@ let proposal = storage.get_with_auth(&auth,
 let mut account = storage.create_resource_account("member001", 1000.0);
 
 // Store data with resource accounting
-storage.set_with_resources(&auth, "large_data", &large_value, account)?;
+storage.set_with_resources(Some(&auth), 
+    "large_data", 
+    &large_value, 
+    account)?;
 ```
 
 ### Transactional Operations
@@ -218,8 +231,8 @@ storage.set_with_resources(&auth, "large_data", &large_value, account)?;
 storage.begin_transaction()?;
 
 // Perform multiple operations
-storage.set("key1", "value1")?;
-storage.set("key2", "value2")?;
+storage.set(Some(&auth), "key1", "value1".as_bytes())?;
+storage.set(Some(&auth), "key2", "value2".as_bytes())?;
 
 // Commit the transaction
 storage.commit_transaction()?;
@@ -233,6 +246,7 @@ The storage system integrates with the ICN Cooperative Virtual Machine (COVM) th
 2. **DSL Operations**: `storep` and `loadp` operations in the DSL
 3. **Bytecode Operations**: `StoreP` and `LoadP` bytecode operations
 4. **Storage Events**: Events emitted during storage operations
+5. **CLI Commands**: `storage list-keys` and `storage get-value` commands for inspection
 
 This allows governance scripts (DSL) to interact with the persistent storage layer while maintaining appropriate access controls and audit trails.
 
