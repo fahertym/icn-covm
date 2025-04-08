@@ -1,0 +1,54 @@
+version: '3'
+
+services:
+  # Bootstrap node (first node)
+  node1:
+    build: .
+    container_name: icn-node1
+    command: run --storage-backend file --storage-path /app/storage --federation-port 8000 --log-level info
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./storage/node1:/app/storage
+    networks:
+      - icn-net
+    environment:
+      - RUST_LOG=info,icn_covm=debug
+
+  # Second node that connects to bootstrap node
+  node2:
+    build: .
+    container_name: icn-node2
+    # We'll need to update this with node1's multiaddress after the first run
+    command: run --storage-backend file --storage-path /app/storage --federation-port 8001 --bootstrap-nodes "/ip4/node1/tcp/8000/p2p/BOOTSTRAP_PEER_ID_PLACEHOLDER" --log-level info
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./storage/node2:/app/storage
+    networks:
+      - icn-net
+    environment:
+      - RUST_LOG=info,icn_covm=debug
+    depends_on:
+      - node1
+
+  # Third node that also connects to bootstrap node
+  node3:
+    build: .
+    container_name: icn-node3
+    # We'll need to update this with node1's multiaddress after the first run
+    command: run --storage-backend file --storage-path /app/storage --federation-port 8002 --bootstrap-nodes "/ip4/node1/tcp/8000/p2p/BOOTSTRAP_PEER_ID_PLACEHOLDER" --log-level info
+    ports:
+      - "8002:8002"
+    volumes:
+      - ./storage/node3:/app/storage
+    networks:
+      - icn-net
+    environment:
+      - RUST_LOG=info,icn_covm=debug
+    depends_on:
+      - node1
+
+networks:
+  icn-net:
+    driver: bridge 
