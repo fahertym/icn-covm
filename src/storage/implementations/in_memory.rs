@@ -566,6 +566,13 @@ impl StorageBackend for InMemoryStorage {
             
         Ok(total_bytes)
     }
+
+    fn contains(&self, _auth: Option<&AuthContext>, namespace: &str, key: &str) -> StorageResult<bool> {
+        // Check if the namespace exists and then if the key exists within that namespace
+        Ok(self.data.get(namespace)
+            .map(|ns_data| ns_data.contains_key(key))
+            .unwrap_or(false))
+    }
 }
 
 #[cfg(test)]

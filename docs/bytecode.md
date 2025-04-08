@@ -93,6 +93,14 @@ The bytecode instruction set is designed to be simple yet complete. Each instruc
 - `AssertMemory(key, value)`: Assert a memory value
 - `AssertEqualStack(depth)`: Assert that values in the stack are equal
 
+### Economic Operations
+
+- `CreateResource(resource_id)`: Create a new economic resource
+- `Mint { resource, account, amount, reason }`: Create new units of a resource
+- `Transfer { resource, from, to, amount, reason }`: Move units between accounts
+- `Burn { resource, account, amount, reason }`: Remove units from circulation
+- `Balance { resource, account }`: Get the balance of a resource for an account
+
 ## Usage
 
 ### Command Line

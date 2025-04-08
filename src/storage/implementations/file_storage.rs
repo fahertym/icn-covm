@@ -1168,4 +1168,19 @@ impl StorageBackend for FileStorage {
             }),
         }
     }
+
+    fn contains(&self, auth: Option<&AuthContext>, namespace: &str, key: &str) -> StorageResult<bool> {
+        // Verify user has read permission for the namespace
+        self.check_permission(auth, "read", namespace)?;
+        
+        // Check if the namespace exists first
+        if !self.namespace_exists(namespace) {
+            return Ok(false);
+        }
+        
+        // Check if the key metadata file exists
+        let metadata_path = self.metadata_path(namespace, key);
+        
+        Ok(metadata_path.exists())
+    }
 }

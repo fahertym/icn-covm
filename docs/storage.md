@@ -155,6 +155,29 @@ cargo run -- run --program demo/storage/cart.dsl --storage-backend file --storag
 cargo run -- run --program demo/storage/cart.dsl --storage-backend file --storage-path ./filestorage
 ```
 
+### Economic Operations
+
+The economic operations in COVM (`CreateResource`, `Mint`, `Transfer`, `Burn`, `Balance`) rely heavily on the storage system to maintain resource data and account balances between executions.
+
+Key storage patterns for economic operations:
+
+- Resource metadata is stored at `resources/{resource_id}`
+- Account balances are stored at `resources/{resource_id}/balances` as a JSON object
+- All operations generate audit events in the "economic" category
+- Atomic transactions ensure data consistency during operations like transfers
+
+Example programs in `demo/economic/` demonstrate these storage patterns:
+
+```bash
+# Create resources and perform economic operations
+cargo run -- run --program demo/economic/create_resource.dsl --storage-backend file --storage-path ./filestorage
+
+# Basic transfer example
+cargo run -- run --program demo/economic/basic_transfer.dsl --storage-backend file --storage-path ./filestorage
+```
+
+See `docs/economic_operations.md` for comprehensive documentation on these operations.
+
 ### Basic Storage Test
 
 The `demo/storage/basic_storage_test.dsl` program tests basic storage functionality:

@@ -30,6 +30,9 @@ pub trait StorageBackend {
     /// Updates version information.
     fn set(&mut self, auth: Option<&AuthContext>, namespace: &str, key: &str, value: Vec<u8>) -> StorageResult<()>;
     
+    /// Check if a key exists in a namespace
+    fn contains(&self, auth: Option<&AuthContext>, namespace: &str, key: &str) -> StorageResult<bool>;
+    
     /// List keys in a namespace
     fn list_keys(&self, auth: Option<&AuthContext>, namespace: &str, prefix: Option<&str>) -> StorageResult<Vec<String>>;
     

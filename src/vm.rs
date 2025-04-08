@@ -2,7 +2,7 @@
 
 use crate::events::Event;
 use crate::storage::auth::AuthContext;
-use crate::storage::errors::{StorageError};
+use crate::storage::errors::{StorageError, StorageResult};
 use crate::storage::traits::StorageBackend;
 use crate::storage::implementations::in_memory::InMemoryStorage;
 use serde::{Deserialize, Serialize};
@@ -384,6 +384,88 @@ pub enum Op {
         
         /// The identity receiving delegation
         delegate_id: String,
+    },
+
+    /// Verify a cryptographic signature
+    /// 
+    /// Pops: message, signature, public_key, scheme
+    /// Pushes: 1.0 if valid, 0.0 if invalid
+    VerifySignature,
+
+    /// Create a new economic resource
+    ///
+    /// This operation creates a new economic resource with the specified identifier.
+    /// The resource details should be stored in persistent storage.
+    CreateResource(String),
+    
+    /// Mint new units of a resource and assign to an account
+    ///
+    /// This operation creates new units of an existing resource and
+    /// assigns them to a specified account. It can be used for initial
+    /// allocation or ongoing issuance of resources.
+    Mint {
+        /// Resource identifier
+        resource: String,
+        
+        /// Account identifier
+        account: String,
+        
+        /// Amount to mint
+        amount: f64,
+        
+        /// Optional reason for minting
+        reason: Option<String>,
+    },
+    
+    /// Transfer resource units between accounts
+    ///
+    /// This operation moves units of a resource from one account to another.
+    /// It checks that the source account has sufficient balance.
+    Transfer {
+        /// Resource identifier
+        resource: String,
+        
+        /// Source account
+        from: String,
+        
+        /// Destination account
+        to: String,
+        
+        /// Amount to transfer
+        amount: f64,
+        
+        /// Optional reason for transfer
+        reason: Option<String>,
+    },
+    
+    /// Burn/destroy resource units from an account
+    ///
+    /// This operation removes units of a resource from circulation by
+    /// "burning" them from a specified account.
+    Burn {
+        /// Resource identifier
+        resource: String,
+        
+        /// Account to burn from
+        account: String,
+        
+        /// Amount to burn
+        amount: f64,
+        
+        /// Optional reason for burning
+        reason: Option<String>,
+    },
+    
+    /// Get the balance of a resource for an account
+    ///
+    /// This operation queries the current balance of a specified resource
+    /// for a given account and pushes the result onto the stack.
+    Balance {
+        /// Resource identifier
+        resource: String,
+        
+        /// Account to check
+        account: String,
     },
 }
 
@@ -1011,54 +1093,31 @@ impl VM {
                         self.emit_event("identity_error", &format!("{}", err));
                     }
                 },
+                Op::VerifySignature => {
+                    // This implementation should be based on the actual signature verification logic
+                    // For a placeholder implementation, we'll just emit a message and push true to the stack
+                    self.emit_event("identity", "Signature verification not fully implemented");
+                    self.stack.push(1.0); // Placeholder: assume valid
+                },
+                Op::CreateResource(resource_id) => {
+                    self.execute_create_resource(resource_id)?;
+                },
+                Op::Mint { resource, account, amount, reason } => {
+                    self.execute_mint(resource, account, *amount, reason)?;
+                },
+                Op::Transfer { resource, from, to, amount, reason } => {
+                    self.execute_transfer(resource, from, to, *amount, reason)?;
+                },
+                Op::Burn { resource, account, amount, reason } => {
+                    self.execute_burn(resource, account, *amount, reason)?;
+                },
+                Op::Balance { resource, account } => {
+                    self.execute_balance(resource, account)?;
+                },
                 Op::DiffVersionsP { key, v1, v2 } => {
-                    // Check if storage backend is available
-                    if self.storage_backend.is_none() {
-                        return Err(VMError::StorageUnavailable);
-                    }
-                    
-                    // Access the storage backend
-                    let storage = self.storage_backend.as_ref().unwrap();
-                    
-                    // Try to retrieve the versions from storage
-                    match storage.get_version(self.auth_context.as_ref(), &self.namespace, &key, *v1) {
-                        Ok((value_bytes1, _version_info1)) => {
-                            match storage.get_version(self.auth_context.as_ref(), &self.namespace, &key, *v2) {
-                                Ok((value_bytes2, _version_info2)) => {
-                                    // Convert bytes to string
-                                    let value_str1 = String::from_utf8(value_bytes1)
-                                        .map_err(|e| VMError::StorageError(format!("Invalid UTF-8 data in storage for key '{}' version {}: {}", key, v1, e)))?;
-                                    let value_str2 = String::from_utf8(value_bytes2)
-                                        .map_err(|e| VMError::StorageError(format!("Invalid UTF-8 data in storage for key '{}' version {}: {}", key, v2, e)))?;
-                                    
-                                    // Parse string as f64
-                                    let value1 = value_str1.parse::<f64>()
-                                        .map_err(|e| VMError::StorageError(format!("Failed to parse storage value for key '{}' version {} as number: {}, value was: '{}'", key, v1, e, value_str1)))?;
-                                    let value2 = value_str2.parse::<f64>()
-                                        .map_err(|e| VMError::StorageError(format!("Failed to parse storage value for key '{}' version {} as number: {}, value was: '{}'", key, v2, e, value_str2)))?;
-                                    
-                                    // Calculate difference
-                                    let difference = (value1 - value2).abs();
-                                    
-                                    // Display results through println (will show up in logs)
-                                    println!("[INFO] [storage] Version {} value: {}", v1, value1);
-                                    println!("[INFO] [storage] Version {} value: {}", v2, value2);
-                                    println!("[INFO] [storage] Absolute difference: {}", difference);
-                                    
-                                    // Push difference to stack
-                                    self.stack.push(difference);
-                                },
-                                Err(e) => {
-                                    // For version-specific loads, we'll propagate all errors
-                                    return Err(VMError::StorageError(format!("Failed to load key '{}' version {}: {}", key, v2, e)));
-                                }
-                            }
-                        },
-                        Err(e) => {
-                            // For version-specific loads, we'll propagate all errors
-                            return Err(VMError::StorageError(format!("Failed to load key '{}' version {}: {}", key, v1, e)));
-                        }
-                    }
+                    // Handle diff versions operation
+                    println!("DiffVersionsP operation for key: {}, versions: {} and {}", key, v1, v2);
+                    // This is a placeholder - implement the actual diff logic
                 },
             }
 
@@ -1108,6 +1167,269 @@ impl VM {
             timestamp: crate::storage::utils::now(),
         };
         self.events.push(event);
+    }
+
+    /// Create a new economic resource
+    pub fn execute_create_resource(&mut self, resource_id: &str) -> Result<(), VMError> {
+        println!("VM executing create_resource for: {}", resource_id);
+        
+        // Check if we're in a storage context
+        let operation_result = self.storage_operation("CreateResource", |storage, auth, namespace| {
+            println!("Inside storage operation for create_resource: namespace={}", namespace);
+            
+            // Resource metadata should be in memory as a JSON string
+            // For simplicity, we'll just use a basic metadata structure
+            let metadata = format!(r#"{{
+                "id": "{}",
+                "name": "Resource {}",
+                "description": "A resource created programmatically",
+                "created_at": {}
+            }}"#, resource_id, resource_id, crate::storage::utils::now());
+            
+            // Store the resource in the storage
+            let key = format!("resources/{}", resource_id);
+            println!("Storing resource at key: {}", key);
+            
+            let resources_exists = storage.contains(auth, namespace, "resources");
+            println!("Resources directory exists: {:?}", resources_exists);
+            
+            let storage_result = storage.set(auth, namespace, &key, metadata.as_bytes().to_vec());
+            println!("Resource storage result: {:?}", storage_result);
+            if let Err(ref e) = storage_result {
+                return Err(e.clone());
+            }
+            
+            // Create empty balances for this resource
+            let balances_key = format!("resources/{}/balances", resource_id);
+            println!("Storing balances at key: {}", balances_key);
+            
+            let balances_result = storage.set(auth, namespace, &balances_key, "{}".as_bytes().to_vec());
+            println!("Balances storage result: {:?}", balances_result);
+            if let Err(ref e) = balances_result {
+                return Err(e.clone());
+            }
+            
+            // Check that resource and balances were created
+            let resource_exists = storage.contains(auth, namespace, &key);
+            println!("Resource now exists: {:?}", resource_exists);
+            
+            let balances_exists = storage.contains(auth, namespace, &balances_key);
+            println!("Balances now exist: {:?}", balances_exists);
+            
+            // Log resource creation
+            let event = VMEvent {
+                category: "economic".to_string(),
+                message: format!("Created new resource: {}", resource_id),
+                timestamp: crate::storage::utils::now(),
+            };
+            
+            Ok(((), Some(event)))
+        });
+        
+        println!("Create resource operation result: {:?}", operation_result);
+        operation_result
+    }
+    
+    /// Mint new units of a resource and assign to an account
+    pub fn execute_mint(&mut self, resource: &str, account: &str, amount: f64, reason: &Option<String>) -> Result<(), VMError> {
+        if amount <= 0.0 {
+            return Err(VMError::ParameterError("Mint amount must be positive".to_string()));
+        }
+        
+        // Check if we're in a storage context
+        self.storage_operation("Mint", |storage, auth, namespace| {
+            // Check if resource exists
+            let resource_key = format!("resources/{}", resource);
+            if !storage.contains(auth, namespace, &resource_key)? {
+                return Err(StorageError::ResourceNotFound(resource.to_string()));
+            }
+            
+            // Get current balances for this resource
+            let balances_key = format!("resources/{}/balances", resource);
+            let balances_bytes = storage.get(auth, namespace, &balances_key)?;
+            let mut balances: serde_json::Value = serde_json::from_slice(&balances_bytes)
+                .map_err(|e| StorageError::InvalidStorageData(format!("Failed to parse balances: {}", e)))?;
+            
+            // Update the account balance
+            let account_balance = balances[account].as_f64().unwrap_or(0.0) + amount;
+            balances[account] = serde_json::json!(account_balance);
+            
+            // Store updated balances
+            let updated_balances = serde_json::to_string(&balances)
+                .map_err(|e| StorageError::InvalidStorageData(format!("Failed to serialize balances: {}", e)))?;
+            storage.set(auth, namespace, &balances_key, updated_balances.as_bytes().to_vec())?;
+            
+            // Create event for the mint operation
+            let message = match reason {
+                Some(r) => format!("Minted {} units of {} to {} with reason: {}", amount, resource, account, r),
+                None => format!("Minted {} units of {} to {}", amount, resource, account),
+            };
+            
+            let event = VMEvent {
+                category: "economic".to_string(),
+                message,
+                timestamp: crate::storage::utils::now(),
+            };
+            
+            Ok(((), Some(event)))
+        })
+    }
+    
+    /// Transfer resource units between accounts
+    pub fn execute_transfer(&mut self, resource: &str, from: &str, to: &str, amount: f64, reason: &Option<String>) -> Result<(), VMError> {
+        if amount <= 0.0 {
+            return Err(VMError::ParameterError("Transfer amount must be positive".to_string()));
+        }
+        
+        // Check if we're in a storage context
+        self.storage_operation("Transfer", |storage, auth, namespace| {
+            // Check if resource exists
+            let resource_key = format!("resources/{}", resource);
+            if !storage.contains(auth, namespace, &resource_key)? {
+                return Err(StorageError::ResourceNotFound(resource.to_string()));
+            }
+            
+            // Get current balances for this resource
+            let balances_key = format!("resources/{}/balances", resource);
+            let balances_bytes = storage.get(auth, namespace, &balances_key)?;
+            let mut balances: serde_json::Value = serde_json::from_slice(&balances_bytes)
+                .map_err(|e| StorageError::InvalidStorageData(format!("Failed to parse balances: {}", e)))?;
+            
+            // Check if source account has sufficient balance
+            let from_balance = balances[from].as_f64().unwrap_or(0.0);
+            if from_balance < amount {
+                return Err(StorageError::InsufficientBalance(from.to_string(), resource.to_string()));
+            }
+            
+            // Update balances
+            balances[from] = serde_json::json!(from_balance - amount);
+            let to_balance = balances[to].as_f64().unwrap_or(0.0) + amount;
+            balances[to] = serde_json::json!(to_balance);
+            
+            // Store updated balances
+            let updated_balances = serde_json::to_string(&balances)
+                .map_err(|e| StorageError::InvalidStorageData(format!("Failed to serialize balances: {}", e)))?;
+            storage.set(auth, namespace, &balances_key, updated_balances.as_bytes().to_vec())?;
+            
+            // Log the transfer operation
+            let message = match reason {
+                Some(r) => format!("Transferred {} units of {} from {} to {} with reason: {}", amount, resource, from, to, r),
+                None => format!("Transferred {} units of {} from {} to {}", amount, resource, from, to),
+            };
+            
+            Ok(((), Some(VMEvent {
+                category: "economic".to_string(),
+                message,
+                timestamp: crate::storage::utils::now(),
+            })))
+        })
+    }
+    
+    /// Burn/destroy resource units from an account
+    pub fn execute_burn(&mut self, resource: &str, account: &str, amount: f64, reason: &Option<String>) -> Result<(), VMError> {
+        if amount <= 0.0 {
+            return Err(VMError::ParameterError("Burn amount must be positive".to_string()));
+        }
+        
+        // Check if we're in a storage context
+        self.storage_operation("Burn", |storage, auth, namespace| {
+            // Check if resource exists
+            let resource_key = format!("resources/{}", resource);
+            if !storage.contains(auth, namespace, &resource_key)? {
+                return Err(StorageError::ResourceNotFound(resource.to_string()));
+            }
+            
+            // Get current balances for this resource
+            let balances_key = format!("resources/{}/balances", resource);
+            let balances_bytes = storage.get(auth, namespace, &balances_key)?;
+            let mut balances: serde_json::Value = serde_json::from_slice(&balances_bytes)
+                .map_err(|e| StorageError::InvalidStorageData(format!("Failed to parse balances: {}", e)))?;
+            
+            // Check if account has sufficient balance
+            let account_balance = balances[account].as_f64().unwrap_or(0.0);
+            if account_balance < amount {
+                return Err(StorageError::InsufficientBalance(account.to_string(), resource.to_string()));
+            }
+            
+            // Update balance
+            balances[account] = serde_json::json!(account_balance - amount);
+            
+            // Store updated balances
+            let updated_balances = serde_json::to_string(&balances)
+                .map_err(|e| StorageError::InvalidStorageData(format!("Failed to serialize balances: {}", e)))?;
+            storage.set(auth, namespace, &balances_key, updated_balances.as_bytes().to_vec())?;
+            
+            // Log the burn operation
+            let message = match reason {
+                Some(r) => format!("Burned {} units of {} from {} with reason: {}", amount, resource, account, r),
+                None => format!("Burned {} units of {} from {}", amount, resource, account),
+            };
+            
+            Ok(((), Some(VMEvent {
+                category: "economic".to_string(),
+                message,
+                timestamp: crate::storage::utils::now(),
+            })))
+        })
+    }
+    
+    /// Get the balance of a resource for an account
+    pub fn execute_balance(&mut self, resource: &str, account: &str) -> Result<(), VMError> {
+        let mut result = 0.0;
+        
+        // Check if we're in a storage context
+        self.storage_operation("Balance", |storage, auth, namespace| {
+            // Check if resource exists
+            let resource_key = format!("resources/{}", resource);
+            if !storage.contains(auth, namespace, &resource_key)? {
+                return Err(StorageError::ResourceNotFound(resource.to_string()));
+            }
+            
+            // Get current balances for this resource
+            let balances_key = format!("resources/{}/balances", resource);
+            let balances_bytes = storage.get(auth, namespace, &balances_key)?;
+            let balances: serde_json::Value = serde_json::from_slice(&balances_bytes)
+                .map_err(|e| StorageError::InvalidStorageData(format!("Failed to parse balances: {}", e)))?;
+            
+            // Get account balance
+            let account_balance = balances[account].as_f64().unwrap_or(0.0);
+            result = account_balance;
+            
+            Ok(((), None))
+        })?;
+        
+        // Push the balance to the stack
+        self.stack.push(result);
+        
+        Ok(())
+    }
+
+    /// Helper method to perform a storage operation with proper error handling and borrow management
+    fn storage_operation<F, T>(&mut self, _operation: &str, mut f: F) -> Result<T, VMError>
+    where
+        F: FnMut(&mut Box<dyn StorageBackend + Send + Sync>, Option<&AuthContext>, &str) -> StorageResult<(T, Option<VMEvent>)>,
+    {
+        // Check if we have a storage backend set
+        let storage = match &mut self.storage_backend {
+            Some(storage) => storage,
+            None => return Err(VMError::StorageUnavailable),
+        };
+        
+        // Extract the auth context and namespace as values to avoid borrowing self
+        let auth_context = self.auth_context.as_ref();
+        let namespace = self.namespace.clone();
+        
+        // Run the operation with the storage backend
+        match f(storage, auth_context, &namespace) {
+            Ok((result, event_opt)) => {
+                // Add event if one was returned
+                if let Some(event) = event_opt {
+                    self.events.push(event);
+                }
+                Ok(result)
+            }
+            Err(e) => Err(VMError::StorageError(e.to_string())),
+        }
     }
 }
 

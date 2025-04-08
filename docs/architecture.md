@@ -202,6 +202,29 @@ store counter
 assertmemory counter 5  # Verifies a memory value
 ```
 
+### Economic Operations
+
+Economic operations provide resource management capabilities:
+
+```
+# Create a new resource
+createresource "community_token"
+
+# Mint tokens to an account
+mint "community_token" "treasury" 1000.0 "Initial allocation"
+
+# Transfer tokens between accounts
+transfer "community_token" "treasury" "project_a" 100.0 "Project funding"
+
+# Check account balance
+balance "community_token" "treasury"
+
+# Burn tokens
+burn "community_token" "project_a" 25.0 "Spent on community event"
+```
+
+These operations integrate with the storage system to maintain persistent balances and resource metadata.
+
 ## Bytecode Format
 
 The bytecode format consists of a sequence of instructions with these components:

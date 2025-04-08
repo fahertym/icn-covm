@@ -8,6 +8,7 @@ A lightweight cooperative virtual machine for executing a domain-specific langua
 - **Typed Value System**: Optional support for multiple data types (numbers, booleans, strings)
 - **Identity-Aware Execution**: Support for authenticated operations and permission checks
 - **Persistent Storage**: Storage backends for maintaining state between executions
+- **Economic Operations**: Token-based resource creation, transfer, and management
 - **Comprehensive Documentation**: Improved inline documentation and architecture docs
 - **Performance Benchmarking**: Compare AST interpretation vs bytecode execution
 
@@ -149,6 +150,7 @@ Comprehensive documentation is available:
 .
 ├── demo/                    # Example DSL programs
 │   ├── benchmark/           # Performance benchmark programs
+│   ├── economic/            # Economic operations examples
 │   ├── functions/           # Function examples
 │   ├── governance/          # Governance primitive examples
 │   ├── identity/            # Identity verification examples
@@ -159,6 +161,7 @@ Comprehensive documentation is available:
 ├── docs/                    # Documentation
 │   ├── architecture.md      # System architecture overview
 │   ├── bytecode.md          # Bytecode system documentation
+│   ├── economic_operations.md # Economic operations documentation
 │   ├── governance.md        # Governance primitives documentation
 │   ├── identity.md          # Identity system documentation
 │   ├── storage.md           # Storage system documentation
