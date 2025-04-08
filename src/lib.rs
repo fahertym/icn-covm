@@ -4,6 +4,7 @@ pub mod events;
 pub mod storage;
 pub mod vm;
 pub mod identity;
+pub mod federation;
 
 #[cfg(feature = "typed-values")]
 pub mod typed;
@@ -18,3 +19,4 @@ pub use crate::storage::implementations::file_storage::FileStorage;
 pub use crate::storage::namespaces::{NamespaceRegistry, NamespaceMetadata};
 pub use crate::vm::{Op, VMError, VM};
 pub use crate::identity::{Identity, MemberProfile, Credential, DelegationLink};
+pub use crate::federation::{NetworkNode, NodeConfig, NetworkMessage, FederationError, NetworkEvent};
