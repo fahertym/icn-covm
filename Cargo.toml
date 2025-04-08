@@ -15,6 +15,14 @@ fs2 = "0.4.3"
 once_cell = "1.19"
 rustyline = "11.0"
 colored = "2.1"
+libp2p = { version = "0.52", features = ["tcp", "noise", "yamux", "kad", "mdns", "ping", "tokio", "identify"] }
+libp2p-swarm-derive = "0.33"
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+async-trait = "0.1"
+log = "0.4.27"
+void = "1.0.2"
+env_logger = "0.10.0"
 
 [features]
 default = []

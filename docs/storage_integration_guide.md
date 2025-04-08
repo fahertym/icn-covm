@@ -20,13 +20,15 @@ The FileStorage implementation is already complete, including:
 - Transaction support with commit/rollback
 - Identity-aware authorization
 - Resource accounting
-- Comprehensive test coverage
+- File locking for concurrent access
+- Comprehensive error handling
+- Thorough test coverage
 
 ## Integration Steps
 
-### 1. Add a Command Line Option
+### 1. Add Command Line Options
 
-First, add a command-line flag to specify the storage backend and location:
+First, add command-line flags to specify the storage backend and location:
 
 ```rust
 // In src/main.rs
@@ -65,42 +67,71 @@ fn run_program(
 
     // Set up the appropriate storage backend
     let auth_context = create_demo_auth_context();
-    let storage = match storage_backend {
-        "file" => {
-            if verbose {
-                println!("Using FileStorage backend at: {}", storage_path);
-            }
-            let storage = FileStorage::new(storage_path)
-                .map_err(|e| AppError::Other(format!("Failed to create file storage: {}", e)))?;
-            prepare_storage(&auth_context, storage)?
-        },
-        _ => {
-            if verbose {
-                println!("Using in-memory storage backend");
-            }
-            prepare_storage(&auth_context, InMemoryStorage::new())?
+    
+    // Select the appropriate storage backend
+    if storage_backend == "file" {
+        if verbose {
+            println!("Using FileStorage backend at {}", storage_path);
         }
-    };
+        
+        // Create the storage directory if it doesn't exist
+        let storage_dir = Path::new(storage_path);
+        if !storage_dir.exists() {
+            if verbose {
+                println!("Creating storage directory: {}", storage_path);
+            }
+            fs::create_dir_all(storage_dir)
+                .map_err(|e| AppError::Other(format!("Failed to create storage directory: {}", e)))?;
+        }
+        
+        // Initialize the FileStorage backend
+        match FileStorage::new(storage_path) {
+            Ok(mut storage) => {
+                initialize_storage(&auth_context, &mut storage, verbose)?;
+                
+                // ... rest of function with storage ...
+            },
+            Err(e) => {
+                return Err(AppError::Other(format!("Failed to initialize file storage: {}", e)));
+            }
+        }
+    } else {
+        // Use InMemoryStorage (default)
+        if verbose {
+            println!("Using InMemoryStorage backend");
+        }
+        
+        // Initialize InMemoryStorage
+        let mut storage = InMemoryStorage::new();
+        initialize_storage(&auth_context, &mut storage, verbose)?;
+        
+        // ... rest of function with storage ...
+    }
     
     // ... rest of function ...
 }
 
-// Helper to prepare any storage backend
-fn prepare_storage<T: StorageBackend + 'static>(
-    auth: &AuthContext, 
-    mut storage: T
-) -> Result<T, AppError> {
+// Helper function to initialize any storage backend
+fn initialize_storage<T: StorageBackend>(
+    auth_context: &AuthContext,
+    storage: &mut T,
+    verbose: bool,
+) -> Result<(), AppError> {
     // Create user account
-    if let Err(e) = storage.create_account(Some(auth), &auth.user_id, 1024 * 1024) {
-        println!("Warning: Failed to create account: {:?}", e);
+    if let Err(e) = storage.create_account(Some(auth_context), &auth_context.user_id, 1024 * 1024) {
+        if verbose {
+            println!("Warning: Failed to create account: {:?}", e);
+        }
     }
     
     // Create namespace
-    if let Err(e) = storage.create_namespace(Some(auth), "demo", 1024 * 1024, None) {
-        println!("Warning: Failed to create namespace: {:?}", e);
+    if let Err(e) = storage.create_namespace(Some(auth_context), "demo", 1024 * 1024, None) {
+        if verbose {
+            println!("Warning: Failed to create namespace: {:?}", e);
+        }
     }
     
-    Ok(storage)
+    Ok(())
 }
 ```
 
@@ -112,12 +143,8 @@ Update the command handling code to pass the storage backend options:
 // In main.rs main() function
 match matches.subcommand() {
     Some(("run", run_matches)) => {
-        // Get program file and verbosity setting
-        let program_path = run_matches.get_one::<String>("program").unwrap();
-        let verbose = run_matches.get_flag("verbose");
-        let use_bytecode = run_matches.get_flag("bytecode");
-        let benchmark = run_matches.get_flag("benchmark");
-        let use_stdlib = run_matches.get_flag("stdlib");
+        // ... existing code ...
+        
         let storage_backend = run_matches.get_one::<String>("storage-backend").unwrap();
         let storage_path = run_matches.get_one::<String>("storage-path").unwrap();
         
@@ -139,9 +166,82 @@ match matches.subcommand() {
 }
 ```
 
-### 4. Update Interactive and Benchmark Modes
+### 4. Update Storage API Usage
 
-Apply similar changes to the `run_interactive` and `run_benchmark` functions to support file-based storage.
+When using the storage backend directly, ensure you're using the `Option<&AuthContext>` pattern:
+
+```rust
+// Example storage operations with the new API pattern
+let auth_context = create_demo_auth_context();
+
+// Create operations with auth context
+storage.set(Some(&auth_context), "demo", "key1", "value1".as_bytes())?;
+
+// Read operations can specify auth context for permission checks
+let data = storage.get(Some(&auth_context), "demo", "key1")?;
+
+// Or omit auth context when appropriate (permission checks will not be performed)
+// Note: This is generally only appropriate for system-level operations or testing
+storage.get(None, "demo", "key2")?;
+```
+
+### 5. Implement Storage Inspection Commands
+
+Add CLI commands for inspecting storage contents:
+
+```rust
+.subcommand(
+    Command::new("storage")
+        .about("Storage inspection commands")
+        .arg(
+            Arg::new("storage-backend")
+                .long("storage-backend")
+                .value_name("TYPE")
+                .help("Storage backend type (memory or file)")
+                .default_value("file"),
+        )
+        .arg(
+            Arg::new("storage-path")
+                .long("storage-path")
+                .value_name("PATH")
+                .help("Path for file storage backend")
+                .default_value("./storage"),
+        )
+        .subcommand(
+            Command::new("list-keys")
+                .about("List all keys in a namespace")
+                .arg(
+                    Arg::new("namespace")
+                        .help("Namespace to list keys from")
+                        .required(true)
+                        .index(1),
+                )
+                .arg(
+                    Arg::new("prefix")
+                        .short('p')
+                        .long("prefix")
+                        .help("Only list keys with this prefix")
+                        .value_name("PREFIX"),
+                )
+        )
+        .subcommand(
+            Command::new("get-value")
+                .about("Get a value from storage")
+                .arg(
+                    Arg::new("namespace")
+                        .help("Namespace to get value from")
+                        .required(true)
+                        .index(1),
+                )
+                .arg(
+                    Arg::new("key")
+                        .help("Key to get value for")
+                        .required(true)
+                        .index(2),
+                )
+        )
+)
+```
 
 ## Example Usage
 
@@ -153,6 +253,12 @@ cargo run -- run --program demo/storage/persistent_counter.dsl --verbose --stora
 
 # Run again - counter value will persist!
 cargo run -- run --program demo/storage/persistent_counter.dsl --verbose --storage-backend file --storage-path ./data/storage
+
+# List keys in a namespace
+cargo run -- storage list-keys demo --storage-backend file --storage-path ./data/storage
+
+# Get a value from storage
+cargo run -- storage get-value demo counter --storage-backend file --storage-path ./data/storage
 ```
 
 ## Testing
@@ -162,6 +268,7 @@ To test the integration:
 1. Run the persistent counter example with file storage
 2. Verify that the counter value increments across runs
 3. Examine the storage directory to see the stored data files
+4. Use the storage inspection commands to view the stored data
 
 ## Troubleshooting
 
@@ -170,6 +277,7 @@ Common issues:
 - **Permission errors**: Ensure the storage directory is writable
 - **Missing directories**: The FileStorage implementation should create required directories
 - **Transaction failures**: Check for disk space issues if transaction operations fail
+- **Locking errors**: If you see errors about failing to acquire lock, check for stale locks
 
 ## Implementation Details
 
@@ -192,3 +300,5 @@ storage_path/
 ```
 
 Each value is stored in its own versioned file, with metadata tracking the history of changes. 
+
+The system uses file locks to prevent concurrent modifications, which is crucial for maintaining data integrity in multi-threaded or multi-process environments. 

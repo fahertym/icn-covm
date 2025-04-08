@@ -9,6 +9,7 @@ use icn_covm::storage::traits::StorageBackend;
 use icn_covm::storage::implementations::in_memory::InMemoryStorage;
 use icn_covm::storage::implementations::file_storage::FileStorage;
 use icn_covm::storage::utils::now;
+use icn_covm::federation::{NetworkNode, NodeConfig};
 
 use clap::{Arg, Command, ArgAction};
 use std::collections::HashMap;
@@ -18,6 +19,7 @@ use std::process;
 use std::time::Instant;
 use thiserror::Error;
 use std::io::{Write};
+use log::{info, warn, error, debug};
 
 #[derive(Debug, Error)]
 enum AppError {
@@ -32,6 +34,9 @@ enum AppError {
 
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
+
+    #[error("Federation error: {0}")]
+    Federation(String),
 
     #[error("{0}")]
     Other(String),
@@ -49,10 +54,14 @@ impl From<String> for AppError {
     }
 }
 
-fn main() {
+#[tokio::main]
+async fn main() -> Result<(), AppError> {
+    // Initialize logging
+    env_logger::init();
+
     // Parse command line arguments
     let matches = Command::new("icn-covm")
-        .version("0.5.0")
+        .version("0.7.0")
         .author("Intercooperative Network")
         .about("Secure stack-based virtual machine with governance-inspired opcodes")
         .subcommand(
@@ -127,6 +136,49 @@ fn main() {
                         .help("Path for file storage backend")
                         .default_value("./storage"),
                 )
+                // Federation-related options
+                .arg(
+                    Arg::new("enable-federation")
+                        .long("enable-federation")
+                        .help("Enable federation support")
+                        .action(ArgAction::SetTrue),
+                )
+                .arg(
+                    Arg::new("federation-port")
+                        .long("federation-port")
+                        .value_name("PORT")
+                        .help("Port number for federation listening")
+                        .default_value("0"),
+                )
+                .arg(
+                    Arg::new("bootstrap-nodes")
+                        .long("bootstrap-nodes")
+                        .value_name("MULTIADDR")
+                        .help("Multiaddresses of bootstrap nodes (can be used multiple times)")
+                        .action(ArgAction::Append),
+                )
+                .arg(
+                    Arg::new("node-name")
+                        .long("node-name")
+                        .value_name("NAME")
+                        .help("Human-readable name for this node")
+                        .default_value("icn-covm-node"),
+                )
+                .arg(
+                    Arg::new("capabilities")
+                        .long("capabilities")
+                        .value_name("CAPABILITY")
+                        .help("Node capabilities (can be used multiple times)")
+                        .action(ArgAction::Append)
+                        .default_value("storage"),
+                )
+                .arg(
+                    Arg::new("log-level")
+                        .long("log-level")
+                        .value_name("LEVEL")
+                        .help("Log level (error, warn, info, debug, trace)")
+                        .default_value("info"),
+                )
         )
         .subcommand(
             Command::new("identity")
@@ -198,13 +250,13 @@ fn main() {
                         .about("Get a value from storage")
                         .arg(
                             Arg::new("namespace")
-                                .help("Namespace containing the key")
+                                .help("Namespace to get value from")
                                 .required(true)
                                 .index(1),
                         )
                         .arg(
                             Arg::new("key")
-                                .help("Key to retrieve")
+                                .help("Key to get value for")
                                 .required(true)
                                 .index(2),
                         )
@@ -212,122 +264,193 @@ fn main() {
         )
         .get_matches();
 
-    match matches.subcommand() {
+    // Handle subcommands
+    let result = match matches.subcommand() {
         Some(("run", run_matches)) => {
-            // Get program file and verbosity setting
-            let program_path = run_matches.get_one::<String>("program").unwrap();
+            // Extract parameters
+            let params = run_matches
+                .get_many::<String>("param")
+                .unwrap_or_default()
+                .map(|s| {
+                    let parts: Vec<&str> = s.split('=').collect();
+                    if parts.len() != 2 {
+                        eprintln!("Invalid parameter format: {}", s);
+                        process::exit(1);
+                    }
+                    (parts[0].to_string(), parts[1].to_string())
+                })
+                .collect();
+
+            // Get basic configuration
             let verbose = run_matches.get_flag("verbose");
-            let interactive = run_matches.get_flag("interactive");
-            let use_bytecode = run_matches.get_flag("bytecode");
-            let benchmark = run_matches.get_flag("benchmark");
+            let program_path = run_matches.get_one::<String>("program").unwrap();
             let use_stdlib = run_matches.get_flag("stdlib");
+            let use_bytecode = run_matches.get_flag("bytecode");
             let storage_backend = run_matches.get_one::<String>("storage-backend").unwrap();
             let storage_path = run_matches.get_one::<String>("storage-path").unwrap();
+            
+            // Get federation configuration
+            let enable_federation = run_matches.get_flag("enable-federation");
+            let federation_port = run_matches.get_one::<String>("federation-port").unwrap().parse::<u16>().unwrap_or(0);
+            let bootstrap_nodes = run_matches
+                .get_many::<String>("bootstrap-nodes")
+                .unwrap_or_default()
+                .map(|s| s.parse().expect("Invalid multiaddress format"))
+                .collect::<Vec<_>>();
+            let node_name = run_matches.get_one::<String>("node-name").unwrap().to_string();
+            let capabilities = run_matches
+                .get_many::<String>("capabilities")
+                .unwrap_or_default()
+                .cloned()
+                .collect::<Vec<String>>();
 
-            // Collect parameters
-            let mut parameters = HashMap::new();
-            if let Some(params) = run_matches.get_many::<String>("param") {
-                for param_str in params {
-                    if let Some(equals_pos) = param_str.find('=') {
-                        let key = param_str[0..equals_pos].to_string();
-                        let value = param_str[equals_pos + 1..].to_string();
-                        if verbose {
-                            println!("Parameter: {} = {}", key, value);
-                        }
-                        parameters.insert(key, value);
-                    } else {
-                        eprintln!(
-                            "Warning: Invalid parameter format '{}', expected KEY=VALUE",
-                            param_str
-                        );
-                    }
-                }
-            }
-
-            // Execute the program
-            if interactive {
-                if let Err(err) = run_interactive(verbose, parameters, use_bytecode, storage_backend, storage_path) {
-                    eprintln!("Error: {}", err);
-                    process::exit(1);
-                }
+            if run_matches.get_flag("benchmark") {
+                run_benchmark(
+                    program_path,
+                    verbose,
+                    use_stdlib,
+                    params,
+                    storage_backend,
+                    storage_path,
+                )
+            } else if run_matches.get_flag("interactive") {
+                run_interactive(
+                    verbose,
+                    params, 
+                    use_bytecode,
+                    storage_backend,
+                    storage_path,
+                )
+            } else if enable_federation {
+                // Run with federation enabled
+                run_with_federation(
+                    program_path,
+                    verbose,
+                    use_stdlib,
+                    params,
+                    use_bytecode,
+                    storage_backend,
+                    storage_path,
+                    federation_port, 
+                    bootstrap_nodes,
+                    node_name,
+                    capabilities,
+                ).await
             } else {
-                if benchmark {
-                    if let Err(err) = run_benchmark(program_path, verbose, use_stdlib, parameters, storage_backend, storage_path) {
-                        eprintln!("Error: {}", err);
-                        process::exit(1);
-                    }
-                } else if let Err(err) =
-                    run_program(program_path, verbose, use_stdlib, parameters, use_bytecode, storage_backend, storage_path)
-                {
-                    eprintln!("Error: {}", err);
-                    process::exit(1);
-                }
+                // Standard run
+                run_program(
+                    program_path,
+                    verbose,
+                    use_stdlib,
+                    params,
+                    use_bytecode,
+                    storage_backend,
+                    storage_path,
+                )
             }
-        },
-        Some(("identity", identity_matches)) => {
-            match identity_matches.subcommand() {
-                Some(("register", register_matches)) => {
-                    let id_file = register_matches.get_one::<String>("file").unwrap();
-                    let id_type = register_matches.get_one::<String>("type").unwrap();
-                    let output_file = register_matches.get_one::<String>("output");
-                    
-                    if let Err(err) = register_identity(id_file, id_type, output_file) {
-                        eprintln!("Error registering identity: {}", err);
-                        process::exit(1);
-                    }
-                },
-                _ => {
-                    eprintln!("Unknown identity subcommand");
-                    process::exit(1);
-                }
+        }
+        Some(("identity", identity_matches)) => match identity_matches.subcommand() {
+            Some(("register", register_matches)) => {
+                let id_file = register_matches.get_one::<String>("file").unwrap();
+                let id_type = register_matches.get_one::<String>("type").unwrap();
+                let output_file = register_matches.get_one::<String>("output");
+                register_identity(id_file, id_type, output_file)
             }
+            _ => Err("Unknown identity subcommand".into()),
         },
         Some(("storage", storage_matches)) => {
             let storage_backend = storage_matches.get_one::<String>("storage-backend").unwrap();
             let storage_path = storage_matches.get_one::<String>("storage-path").unwrap();
-            
+
             match storage_matches.subcommand() {
                 Some(("list-keys", list_keys_matches)) => {
                     let namespace = list_keys_matches.get_one::<String>("namespace").unwrap();
                     let prefix = list_keys_matches.get_one::<String>("prefix");
-                    
-                    if let Err(err) = list_keys_command(namespace, prefix, storage_backend, storage_path) {
-                        eprintln!("Error listing keys: {}", err);
-                        process::exit(1);
-                    }
+                    list_keys_command(namespace, prefix, storage_backend, storage_path)
                 },
                 Some(("get-value", get_value_matches)) => {
                     let namespace = get_value_matches.get_one::<String>("namespace").unwrap();
                     let key = get_value_matches.get_one::<String>("key").unwrap();
-                    
-                    if let Err(err) = get_value_command(namespace, key, storage_backend, storage_path) {
-                        eprintln!("Error getting value: {}", err);
-                        process::exit(1);
-                    }
+                    get_value_command(namespace, key, storage_backend, storage_path)
                 },
-                _ => {
-                    eprintln!("Unknown storage subcommand. Use one of: list-keys, get-value");
-                    process::exit(1);
-                }
-            }
-        },
-        _ => {
-            // No subcommand or unknown subcommand
-            // For backward compatibility, assume 'run' with default arguments
-            let program_path = "program.dsl";
-            let verbose = false;
-            let use_stdlib = false;
-            let parameters = HashMap::new();
-            let use_bytecode = false;
-            let storage_backend = "memory";
-            let storage_path = "./storage";
-            
-            if let Err(err) = run_program(program_path, verbose, use_stdlib, parameters, use_bytecode, storage_backend, storage_path) {
-                eprintln!("Error: {}", err);
-                process::exit(1);
+                _ => Err("Unknown storage subcommand".into()),
             }
         }
+        _ => Err("Unknown command".into()),
+    };
+
+    // Handle errors
+    if let Err(e) = result {
+        eprintln!("Error: {}", e);
+        process::exit(1);
     }
+
+    Ok(())
+}
+
+/// Run the virtual machine with federation enabled
+async fn run_with_federation(
+    program_path: &str,
+    verbose: bool,
+    use_stdlib: bool,
+    parameters: HashMap<String, String>,
+    use_bytecode: bool,
+    storage_backend: &str,
+    storage_path: &str,
+    federation_port: u16,
+    bootstrap_nodes: Vec<libp2p::Multiaddr>,
+    node_name: String,
+    capabilities: Vec<String>,
+) -> Result<(), AppError> {
+    info!("Starting ICN-COVM with federation enabled");
+    debug!("Federation port: {}", federation_port);
+    debug!("Bootstrap nodes: {:?}", bootstrap_nodes);
+    debug!("Node name: {}", node_name);
+    debug!("Capabilities: {:?}", capabilities);
+
+    // Configure federation
+    let node_config = NodeConfig {
+        port: Some(federation_port),
+        bootstrap_nodes,
+        name: Some(node_name),
+        capabilities,
+        protocol_version: "1.0.0".to_string(),
+    };
+
+    // Create and start network node
+    let mut network_node = match NetworkNode::new(node_config).await {
+        Ok(node) => node,
+        Err(e) => return Err(AppError::Federation(format!("Failed to create network node: {}", e))),
+    };
+
+    info!("Local peer ID: {}", network_node.local_peer_id());
+
+    // Start the network node
+    if let Err(e) = network_node.start().await {
+        return Err(AppError::Federation(format!("Failed to start network node: {}", e)));
+    }
+
+    // Now run the program if specified
+    if program_path != "program.dsl" || Path::new(program_path).exists() {
+        run_program(
+            program_path,
+            verbose,
+            use_stdlib,
+            parameters,
+            use_bytecode,
+            storage_backend,
+            storage_path,
+        )?;
+    } else {
+        info!("No program specified, running in network-only mode");
+        
+        // Keep the node running until interrupted
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        }
+    }
+
+    Ok(())
 }
 
 fn run_program(

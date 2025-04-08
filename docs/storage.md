@@ -19,6 +19,8 @@ The COVM supports multiple storage backends through a common interface defined b
 - Supports versioning, audit logs, and transaction rollback
 - Implements resource usage tracking and quotas
 - Provides robust permission checking
+- Includes file locking for concurrent access safety
+- Features comprehensive error handling with context
 
 ## Selecting a Storage Backend
 
@@ -32,6 +34,21 @@ cargo run -- run --program your_program.dsl --storage-backend memory
 cargo run -- run --program your_program.dsl --storage-backend file --storage-path ./storage_dir
 ```
 
+## Storage Inspection
+
+The COVM CLI provides commands for inspecting storage:
+
+```bash
+# List keys in a namespace
+cargo run -- storage list-keys demo --storage-backend file --storage-path ./storage
+
+# Optionally filter by prefix
+cargo run -- storage list-keys demo --prefix user_ --storage-backend file --storage-path ./storage
+
+# Get a value from storage
+cargo run -- storage get-value demo counter --storage-backend file --storage-path ./storage
+```
+
 ## Authorization Model
 
 The storage system implements an identity-aware authorization model with the following components:
@@ -43,6 +60,16 @@ The storage system implements an identity-aware authorization model with the fol
    - `writer`: Permission to write data
    - `admin`: Permission to manage namespace configuration
    - `global admin`: Permission to manage accounts and create namespaces
+
+The storage API uses the `Option<&AuthContext>` pattern for flexible authentication handling:
+
+```rust
+fn get(&self, auth: Option<&AuthContext>, namespace: &str, key: &str) -> StorageResult<Vec<u8>>;
+fn set(&mut self, auth: Option<&AuthContext>, namespace: &str, key: &str, value: &[u8]) -> StorageResult<()>;
+fn delete(&mut self, auth: Option<&AuthContext>, namespace: &str, key: &str) -> StorageResult<()>;
+```
+
+This allows operations to be performed with or without authentication context, while ensuring proper permission checks when auth is provided.
 
 ## Usage in DSL Programs
 
@@ -126,6 +153,16 @@ The `FileStorage` backend implements a persistent storage solution with the foll
 - **Audit Logs**:
   - All operations are logged with timestamps, user IDs, and operation details
   - Logs can be queried for audit and debugging purposes
+
+- **Concurrency Safety**:
+  - Implements file locking using the `fs2` crate
+  - Prevents concurrent modification of the same data
+  - Handles lock timeout and recovery gracefully
+
+- **Error Handling**:
+  - Comprehensive error types with detailed context
+  - Helpful error messages for debugging
+  - Clear distinction between permission errors, I/O errors, and logical errors
 
 ## Example Programs
 

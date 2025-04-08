@@ -1,3 +1,11 @@
+#######################################################################
+# IMPORTANT: This demo requires the typed-values feature to function.
+# Run with: cargo run --features typed-values -- run --program demo/identity/identity_registration.dsl
+#
+# This demo showcases some planned features that are not yet fully supported
+# in the base DSL without the typed-values feature flag.
+#######################################################################
+
 # ICN Cooperative Virtual Machine - Identity Registration Demo
 # This demo shows how a member registers and creates their identity
 
