@@ -471,9 +471,14 @@ pub enum Op {
 
 #[derive(Debug)]
 struct CallFrame {
+    // Local memory for function scope
     memory: HashMap<String, f64>,
+    // Function parameters
+    params: HashMap<String, f64>,
+    // Return value
     return_value: Option<f64>,
-    return_pc: usize, // PC in the caller's context to return to
+    // Function name (for debugging)
+    function_name: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -507,11 +512,11 @@ pub struct VM {
     /// Function map for storing subroutines
     pub functions: HashMap<String, (Vec<String>, Vec<Op>)>,
     
-    /// Current function parameters
-    // pub params: Vec<f64>, // This seems unused, let's remove it for now
-    
     /// Call stack for tracking function calls
     pub call_stack: Vec<usize>,
+    
+    /// Call frames for function memory scoping
+    pub call_frames: Vec<CallFrame>,
     
     /// Output from the program
     pub output: String,
@@ -537,6 +542,7 @@ impl VM {
             memory: HashMap::new(),
             functions: HashMap::new(),
             call_stack: Vec::new(),
+            call_frames: Vec::new(),
             output: String::new(),
             events: Vec::new(),
             auth_context: None,
@@ -552,6 +558,7 @@ impl VM {
             memory: HashMap::new(),
             functions: HashMap::new(),
             call_stack: Vec::new(),
+            call_frames: Vec::new(),
             output: String::new(),
             events: Vec::new(),
             auth_context: None,
@@ -722,7 +729,7 @@ impl VM {
 
     fn execute_inner(&mut self, ops: &[Op]) -> Result<(), VMError> {
         let mut pc = 0;
-        while pc < ops.len() {
+        'operations: while pc < ops.len() {
             let op = &ops[pc];
 
             match op {
@@ -764,13 +771,16 @@ impl VM {
                 Op::Gt => { let (a, b) = self.pop_two("Gt")?; self.stack.push(if a > b { 0.0 } else { 1.0 }); },
                 Op::Not => { let value = self.pop_one("Not")?; self.stack.push(if value == 0.0 { 1.0 } else { 0.0 }); },
                 Op::And => { let (a, b) = self.pop_two("And")?; self.stack.push(if a != 0.0 && b != 0.0 { 1.0 } else { 0.0 }); },
-                Op::Or => { let (a, b) = self.pop_two("Or")?; self.stack.push(if a != 0.0 || b != 0.0 { 1.0 } else { 0.0 }); },
+                Op::Or => { 
+                    let (a, b) = self.pop_two("Or")?; 
+                    self.stack.push(if a != 0.0 || b != 0.0 { 1.0 } else { 0.0 }); 
+                },
                 Op::Store(key) => {
                     let value = self.pop_one("Store")?;
-                    self.memory.insert(key.clone(), value);
+                    self.store_value(key, value);
                 },
                 Op::Load(key) => {
-                    let value = *self.memory.get(key).ok_or_else(|| VMError::VariableNotFound(key.clone()))?;
+                    let value = self.load_value(key).ok_or_else(|| VMError::VariableNotFound(key.clone()))?;
                     self.stack.push(value);
                 },
                 Op::DumpStack => { Event::info("stack", format!("{:?}", self.stack)).emit().map_err(|e| VMError::IOError(e.to_string()))?; },
@@ -813,11 +823,22 @@ impl VM {
                 },
                 Op::Negate => { let value = self.pop_one("Negate")?; self.stack.push(-value); },
                 Op::Call(name) => {
-                    let (_params, body) = self.functions.get(name).ok_or_else(|| VMError::FunctionNotFound(name.clone()))?.clone();
-                    let result = self.execute_inner(&body);
-                    result?;
+                    self.execute_call(name)?;
                 },
                 Op::Return => {
+                    // Pop return value first to avoid double borrow
+                    let return_value = if !self.stack.is_empty() {
+                        Some(self.pop_one("Return")?)
+                    } else {
+                        None
+                    };
+                    
+                    // If we're inside a function, set the return value in the current call frame
+                    if let Some(frame) = self.call_frames.last_mut() {
+                        frame.return_value = return_value;
+                    }
+                    
+                    // Exit the current execution context
                     break;
                 },
                 Op::Nop => {},
@@ -1083,7 +1104,7 @@ impl VM {
                         self.emit_event("identity_error", &format!("{}", err));
                     } else if auth.has_delegation(&delegator_id, &delegate_id) {
                         self.stack.push(1.0); // true
-                        self.emit_event("delegation_check", &format!("Delegation from {} to {} is valid", delegator_id, delegate_id));
+                        self.emit_event("delegation_check", &format!("Valid delegation from {} to {}", delegator_id, delegate_id));
                     } else {
                         let err = VMError::DelegationCheckFailed {
                             delegator_id: delegator_id.clone(),
@@ -1138,10 +1159,10 @@ impl VM {
     }
     
     /// Mock storage operations for tests - this allows tests to run without a real backend
-    #[cfg(test)]
     pub fn mock_storage_operations(&mut self) {
-        // This is a no-op, just a marker that tests should not attempt real storage operations
-        self.storage_backend = None;
+        // Initialize a mock in-memory storage backend
+        let backend = InMemoryStorage::new();
+        self.storage_backend = Some(Box::new(backend));
     }
     
     /// Set the storage namespace for this VM
@@ -1430,6 +1451,72 @@ impl VM {
             }
             Err(e) => Err(VMError::StorageError(e.to_string())),
         }
+    }
+
+    // Modified Call operation with memory scoping
+    fn execute_call(&mut self, name: &str) -> Result<(), VMError> {
+        let (params, body) = self.functions.get(name).ok_or_else(|| VMError::FunctionNotFound(name.to_string()))?.clone();
+        
+        // Create a new call frame with function-local memory
+        let mut call_frame = CallFrame {
+            memory: HashMap::new(),
+            params: HashMap::new(),
+            return_value: None,
+            function_name: name.to_string(),
+        };
+        
+        // Populate parameters from the stack
+        for param_name in params.iter().rev() {
+            let param_value = self.pop_one("Call parameter")?;
+            call_frame.params.insert(param_name.clone(), param_value);
+        }
+        
+        // Push the call frame onto the stack
+        self.call_frames.push(call_frame);
+        
+        // Execute the function body
+        let result = self.execute_inner(&body);
+        
+        // Restore memory state if we have a call frame
+        if let Some(frame) = self.call_frames.pop() {
+            // If there was a return value, push it onto the stack
+            if let Some(return_value) = frame.return_value {
+                self.stack.push(return_value);
+            }
+        }
+        
+        result
+    }
+    
+    /// Store a value in the current memory scope
+    pub fn store_value(&mut self, key: &str, value: f64) {
+        // If we're inside a function, store in the current call frame's memory
+        if let Some(frame) = self.call_frames.last_mut() {
+            frame.memory.insert(key.to_string(), value);
+        } else {
+            // Otherwise store in the global memory
+            self.memory.insert(key.to_string(), value);
+        }
+    }
+    
+    /// Retrieve a value from memory, respecting scopes
+    pub fn load_value(&self, key: &str) -> Option<f64> {
+        // First check function parameters (these take precedence)
+        if let Some(frame) = self.call_frames.last() {
+            if let Some(value) = frame.params.get(key) {
+                return Some(*value);
+            }
+        }
+        
+        // Then check local function memory 
+        if let Some(frame) = self.call_frames.last() {
+            if let Some(value) = frame.memory.get(key) {
+                return Some(*value);
+            }
+        }
+        
+        // Finally check global memory
+        self.memory.get(key).copied()
     }
 }
 

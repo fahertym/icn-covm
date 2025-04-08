@@ -45,22 +45,22 @@ pub fn setup_test_storage() -> StorageResult<InMemoryStorage> {
     let admin = create_admin_auth();
     
     // Create standard namespaces
-    storage.create_namespace(&admin, "governance", 1024*1024, None)?;
-    storage.create_namespace(&admin, "governance/config", 1024*1024, Some("governance"))?;
-    storage.create_namespace(&admin, "governance/proposals", 1024*1024, Some("governance"))?;
-    storage.create_namespace(&admin, "governance/votes", 1024*1024, Some("governance"))?;
-    storage.create_namespace(&admin, "governance/members", 1024*1024, Some("governance"))?;
-    storage.create_namespace(&admin, "governance/delegations", 1024*1024, Some("governance"))?;
+    storage.create_namespace(Some(&admin), "governance", 1024*1024, None)?;
+    storage.create_namespace(Some(&admin), "governance/config", 1024*1024, Some("governance"))?;
+    storage.create_namespace(Some(&admin), "governance/proposals", 1024*1024, Some("governance"))?;
+    storage.create_namespace(Some(&admin), "governance/votes", 1024*1024, Some("governance"))?;
+    storage.create_namespace(Some(&admin), "governance/members", 1024*1024, Some("governance"))?;
+    storage.create_namespace(Some(&admin), "governance/delegations", 1024*1024, Some("governance"))?;
     
     // Create member-specific vote namespaces
-    storage.create_namespace(&admin, "governance/votes/member1", 1024*1024, Some("governance/votes"))?;
-    storage.create_namespace(&admin, "governance/votes/member2", 1024*1024, Some("governance/votes"))?;
+    storage.create_namespace(Some(&admin), "governance/votes/member1", 1024*1024, Some("governance/votes"))?;
+    storage.create_namespace(Some(&admin), "governance/votes/member2", 1024*1024, Some("governance/votes"))?;
     
     // Create resource accounts
-    storage.create_account(&admin, "admin_user", 1024*1024)?;
-    storage.create_account(&admin, "member1", 1024*1024)?;
-    storage.create_account(&admin, "member2", 1024*1024)?;
-    storage.create_account(&admin, "observer_user", 1024*100)?;
+    storage.create_account(Some(&admin), "admin_user", 1024*1024)?;
+    storage.create_account(Some(&admin), "member1", 1024*1024)?;
+    storage.create_account(Some(&admin), "member2", 1024*1024)?;
+    storage.create_account(Some(&admin), "observer_user", 1024*100)?;
     
     Ok(storage)
 }

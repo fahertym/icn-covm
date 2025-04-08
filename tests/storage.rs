@@ -12,22 +12,22 @@ fn test_in_memory_storage() -> StorageResult<()> {
     let admin = create_admin_auth();
     
     // Setup a namespace for testing
-    storage.create_namespace(&admin, "test", 1024*1024, None)?;
-    storage.create_account(&admin, "admin_user", 1024*1024)?;
+    storage.create_namespace(Some(&admin), "test", 1024*1024, None)?;
+    storage.create_account(Some(&admin), "admin_user", 1024*1024)?;
     
     // Test basic operations
-    assert!(!storage.get(&admin, "test", "key1").is_ok());
+    assert!(!storage.get(Some(&admin), "test", "key1").is_ok());
     
-    storage.set(&admin, "test", "key1", to_bytes("42.0"))?;
-    assert_eq!(from_bytes(&storage.get(&admin, "test", "key1")?), "42.0");
+    storage.set(Some(&admin), "test", "key1", to_bytes("42.0"))?;
+    assert_eq!(from_bytes(&storage.get(Some(&admin), "test", "key1")?), "42.0");
     
-    storage.set(&admin, "test", "key2", to_bytes("123.45"))?;
-    assert_eq!(from_bytes(&storage.get(&admin, "test", "key2")?), "123.45");
+    storage.set(Some(&admin), "test", "key2", to_bytes("123.45"))?;
+    assert_eq!(from_bytes(&storage.get(Some(&admin), "test", "key2")?), "123.45");
     
-    storage.delete(&admin, "test", "key1")?;
-    assert!(storage.get(&admin, "test", "key1").is_err());
+    storage.delete(Some(&admin), "test", "key1")?;
+    assert!(storage.get(Some(&admin), "test", "key1").is_err());
     
-    let keys = storage.list_keys(&admin, "test", None)?;
+    let keys = storage.list_keys(Some(&admin), "test", None)?;
     assert_eq!(keys.len(), 1);
     assert!(keys.contains(&"key2".to_string()));
     
@@ -40,43 +40,43 @@ fn test_in_memory_storage_transaction() -> StorageResult<()> {
     let admin = create_admin_auth();
     
     // Setup a namespace for testing
-    storage.create_namespace(&admin, "test", 1024*1024, None)?;
-    storage.create_account(&admin, "admin_user", 1024*1024)?;
+    storage.create_namespace(Some(&admin), "test", 1024*1024, None)?;
+    storage.create_account(Some(&admin), "admin_user", 1024*1024)?;
     
     // Set initial values
-    storage.set(&admin, "test", "key1", to_bytes("10.0"))?;
+    storage.set(Some(&admin), "test", "key1", to_bytes("10.0"))?;
     
     // Begin transaction
     storage.begin_transaction()?;
     
     // Modify values in transaction
-    storage.set(&admin, "test", "key1", to_bytes("20.0"))?;
-    storage.set(&admin, "test", "key2", to_bytes("30.0"))?;
+    storage.set(Some(&admin), "test", "key1", to_bytes("20.0"))?;
+    storage.set(Some(&admin), "test", "key2", to_bytes("30.0"))?;
     
     // Values should reflect transaction changes
-    assert_eq!(from_bytes(&storage.get(&admin, "test", "key1")?), "20.0");
-    assert_eq!(from_bytes(&storage.get(&admin, "test", "key2")?), "30.0");
+    assert_eq!(from_bytes(&storage.get(Some(&admin), "test", "key1")?), "20.0");
+    assert_eq!(from_bytes(&storage.get(Some(&admin), "test", "key2")?), "30.0");
     
     // Rollback transaction
     storage.rollback_transaction()?;
     
     // Values should be restored to pre-transaction state
-    assert_eq!(from_bytes(&storage.get(&admin, "test", "key1")?), "10.0");
-    assert!(storage.get(&admin, "test", "key2").is_err());
+    assert_eq!(from_bytes(&storage.get(Some(&admin), "test", "key1")?), "10.0");
+    assert!(storage.get(Some(&admin), "test", "key2").is_err());
     
     // Begin a new transaction
     storage.begin_transaction()?;
     
     // Modify values again
-    storage.set(&admin, "test", "key1", to_bytes("50.0"))?;
-    storage.set(&admin, "test", "key2", to_bytes("60.0"))?;
+    storage.set(Some(&admin), "test", "key1", to_bytes("50.0"))?;
+    storage.set(Some(&admin), "test", "key2", to_bytes("60.0"))?;
     
     // Commit transaction
     storage.commit_transaction()?;
     
     // Values should reflect committed changes
-    assert_eq!(from_bytes(&storage.get(&admin, "test", "key1")?), "50.0");
-    assert_eq!(from_bytes(&storage.get(&admin, "test", "key2")?), "60.0");
+    assert_eq!(from_bytes(&storage.get(Some(&admin), "test", "key1")?), "50.0");
+    assert_eq!(from_bytes(&storage.get(Some(&admin), "test", "key2")?), "60.0");
     
     Ok(())
 }

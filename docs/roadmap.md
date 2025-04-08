@@ -1,6 +1,6 @@
 # ICN Cooperative Virtual Machine Roadmap
 
-This document outlines the strategic development path for the ICN Cooperative Virtual Machine (ICN-COVM), focusing on governance primitives and infrastructure for democratic computation in cooperatives.
+This document outlines the planned development path for the ICN Cooperative Virtual Machine (ICN-COVM), structured by version release. It prioritizes establishing the core Intercooperative Network functionality and enhancing the platform's capabilities for secure, democratic, and cooperative governance.
 
 ## Current Release: v0.6.0 - Identity and Storage
 
@@ -37,42 +37,60 @@ The initial governance primitive implemented:
 - Comprehensive documentation and tutorials
 - Demo implementation showcasing practical application
 
-## Upcoming Releases
+## Development Roadmap (v0.6.1 onwards)
 
-### v0.7.0 - Economic Operations and Federation
+This roadmap outlines the planned development path for the ICN Cooperative Virtual Machine (ICN-COVM), structured by version release. It prioritizes establishing the core Intercooperative Network functionality and enhancing the platform's capabilities for secure, democratic, and cooperative governance. Features previously planned for v0.7.0 and v0.8.0 have been integrated into this updated structure.
 
-**Target Date:** Q4 2024
+### v0.6.1: Core Improvements & Cleanup
 
-| Feature | Description | Priority |
-|---------|-------------|----------|
-| `EconomicOperations` | Resource allocation primitives for cooperative economics | ⭐️⭐️⭐️⭐️⭐️ |
-| `FederationProtocol` | Cross-VM communication for cooperative networks | ⭐️⭐️⭐️⭐️ |
-| `PolicyEngine` | DSL for defining organizational governance policies | ⭐️⭐️⭐️ |
-| `GovernanceHooks` | Event-triggered governance actions | ⭐️⭐️⭐️ |
+* **Goal:** Stabilize the v0.6.0 base, address immediate robustness issues, and clean up known problems.
+* **Key Activities:**
+    * **VM Memory Scoping:** Refactor memory handling in `src/vm.rs` for strict isolation between global and function scopes. Implement and pass memory leak tests.
+    * **Storage API & Test Fixes:** Update tests (`vm_identity_standalone.rs`), apply `cargo fix` suggestions, and update examples (`demo/storage/`) to align with the current `StorageBackend` trait.
+    * **DSL/Compiler Error Refinement:** Improve clarity and context in parser error messages (`src/compiler/mod.rs`).
 
-#### Implementation Details:
+### v0.7.0: Federation Foundation
 
-- Economic operations (Transfer, Mint, Burn)
-- Federation identity verification
-- Policy DSL extension
-- Integration with VM event system
+* **Goal:** Introduce the basic networking layer for inter-cooperative communication. *(Incorporates parts of previous `FederationProtocol` goal)*.
+* **Key Activities:**
+    * **Federation Networking Layer:** Integrate `libp2p` into a new `src/federation` module for peer discovery, secure channel management, and basic publish/subscribe capabilities.
+    * **Basic Messaging Standard:** Define and implement initial message types for node announcements, peer checks ("ping"), and potentially broadcasting existence of a new proposal.
+    * **Multi-Node Testbed Setup:** Establish a local test environment (e.g., Docker Compose) capable of running multiple ICN-COVM nodes that can discover and connect to each other.
 
-### v0.8.0 - Visualization and Tools
+### v0.8.0: Federated Governance - Phase 1
 
-**Target Date:** Q1 2025
+* **Goal:** Enable basic governance actions that span multiple cooperative nodes. *(Incorporates parts of previous `FederationProtocol` and `GovernanceHooks` goals)*.
+* **Key Activities:**
+    * **Governance Orchestrator (Initial Design):** Design and prototype a module/protocol for coordinating simple multi-node workflows (e.g., a federated proposal requiring votes from multiple nodes).
+    * **Federated Primitives (Prototype):** Implement an initial `FederatedProposalAnnounce` Op that uses the network layer to inform peers. Implement logic to collect simple responses (e.g., yes/no) from peers and tally results.
+    * **Basic Shared State Sync:** Experiment with synchronizing very basic, non-critical state across nodes (e.g., a list of known federated peers) using the federation layer.
 
-| Feature | Description | Priority |
-|---------|-------------|----------|
-| `GovernanceViz` | Visual representation of governance structures | ⭐️⭐️⭐️⭐️ |
-| `EnhancedDebugger` | Advanced debugging tools for governance logic | ⭐️⭐️⭐️ |
-| `TemplateLibrary` | Reusable governance components | ⭐️⭐️⭐️⭐️ |
+### v0.9.0: Advanced Economics & Identity
 
-#### Implementation Details:
+* **Goal:** Implement foundational non-speculative economic models and enhance the identity system for federated trust. *(Incorporates previous `EconomicOperations` and federation identity verification goals)*.
+* **Key Activities:**
+    * **Mutual Credit System:** Design storage structures (`src/storage/`) and implement basic Opcodes/stdlib functions (`src/vm.rs`, `src/compiler/stdlib.rs`) for tracking and executing mutual credit transactions.
+    * **Decentralized Identifiers (DIDs):** Integrate standard DID formats (e.g., `did:key`) into the `src/identity/identity.rs` structure and associated verification logic.
+    * **Verifiable Credentials (VCs) - Membership:** Implement issuance and verification of basic VCs for cooperative membership using `src/identity/credential.rs` as a base.
 
-- Delegation graph visualization
-- Voting power analysis tools
-- Governance scenario simulations
-- Simplified CCL creation tools
+### v0.9.5: Privacy & Optimization - Phase 1
+
+* **Goal:** Introduce initial privacy features and begin performance tuning. *(Incorporates parts of previous `EnhancedDebugger` goal)*.
+* **Key Activities:**
+    * **ZKPs (Research & Prototype):** Research suitable Rust ZKP libraries (`arkworks`, `bellman`) and prototype a core mechanism, like private vote tallying.
+    * **Performance Benchmarking & Profiling:** Add benchmarks (`cargo bench` or `criterion`) for key VM operations and storage interactions. Profile execution to identify bottlenecks (`src/vm.rs`, `src/bytecode.rs`, `src/storage/`).
+    * **Enhanced Debugging/Tracing:** Integrate a structured logging framework (e.g., `tracing`) for detailed execution flow analysis. Enhance REPL (`src/main.rs`) with basic debugging commands.
+
+### v1.0.0: Production Readiness
+
+* **Goal:** Stabilize features, finalize core APIs, improve documentation/tooling for initial production use cases. *(Incorporates previous `PolicyEngine`, `GovernanceHooks`, `GovernanceViz`, `TemplateLibrary` goals)*.
+* **Key Activities:**
+    * **API Stabilization:** Finalize the core VM, Storage, Identity, and Federation APIs.
+    * **Robust Error Handling:** Ensure consistent and informative error handling across all modules.
+    * **Scalability Improvements:** Address performance bottlenecks identified in v0.9.5. Optimize `FileStorage` or introduce alternative backends if necessary.
+    * **Comprehensive Documentation:** Finalize developer guides, tutorials (including federation setup), API references, and architecture documents (`docs/`).
+    * **Security Audit & Hardening:** Conduct thorough security reviews (cryptography, networking, authorization).
+    * **Tooling & User Experience:** Refine the CLI (`src/main.rs`). Implement visualization tools (`GovernanceViz`), template libraries (`TemplateLibrary`), and potentially a policy engine (`PolicyEngine`) or improved event hooks (`GovernanceHooks`) as stabilization allows.
 
 ## Long-term Vision
 
@@ -83,7 +101,7 @@ The long-term goal for ICN-COVM is to provide a comprehensive infrastructure for
 3. **Participatory Economics** - Fair resource allocation through democratic processes
 4. **Interoperable Governance** - Standard protocols for cross-cooperative governance
 
-### Future Research Areas
+## Future Research Areas
 
 - Federation of multiple cooperative VMs
 - Integration with blockchain technologies for transparent governance

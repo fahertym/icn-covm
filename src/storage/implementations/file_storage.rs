@@ -1,10 +1,10 @@
-use std::io::{self, Read, Write, BufRead, BufReader};
+use std::io::{Write, BufRead, BufReader};
 use std::fs::{self, File, create_dir_all, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::collections::HashMap;
 use serde::{Serialize, Deserialize};
-use chrono::{NaiveDateTime, TimeZone, Utc};
-use std::time::SystemTime;
+use chrono::{DateTime, Utc};
+use fs2::FileExt;
 use crate::storage::auth::AuthContext;
 use crate::storage::traits::StorageBackend;
 use crate::storage::errors::{StorageError, StorageResult};
@@ -121,10 +121,30 @@ impl FileStorage {
         let root = root_path.as_ref().to_path_buf();
         
         // Create the basic directory structure if it doesn't exist
-        create_dir_all(root.join("namespaces"))?;
-        create_dir_all(root.join("accounts"))?;
-        create_dir_all(root.join("audit_logs"))?;
-        create_dir_all(root.join("transactions"))?;
+        create_dir_all(root.join("namespaces")).map_err(|e| 
+            StorageError::IOError { 
+                operation: "creating namespaces directory".to_string(),
+                details: e.to_string() 
+            }
+        )?;
+        create_dir_all(root.join("accounts")).map_err(|e| 
+            StorageError::IOError { 
+                operation: "creating accounts directory".to_string(),
+                details: e.to_string() 
+            }
+        )?;
+        create_dir_all(root.join("audit_logs")).map_err(|e| 
+            StorageError::IOError { 
+                operation: "creating audit_logs directory".to_string(),
+                details: e.to_string() 
+            }
+        )?;
+        create_dir_all(root.join("transactions")).map_err(|e| 
+            StorageError::IOError { 
+                operation: "creating transactions directory".to_string(),
+                details: e.to_string() 
+            }
+        )?;
         
         // Initialize an empty storage
         let mut storage = FileStorage {
@@ -165,7 +185,13 @@ impl FileStorage {
         // Check if this directory has a namespace_metadata.json file
         let metadata_path = dir.join("namespace_metadata.json");
         if metadata_path.exists() {
-            let metadata_str = fs::read_to_string(metadata_path)?;
+            let metadata_str = fs::read_to_string(&metadata_path).map_err(|e| 
+                StorageError::IOError { 
+                    operation: "reading namespace metadata file".to_string(),
+                    details: format!("Failed to read namespace metadata file '{}': {}", 
+                        metadata_path.display(), e) 
+                }
+            )?;
             let metadata: NamespaceMetadata = serde_json::from_str(&metadata_str)
                 .map_err(|e| StorageError::SerializationError { details: e.to_string() })?;
             
@@ -174,8 +200,18 @@ impl FileStorage {
         }
         
         // Recursively check subdirectories, but skip the 'keys' directory
-        for entry in fs::read_dir(dir)? {
-            let entry = entry?;
+        for entry in fs::read_dir(dir).map_err(|e| 
+            StorageError::IOError { 
+                operation: "reading directory".to_string(),
+                details: format!("Failed to read directory '{}': {}", dir.display(), e) 
+            }
+        )? {
+            let entry = entry.map_err(|e| 
+                StorageError::IOError { 
+                    operation: "reading directory entry".to_string(),
+                    details: format!("Failed to read directory entry in '{}': {}", dir.display(), e) 
+                }
+            )?;
             let path = entry.path();
             
             if path.is_dir() && path.file_name().unwrap_or_default() != "keys" {
@@ -195,12 +231,27 @@ impl FileStorage {
             return Ok(());
         }
         
-        for entry in fs::read_dir(accounts_dir)? {
-            let entry = entry?;
+        for entry in fs::read_dir(&accounts_dir).map_err(|e| 
+            StorageError::IOError { 
+                operation: "reading accounts directory".to_string(),
+                details: format!("Failed to read accounts directory '{}': {}", accounts_dir.display(), e) 
+            }
+        )? {
+            let entry = entry.map_err(|e| 
+                StorageError::IOError { 
+                    operation: "reading account entry".to_string(),
+                    details: format!("Failed to read account entry in '{}': {}", accounts_dir.display(), e) 
+                }
+            )?;
             let path = entry.path();
             
             if path.is_file() && path.extension().unwrap_or_default() == "json" {
-                let account_str = fs::read_to_string(&path)?;
+                let account_str = fs::read_to_string(&path).map_err(|e| 
+                    StorageError::IOError { 
+                        operation: "reading account file".to_string(),
+                        details: format!("Failed to read account file '{}': {}", path.display(), e) 
+                    }
+                )?;
                 let account: FileResourceAccount = serde_json::from_str(&account_str)
                     .map_err(|e| StorageError::SerializationError { details: e.to_string() })?;
                 
@@ -247,9 +298,26 @@ impl FileStorage {
             });
         }
         
-        let metadata_str = fs::read_to_string(path)?;
+        // Open the file with read-only access
+        let file = File::open(&path).map_err(|e| 
+            self.map_io_error(e, namespace, Some(key), "opening metadata file")
+        )?;
+        
+        // Acquire a shared lock for reading
+        file.lock_shared().map_err(|e| 
+            self.map_io_error(e, namespace, Some(key), "locking metadata file for reading")
+        )?;
+        
+        // Read the file content
+        let metadata_str = fs::read_to_string(path).map_err(|e| 
+            self.map_io_error(e, namespace, Some(key), "reading metadata file")
+        )?;
+        
+        // Parse the JSON
         let metadata: KeyMetadata = serde_json::from_str(&metadata_str)
             .map_err(|e| StorageError::SerializationError { details: e.to_string() })?;
+        
+        // The lock will be automatically released when the file is closed
         
         Ok(metadata)
     }
@@ -260,13 +328,34 @@ impl FileStorage {
         
         // Ensure parent directories exist
         if let Some(parent) = path.parent() {
-            create_dir_all(parent)?;
+            create_dir_all(parent).map_err(|e| 
+                self.map_io_error(e, namespace, Some(key), "creating directory for metadata")
+            )?;
         }
         
+        // Serialize metadata to JSON
         let metadata_str = serde_json::to_string(metadata)
             .map_err(|e| StorageError::SerializationError { details: e.to_string() })?;
         
-        fs::write(path, metadata_str)?;
+        // Open the file with write access, creating it if it doesn't exist
+        let file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&path)
+            .map_err(|e| self.map_io_error(e, namespace, Some(key), "opening metadata file for writing"))?;
+        
+        // Acquire an exclusive lock for writing
+        file.lock_exclusive().map_err(|e| 
+            self.map_io_error(e, namespace, Some(key), "locking metadata file for writing")
+        )?;
+        
+        // Write the metadata
+        fs::write(path, metadata_str).map_err(|e| 
+            self.map_io_error(e, namespace, Some(key), "writing metadata")
+        )?;
+        
+        // The lock will be automatically released when the file is closed
         
         Ok(())
     }
@@ -277,10 +366,33 @@ impl FileStorage {
         
         // Ensure parent directories exist
         if let Some(parent) = path.parent() {
-            create_dir_all(parent)?;
+            create_dir_all(parent).map_err(|e| 
+                self.map_io_error(e, namespace, Some(key), format!("creating directory for version {}", version).as_str())
+            )?;
         }
         
-        fs::write(path, data)?;
+        // Open the file with write access, creating it if it doesn't exist
+        let file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&path)
+            .map_err(|e| self.map_io_error(e, namespace, Some(key), 
+                format!("opening version {} file for writing", version).as_str()))?;
+        
+        // Acquire an exclusive lock for writing
+        file.lock_exclusive().map_err(|e| 
+            self.map_io_error(e, namespace, Some(key), 
+                format!("locking version {} file for writing", version).as_str())
+        )?;
+        
+        // Write the data
+        fs::write(path, data).map_err(|e| 
+            self.map_io_error(e, namespace, Some(key), 
+                format!("writing version {} data", version).as_str())
+        )?;
+        
+        // The lock will be automatically released when the file is closed
         
         Ok(())
     }
@@ -295,7 +407,25 @@ impl FileStorage {
             });
         }
         
-        let data = fs::read(path)?;
+        // Open the file with read access
+        let file = File::open(&path).map_err(|e| 
+            self.map_io_error(e, namespace, Some(key), 
+                format!("opening version {} file for reading", version).as_str())
+        )?;
+        
+        // Acquire a shared lock for reading
+        file.lock_shared().map_err(|e| 
+            self.map_io_error(e, namespace, Some(key), 
+                format!("locking version {} file for reading", version).as_str())
+        )?;
+        
+        // Read the data
+        let data = fs::read(path).map_err(|e| 
+            self.map_io_error(e, namespace, Some(key), 
+                format!("reading version {} data", version).as_str())
+        )?;
+        
+        // The lock will be automatically released when the file is closed
         
         Ok(data)
     }
@@ -306,13 +436,34 @@ impl FileStorage {
         
         // Ensure parent directories exist
         if let Some(parent) = path.parent() {
-            create_dir_all(parent)?;
+            create_dir_all(parent).map_err(|e| 
+                self.map_io_error(e, &metadata.path, None, "creating namespace directory")
+            )?;
         }
         
+        // Serialize metadata to JSON
         let metadata_str = serde_json::to_string(metadata)
             .map_err(|e| StorageError::SerializationError { details: e.to_string() })?;
         
-        fs::write(path, metadata_str)?;
+        // Open the file with write access, creating it if it doesn't exist
+        let file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&path)
+            .map_err(|e| self.map_io_error(e, &metadata.path, None, "opening namespace metadata file for writing"))?;
+        
+        // Acquire an exclusive lock for writing
+        file.lock_exclusive().map_err(|e| 
+            self.map_io_error(e, &metadata.path, None, "locking namespace metadata file for writing")
+        )?;
+        
+        // Write the metadata
+        fs::write(path, metadata_str).map_err(|e| 
+            self.map_io_error(e, &metadata.path, None, "writing namespace metadata")
+        )?;
+        
+        // The lock will be automatically released when the file is closed
         
         Ok(())
     }
@@ -320,7 +471,7 @@ impl FileStorage {
     /// Records an audit log entry
     fn record_audit_log(&self, auth: &AuthContext, action: &str, namespace: &str, key: Option<&str>, message: &str) -> StorageResult<()> {
         let now = now();
-        let date = chrono::NaiveDateTime::from_timestamp_opt(now as i64, 0)
+        let date = DateTime::<Utc>::from_timestamp(now as i64, 0)
             .ok_or_else(|| StorageError::TransactionError { details: "Invalid timestamp".to_string() })?
             .format("%Y%m%d").to_string();
         
@@ -338,13 +489,32 @@ impl FileStorage {
         let log_str = serde_json::to_string(&log_entry)
             .map_err(|e| StorageError::SerializationError { details: e.to_string() })?;
         
-        // Append to log file
+        // Ensure audit log directory exists
+        let audit_dir = self.root_path.join("audit_logs");
+        if !audit_dir.exists() {
+            create_dir_all(&audit_dir).map_err(|e| 
+                self.map_io_error(e, namespace, key, "creating audit log directory")
+            )?;
+        }
+        
+        // Append to log file with proper locking
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
-            .open(log_path)?;
+            .open(&log_path)
+            .map_err(|e| self.map_io_error(e, namespace, key, "opening audit log file"))?;
         
-        writeln!(file, "{}", log_str)?;
+        // Acquire an exclusive lock for appending
+        file.lock_exclusive().map_err(|e| 
+            self.map_io_error(e, namespace, key, "locking audit log file")
+        )?;
+        
+        // Write the log entry
+        writeln!(file, "{}", log_str).map_err(|e| 
+            self.map_io_error(e, namespace, key, "writing to audit log")
+        )?;
+        
+        // The lock will be automatically released when the file is closed
         
         Ok(())
     }
@@ -397,6 +567,52 @@ impl FileStorage {
                 action: action.to_string(),
                 key: namespace.to_string(),
             })
+        }
+    }
+
+    /// Maps IO errors to specific StorageError variants for better error context
+    fn map_io_error(&self, error: std::io::Error, namespace: &str, key: Option<&str>, operation: &str) -> StorageError {
+        match error.kind() {
+            std::io::ErrorKind::NotFound => {
+                if let Some(k) = key {
+                    StorageError::NotFound {
+                        key: format!("{}:{} (IO error: file not found during {})", namespace, k, operation)
+                    }
+                } else {
+                    StorageError::NotFound {
+                        key: format!("Namespace '{}' not found during {}", namespace, operation)
+                    }
+                }
+            },
+            std::io::ErrorKind::PermissionDenied => {
+                StorageError::PermissionDenied {
+                    user_id: "system".to_string(), // Default when not available from auth context
+                    action: operation.to_string(),
+                    key: if let Some(k) = key {
+                        format!("{}:{}", namespace, k)
+                    } else {
+                        namespace.to_string()
+                    }
+                }
+            },
+            std::io::ErrorKind::AlreadyExists => {
+                StorageError::TransactionError {
+                    details: format!("Resource already exists: {}:{} (during {})", 
+                        namespace, key.unwrap_or(""), operation)
+                }
+            },
+            std::io::ErrorKind::OutOfMemory | std::io::ErrorKind::StorageFull => {
+                StorageError::QuotaExceeded {
+                    account_id: "system".to_string(),
+                    requested: 0, // Unknown at this level
+                    available: 0, // Unknown at this level
+                }
+            },
+            _ => StorageError::IOError {
+                operation: operation.to_string(),
+                details: format!("IO error: {} (namespace: {}, key: {:?})", 
+                    error, namespace, key)
+            }
         }
     }
 }
@@ -596,7 +812,9 @@ impl StorageBackend for FileStorage {
         
         // Delete the key directory and all its contents
         let key_dir = self.key_dir_path(namespace, key);
-        fs::remove_dir_all(key_dir)?;
+        fs::remove_dir_all(key_dir).map_err(|e| 
+            self.map_io_error(e, namespace, Some(key), "deleting key directory")
+        )?;
         
         // Record audit log
         self.record_audit_log(
@@ -903,8 +1121,12 @@ impl StorageBackend for FileStorage {
         
         // Create the namespace directories
         let namespace_dir = self.namespace_path(namespace);
-        create_dir_all(&namespace_dir)?;
-        create_dir_all(namespace_dir.join("keys"))?;
+        create_dir_all(&namespace_dir).map_err(|e| 
+            self.map_io_error(e, namespace, None, "creating namespace directory")
+        )?;
+        create_dir_all(namespace_dir.join("keys")).map_err(|e| 
+            self.map_io_error(e, namespace, None, "creating namespace keys directory")
+        )?;
         
         // Create namespace metadata
         let metadata = NamespaceMetadata {
