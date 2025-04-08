@@ -3,7 +3,7 @@ use std::fs::{self, File, create_dir_all, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::collections::HashMap;
 use serde::{Serialize, Deserialize};
-use chrono::TimeZone;
+use chrono::{DateTime, Utc};
 use crate::storage::auth::AuthContext;
 use crate::storage::traits::StorageBackend;
 use crate::storage::errors::{StorageError, StorageResult};
@@ -319,7 +319,7 @@ impl FileStorage {
     /// Records an audit log entry
     fn record_audit_log(&self, auth: &AuthContext, action: &str, namespace: &str, key: Option<&str>, message: &str) -> StorageResult<()> {
         let now = now();
-        let date = chrono::NaiveDateTime::from_timestamp_opt(now as i64, 0)
+        let date = DateTime::<Utc>::from_timestamp(now as i64, 0)
             .ok_or_else(|| StorageError::TransactionError { details: "Invalid timestamp".to_string() })?
             .format("%Y%m%d").to_string();
         
