@@ -1,5 +1,4 @@
 use libp2p::{
-    swarm::NetworkBehaviour,
     ping, kad, mdns, identify,
 };
 use libp2p_swarm_derive::NetworkBehaviour;
@@ -7,7 +6,7 @@ use std::time::Duration;
 
 /// Combines all the network protocols used by the federation into a single type.
 #[derive(NetworkBehaviour)]
-#[behaviour(out_event = "IcnBehaviourEvent")]
+#[behaviour(to_swarm = "IcnBehaviourEvent")]
 pub struct IcnBehaviour {
     /// Ping protocol for measuring peer latency
     pub ping: ping::Behaviour,
@@ -75,8 +74,14 @@ pub async fn create_behaviour(
     // Set up Kademlia DHT for peer discovery
     let kademlia_store = kad::store::MemoryStore::new(local_key.public().to_peer_id());
     let mut kademlia_config = kad::Config::default();
-    let protocol_name = format!("/icn/kad/{}", protocol_version);
-    kademlia_config.set_protocol_names(vec![protocol_name.into()]);
+    
+    // Create a protocol name with a static lifetime
+    // Use a static string that will live for the lifetime of the program
+    let protocol_str = format!("/icn/kad/{}", protocol_version);
+    // Convert to a static string
+    let protocol_name = libp2p::StreamProtocol::new(&*Box::leak(protocol_str.into_boxed_str()));
+    
+    kademlia_config.set_protocol_names(vec![protocol_name]);
     let kademlia = kad::Behaviour::with_config(
         local_key.public().to_peer_id(),
         kademlia_store,
@@ -103,19 +108,19 @@ pub async fn create_behaviour(
 
 // Handler methods
 impl IcnBehaviour {
-    fn on_ping(&mut self, event: ping::Event) {
+    fn on_ping(&mut self, _event: ping::Event) {
         // Pass the event to the upper layer
     }
     
-    fn on_kademlia(&mut self, event: kad::Event) {
+    fn on_kademlia(&mut self, _event: kad::Event) {
         // Pass the event to the upper layer
     }
     
-    fn on_mdns(&mut self, event: mdns::Event) {
+    fn on_mdns(&mut self, _event: mdns::Event) {
         // Pass the event to the upper layer
     }
     
-    fn on_identify(&mut self, event: identify::Event) {
+    fn on_identify(&mut self, _event: identify::Event) {
         // Pass the event to the upper layer
     }
 } 

@@ -2,8 +2,7 @@ use crate::federation::{
     behaviour::{create_behaviour, IcnBehaviour, IcnBehaviourEvent},
     error::FederationError,
     events::NetworkEvent,
-    messages::{NetworkMessage, NodeAnnouncement, Ping, Pong},
-    PROTOCOL_ID,
+    messages::NodeAnnouncement,
 };
 
 use futures::{
@@ -12,14 +11,10 @@ use futures::{
     SinkExt,
 };
 use libp2p::{
-    core::{upgrade},
+    core::upgrade,
     identity, 
     noise, 
-    swarm::{
-        SwarmEvent, 
-        ConnectionId,
-        dial_opts::DialOpts,
-    }, 
+    swarm::SwarmEvent, 
     tcp, 
     yamux, 
     Multiaddr, 
@@ -36,15 +31,14 @@ use libp2p::identify;
 
 use log::{debug, info, warn, error};
 use std::{
-    collections::{HashSet},
-    io,
+    collections::HashSet,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
-    time::{Duration},
+    time::Duration,
 };
-use tokio::sync::{Mutex};
+use tokio::sync::Mutex;
 
 /// Configuration options for a network node
 #[derive(Debug, Clone)]
@@ -108,25 +102,11 @@ impl NetworkNode {
         let local_key = identity::Keypair::generate_ed25519();
         let local_peer_id = PeerId::from(local_key.public());
         
-        // Create the transport layer (TCP + Noise for encryption + Yamux for multiplexing)
-        let transport = libp2p::tcp::tokio::Transport::new(tcp::Config::default().nodelay(true))
-            .upgrade(upgrade::Version::V1)
-            .authenticate(noise::Keypair::<noise::X25519Spec>::new()
-                .into_authenticated(&local_key))
-            .multiplex(yamux::Config::default())
-            .timeout(Duration::from_secs(20))
-            .boxed();
-        
         // Create the network behavior
         let behaviour = create_behaviour(&local_key, config.protocol_version.clone()).await;
         
-        // Build the swarm with the correct API for libp2p 0.52
-        let swarm = Swarm::new(
-            transport,
-            behaviour,
-            local_peer_id,
-            libp2p::swarm::Config::default()
-        );
+        // Create the transport and swarm
+        let swarm = create_swarm(local_key, behaviour);
         
         // Create a channel for network events
         let (event_sender, event_receiver) = mpsc::channel::<NetworkEvent>(32);
@@ -170,8 +150,7 @@ impl NetworkNode {
         // Connect to bootstrap nodes
         for addr in &self.config.bootstrap_nodes {
             debug!("Dialing bootstrap node: {}", addr);
-            let opts = DialOpts::unknown_peer_id().address(addr.clone());
-            match self.swarm.dial(opts) {
+            match self.swarm.dial(addr.clone()) {
                 Ok(_) => {}
                 Err(e) => {
                     warn!("Failed to dial bootstrap node {}: {}", addr, e);
@@ -231,7 +210,7 @@ impl NetworkNode {
     }
     
     /// Handle events from the libp2p swarm
-    async fn handle_swarm_event(&mut self, event: SwarmEvent<IcnBehaviourEvent, io::Error>) -> Result<(), FederationError> {
+    async fn handle_swarm_event(&mut self, event: SwarmEvent<IcnBehaviourEvent, impl std::error::Error + Send + Sync>) -> Result<(), FederationError> {
         match event {
             SwarmEvent::NewListenAddr { address, .. } => {
                 info!("Node listening on {}", address);
@@ -241,10 +220,9 @@ impl NetworkNode {
                 info!("Connected to {}", peer_id);
                 
                 // Add peer to Kademlia routing table if using discovered address
-                if let Some(addr) = endpoint.get_remote_address() {
-                    debug!("Adding {} with address {} to Kademlia", peer_id, addr);
-                    self.swarm.behaviour_mut().kademlia.add_address(&peer_id, addr.clone());
-                }
+                let remote_addr = endpoint.get_remote_address();
+                debug!("Adding {} with address {} to Kademlia", peer_id, remote_addr);
+                self.swarm.behaviour_mut().kademlia.add_address(&peer_id, remote_addr.clone());
                 
                 // Add peer to known peers
                 let mut peers = self.known_peers.lock().await;
@@ -273,12 +251,16 @@ impl NetworkNode {
                 }
             }
             
-            SwarmEvent::IncomingConnectionError { local_addr, send_back_addr, error, connection_id } => {
+            SwarmEvent::IncomingConnectionError { local_addr, send_back_addr, error, .. } => {
                 warn!("Error with incoming connection from {} to {}: {}", send_back_addr, local_addr, error);
             }
             
-            SwarmEvent::Dialing { peer_id, connection_id: _ } => {
-                debug!("Dialing peer: {}", peer_id);
+            SwarmEvent::Dialing { peer_id, .. } => {
+                if let Some(peer) = peer_id {
+                    debug!("Dialing peer: {:?}", peer);
+                } else {
+                    debug!("Dialing unknown peer");
+                }
             }
             
             SwarmEvent::ListenerClosed { addresses, reason, .. } => {
@@ -329,7 +311,7 @@ impl NetworkNode {
             ping::Event {
                 peer,
                 result: Ok(rtt),
-                connection: _,
+                ..
             } => {
                 info!("Ping success from {}: RTT = {:?}", peer, rtt);
             }
@@ -337,7 +319,7 @@ impl NetworkNode {
             ping::Event {
                 peer,
                 result: Err(error),
-                connection: _,
+                ..
             } => {
                 warn!("Ping failure with {}: {}", peer, error);
             }
@@ -437,8 +419,7 @@ impl NetworkNode {
                     let is_known = self.known_peers.lock().await.contains(&peer);
                     if !is_known {
                         debug!("Dialing newly discovered peer: {}", peer);
-                        let opts = DialOpts::peer_id(peer).address(addr);
-                        if let Err(e) = self.swarm.dial(opts) {
+                        if let Err(e) = self.swarm.dial(addr.clone()) {
                             warn!("Failed to dial discovered peer {}: {}", peer, e);
                         }
                     }
@@ -483,8 +464,44 @@ impl NetworkNode {
             identify::Event::Error { peer_id, error } => {
                 warn!("Identify error with {}: {}", peer_id, error);
             }
+            
+            identify::Event::Pushed { .. } => {
+                debug!("Identify push event received");
+            }
         }
         
         Ok(())
     }
+}
+
+/// Create a new Swarm with the provided identity
+fn create_swarm(
+    local_key: identity::Keypair,
+    behaviour: IcnBehaviour,
+) -> Swarm<IcnBehaviour> {
+    // Create a TCP transport
+    let transport = {
+        let tcp = tcp::tokio::Transport::new(tcp::Config::default().nodelay(true));
+        let transport_upgrade = upgrade::Version::V1;
+
+        // Create the noise keys
+        let noise_config = noise::Config::new(&local_key).expect("Failed to create noise config");
+
+        tcp.upgrade(transport_upgrade)
+            .authenticate(noise_config)
+            .multiplex(yamux::Config::default())
+            .timeout(Duration::from_secs(20))
+            .boxed()
+    };
+
+    // Create a Swarm to manage peers and events
+    let config = libp2p::swarm::Config::with_tokio_executor()
+        .with_idle_connection_timeout(Duration::from_secs(60));
+    
+    Swarm::new(
+        transport,
+        behaviour,
+        local_key.public().to_peer_id(),
+        config,
+    )
 } 

@@ -54,7 +54,8 @@ impl From<String> for AppError {
     }
 }
 
-fn main() {
+#[tokio::main]
+async fn main() -> Result<(), AppError> {
     // Initialize logging
     env_logger::init();
 
@@ -334,7 +335,7 @@ fn main() {
                     bootstrap_nodes,
                     node_name,
                     capabilities,
-                )
+                ).await
             } else {
                 // Standard run
                 run_program(
@@ -383,6 +384,8 @@ fn main() {
         eprintln!("Error: {}", e);
         process::exit(1);
     }
+
+    Ok(())
 }
 
 /// Run the virtual machine with federation enabled

@@ -30,4 +30,29 @@ pub enum FederationError {
     /// Internal error in the libp2p implementation
     #[error("Libp2p error: {0}")]
     Libp2pError(String),
+}
+
+impl From<libp2p::multiaddr::Error> for FederationError {
+    fn from(err: libp2p::multiaddr::Error) -> Self {
+        FederationError::NetworkError(format!("Multiaddr error: {}", err))
+    }
+}
+
+// Add more conversions for libp2p errors
+impl From<std::io::Error> for FederationError {
+    fn from(err: std::io::Error) -> Self {
+        FederationError::NetworkError(format!("I/O error: {}", err))
+    }
+}
+
+impl From<libp2p::TransportError<std::io::Error>> for FederationError {
+    fn from(err: libp2p::TransportError<std::io::Error>) -> Self {
+        FederationError::NetworkError(format!("Transport error: {}", err))
+    }
+}
+
+impl From<libp2p::swarm::DialError> for FederationError {
+    fn from(err: libp2p::swarm::DialError) -> Self {
+        FederationError::ConnectionError(format!("Dial error: {}", err))
+    }
 } 

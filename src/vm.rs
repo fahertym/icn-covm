@@ -1681,7 +1681,25 @@ mod tests {
     #[test]
     fn test_storage_operations_mock() {
         let mut vm = VM::new();
-        vm.mock_storage_operations(); // Use mock storage for tests
+        
+        // Create and set an auth context with proper permissions
+        let mut auth = AuthContext::new("test_user");
+        auth.add_role("global", "admin"); // Add admin role for global namespace
+        auth.add_role("default", "writer"); // Add writer role for the default namespace
+        auth.add_role("default", "reader"); // Add reader role for the default namespace
+        vm.set_auth_context(auth);
+        
+        // Create a storage backend directly instead of using mock_storage_operations()
+        let mut storage = InMemoryStorage::new();
+        
+        // Initialize storage with copied auth context
+        let auth_context = vm.get_auth_context().unwrap().clone();
+        storage.create_account(Some(&auth_context), "test_user", 1024 * 1024).unwrap();
+        storage.create_namespace(Some(&auth_context), "default", 1024 * 1024, None).unwrap();
+        
+        // Set the storage backend
+        vm.set_storage_backend(storage);
+        vm.set_namespace("default");
         
         // Test storing and loading values
         let ops = vec![
