@@ -1,4 +1,4 @@
-use std::collections::{HashMap, BTreeMap};
+use std::collections::HashMap;
 use serde::{Serialize, de::DeserializeOwned};
 
 use crate::storage::auth::AuthContext;
@@ -6,7 +6,7 @@ use crate::storage::traits::StorageBackend;
 use crate::storage::errors::{StorageError, StorageResult};
 use crate::storage::versioning::{VersionInfo, VersionDiff};
 use crate::storage::events::StorageEvent;
-use crate::storage::utils::{Timestamp, now};
+use crate::storage::utils::now;
 use crate::storage::namespaces::NamespaceMetadata;
 use crate::storage::resource::ResourceAccount;
 
