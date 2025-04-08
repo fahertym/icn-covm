@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::collections::HashMap;
 use serde::{Serialize, Deserialize};
 use chrono::{DateTime, Utc};
+use fs2::FileExt;
 use crate::storage::auth::AuthContext;
 use crate::storage::traits::StorageBackend;
 use crate::storage::errors::{StorageError, StorageResult};
@@ -246,9 +247,20 @@ impl FileStorage {
             });
         }
         
+        // Open the file with read-only access
+        let file = File::open(&path)?;
+        
+        // Acquire a shared lock for reading
+        file.lock_shared()?;
+        
+        // Read the file content
         let metadata_str = fs::read_to_string(path)?;
+        
+        // Parse the JSON
         let metadata: KeyMetadata = serde_json::from_str(&metadata_str)
             .map_err(|e| StorageError::SerializationError { details: e.to_string() })?;
+        
+        // The lock will be automatically released when the file is closed
         
         Ok(metadata)
     }
@@ -262,10 +274,24 @@ impl FileStorage {
             create_dir_all(parent)?;
         }
         
+        // Serialize metadata to JSON
         let metadata_str = serde_json::to_string(metadata)
             .map_err(|e| StorageError::SerializationError { details: e.to_string() })?;
         
+        // Open the file with write access, creating it if it doesn't exist
+        let file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&path)?;
+        
+        // Acquire an exclusive lock for writing
+        file.lock_exclusive()?;
+        
+        // Write the metadata
         fs::write(path, metadata_str)?;
+        
+        // The lock will be automatically released when the file is closed
         
         Ok(())
     }
@@ -279,7 +305,20 @@ impl FileStorage {
             create_dir_all(parent)?;
         }
         
+        // Open the file with write access, creating it if it doesn't exist
+        let file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&path)?;
+        
+        // Acquire an exclusive lock for writing
+        file.lock_exclusive()?;
+        
+        // Write the data
         fs::write(path, data)?;
+        
+        // The lock will be automatically released when the file is closed
         
         Ok(())
     }
@@ -294,7 +333,16 @@ impl FileStorage {
             });
         }
         
+        // Open the file with read access
+        let file = File::open(&path)?;
+        
+        // Acquire a shared lock for reading
+        file.lock_shared()?;
+        
+        // Read the data
         let data = fs::read(path)?;
+        
+        // The lock will be automatically released when the file is closed
         
         Ok(data)
     }
@@ -308,10 +356,24 @@ impl FileStorage {
             create_dir_all(parent)?;
         }
         
+        // Serialize metadata to JSON
         let metadata_str = serde_json::to_string(metadata)
             .map_err(|e| StorageError::SerializationError { details: e.to_string() })?;
         
+        // Open the file with write access, creating it if it doesn't exist
+        let file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&path)?;
+        
+        // Acquire an exclusive lock for writing
+        file.lock_exclusive()?;
+        
+        // Write the metadata
         fs::write(path, metadata_str)?;
+        
+        // The lock will be automatically released when the file is closed
         
         Ok(())
     }
@@ -337,13 +399,19 @@ impl FileStorage {
         let log_str = serde_json::to_string(&log_entry)
             .map_err(|e| StorageError::SerializationError { details: e.to_string() })?;
         
-        // Append to log file
+        // Append to log file with proper locking
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
             .open(log_path)?;
         
+        // Acquire an exclusive lock for appending
+        file.lock_exclusive()?;
+        
+        // Write the log entry
         writeln!(file, "{}", log_str)?;
+        
+        // The lock will be automatically released when the file is closed
         
         Ok(())
     }
