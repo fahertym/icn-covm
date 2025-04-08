@@ -729,7 +729,7 @@ impl VM {
 
     fn execute_inner(&mut self, ops: &[Op]) -> Result<(), VMError> {
         let mut pc = 0;
-        while pc < ops.len() {
+        'operations: while pc < ops.len() {
             let op = &ops[pc];
 
             match op {
@@ -771,7 +771,10 @@ impl VM {
                 Op::Gt => { let (a, b) = self.pop_two("Gt")?; self.stack.push(if a > b { 0.0 } else { 1.0 }); },
                 Op::Not => { let value = self.pop_one("Not")?; self.stack.push(if value == 0.0 { 1.0 } else { 0.0 }); },
                 Op::And => { let (a, b) = self.pop_two("And")?; self.stack.push(if a != 0.0 && b != 0.0 { 1.0 } else { 0.0 }); },
-                Op::Or => { let (a, b) = self.pop_two("Or")?; self.stack.push(if a != 0.0 || b != 0.0 { 1.0 } else { 0.0 }); },
+                Op::Or => { 
+                    let (a, b) = self.pop_two("Or")?; 
+                    self.stack.push(if a != 0.0 || b != 0.0 { 1.0 } else { 0.0 }); 
+                },
                 Op::Store(key) => {
                     let value = self.pop_one("Store")?;
                     self.store_value(key, value);
@@ -1101,7 +1104,7 @@ impl VM {
                         self.emit_event("identity_error", &format!("{}", err));
                     } else if auth.has_delegation(&delegator_id, &delegate_id) {
                         self.stack.push(1.0); // true
-                        self.emit_event("delegation_check", &format!("Delegation from {} to {} is valid", delegator_id, delegate_id));
+                        self.emit_event("delegation_check", &format!("Valid delegation from {} to {}", delegator_id, delegate_id));
                     } else {
                         let err = VMError::DelegationCheckFailed {
                             delegator_id: delegator_id.clone(),
@@ -1452,7 +1455,7 @@ impl VM {
 
     // Modified Call operation with memory scoping
     fn execute_call(&mut self, name: &str) -> Result<(), VMError> {
-        let (params, body) = self.functions.get(name).ok_or_else(|| VMError::FunctionNotFound(name.clone()))?.clone();
+        let (params, body) = self.functions.get(name).ok_or_else(|| VMError::FunctionNotFound(name.to_string()))?.clone();
         
         // Create a new call frame with function-local memory
         let mut call_frame = CallFrame {
