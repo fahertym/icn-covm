@@ -1138,10 +1138,10 @@ impl VM {
     }
     
     /// Mock storage operations for tests - this allows tests to run without a real backend
-    #[cfg(test)]
     pub fn mock_storage_operations(&mut self) {
-        // This is a no-op, just a marker that tests should not attempt real storage operations
-        self.storage_backend = None;
+        // Initialize a mock in-memory storage backend
+        let backend = InMemoryStorage::new();
+        self.storage_backend = Some(Box::new(backend));
     }
     
     /// Set the storage namespace for this VM
