@@ -1,14 +1,86 @@
+# ICN-COVM
+
+The Intercooperative Network Cooperative Virtual Machine (ICN-COVM) is a toolkit and runtime for democratic governance and interoperation between cooperative organizations.
+
+## Current Status: v0.7.0 "Federation Foundation"
+
+The ICN-COVM project is now focused on federation capabilities, allowing multiple cooperative nodes to discover and communicate with each other securely across the network.
+
+Key features in the current release:
+- Foundation for federated governance using libp2p networking
+- Persistent storage with enhanced transaction support and error handling
+- Identity-based access control
+- Democratic voting mechanisms (RankedVote, LiquidDelegation)
+
+## Quick Start
+
+To get started with ICN-COVM:
+
+```bash
+# Clone the repository
+git clone https://github.com/cooperative-computing/icn-covm.git
+cd icn-covm
+
+# Build the project
+cargo build
+
+# Run the tests
+cargo test
+
+# Try a demo program
+cargo run -- run demo/ranked_vote/demo.icn
+```
+
+## Federation Support
+
+ICN-COVM now supports federation between multiple nodes:
+
+```bash
+# Run a node in federation mode
+cargo run -- federation --listen /ip4/0.0.0.0/tcp/4001
+
+# Connect to another node
+cargo run -- federation --connect /ip4/192.168.1.100/tcp/4001/p2p/QmNodePeerId
+```
+
+For more details on federation, see the [Federation Guide](docs/federation_guide.md).
+
+## Project Documentation
+
+* [Architecture Overview](docs/architecture.md)
+* [Storage Integration Guide](docs/storage_integration_guide.md)
+* [Federation Guide](docs/federation_guide.md)
+* [Roadmap](docs/roadmap.md)
+* [Contributing](CONTRIBUTING.md)
+
+## Features
+
+* **Democratic Governance**: Built-in primitives for various forms of voting (ranked-choice, delegative, etc.)
+* **Identity & Authorization**: Cryptographic identity verification and role-based access control
+* **Persistent Storage**: Maintain state between executions with transaction support
+* **Federation**: Connect multiple ICN-COVM nodes into a cooperative network
+* **Programming Language**: A specialized DSL designed for governance operations
+
+## License
+
+ICN-COVM is licensed under the [MIT License](LICENSE).
+
+## Contributing
+
+We welcome contributions! Please see our [contributing guidelines](CONTRIBUTING.md) for details.
+
 # icn-covm
 
 A lightweight cooperative virtual machine for executing a domain-specific language (DSL) with support for stack-based operations, memory isolation, functions, loops, conditionals, and governance-oriented extensions.
 
-## New Features
+## Features
 
 - **Bytecode Compiler & Interpreter**: Faster execution through bytecode compilation
 - **Typed Value System**: Optional support for multiple data types (numbers, booleans, strings)
 - **Identity-Aware Execution**: Support for authenticated operations and permission checks
-- **Persistent Storage**: Storage backends for maintaining state between executions
+- **Persistent Storage**: Multiple backends (in-memory, file) with versioning, transactions, and improved error handling
 - **Economic Operations**: Token-based resource creation, transfer, and management
+- **Federation Layer**: Peer-to-peer networking using libp2p for node discovery and communication
 - **Comprehensive Documentation**: Improved inline documentation and architecture docs
 - **Performance Benchmarking**: Compare AST interpretation vs bytecode execution
 
@@ -33,20 +105,20 @@ You can also run specific demo files manually:
 
 ```bash
 # Run with AST interpreter (default)
-cargo run -- --program demo/functions/factorial.dsl --stdlib
+cargo run -- run --program demo/functions/factorial.dsl --stdlib
 
 # Run with bytecode compiler and interpreter
-cargo run -- --program demo/functions/factorial.dsl --stdlib --bytecode
+cargo run -- run --program demo/functions/factorial.dsl --stdlib --bytecode
 
 # Run benchmarks comparing both execution modes
-cargo run -- --program demo/benchmark/fibonacci.dsl --benchmark
+cargo run -- run --program demo/benchmark/fibonacci.dsl --benchmark
 ```
 
 ---
 
 ## Execution Modes
 
-nano-cvm supports two execution modes:
+icn-covm supports two execution modes:
 
 1. **AST Interpreter** (default): Directly interprets the parsed operation tree
 2. **Bytecode Execution**: Compiles operations to bytecode for faster execution
@@ -54,20 +126,20 @@ nano-cvm supports two execution modes:
 To use the bytecode mode, add the `--bytecode` flag:
 
 ```bash
-cargo run -- --program your_program.dsl --bytecode
+cargo run -- run --program your_program.dsl --bytecode
 ```
 
 To compare performance between modes, use the `--benchmark` flag:
 
 ```bash
-cargo run -- --program demo/benchmark/loop.dsl --benchmark
+cargo run -- run --program demo/benchmark/loop.dsl --benchmark
 ```
 
 ---
 
 ## Typed Value System
 
-The typed value system extends nano-cvm with support for multiple data types:
+The typed value system extends icn-covm with support for multiple data types:
 
 - Numbers (f64)
 - Booleans (true/false)
@@ -81,7 +153,7 @@ This feature is disabled by default for backward compatibility. To enable it:
 cargo build --features typed-values
 
 # Run with typed values support
-cargo run --features typed-values -- --program demo/typed/string_operations.dsl
+cargo run --features typed-values -- run --program demo/typed/string_operations.dsl
 ```
 
 ---
@@ -99,10 +171,10 @@ To use the identity system:
 
 ```bash
 # Run a program with an identity context
-cargo run -- --program demo/identity/basic_auth.dsl --identity member1
+cargo run -- run --program demo/identity/basic_auth.dsl --identity member1
 
 # Run with identity and roles
-cargo run -- --program demo/identity/role_check.dsl --identity member1 --roles admin,member
+cargo run -- run --program demo/identity/role_check.dsl --identity member1 --roles admin,member
 ```
 
 ---
@@ -114,7 +186,8 @@ The storage system enables persistent state across executions:
 - Key-value storage with namespaces
 - File-based and in-memory storage backends
 - Transaction support for atomic operations
-- Identity-aware access control
+- Identity-aware access control with `Option<&AuthContext>` API
+- File locking and robust error handling
 
 Storage backends can be specified at runtime:
 
@@ -126,7 +199,40 @@ cargo run -- run --program demo/storage/persistent_counter.dsl --storage-backend
 cargo run -- run --program demo/storage/persistent_counter.dsl --storage-backend file --storage-path ./filestorage
 ```
 
+Storage inspection commands:
+
+```bash
+# List keys in a namespace
+cargo run -- storage list-keys demo --storage-backend file --storage-path ./storage
+
+# Get a value from storage
+cargo run -- storage get-value demo counter --storage-backend file --storage-path ./storage
+```
+
 To learn more about the storage system, see the [Storage System Documentation](docs/storage.md).
+
+---
+
+## Federation Layer
+
+The federation layer enables communication between ICN-COVM nodes:
+
+- Peer-to-peer networking using libp2p
+- Node discovery via Kademlia DHT and mDNS
+- Secure channels with Noise protocol
+- Basic message exchange
+
+To run a node with federation enabled:
+
+```bash
+# Run a node with federation enabled
+cargo run -- run --enable-federation --federation-port 8000 --node-name "node1"
+
+# Run a node that connects to a bootstrap node
+cargo run -- run --enable-federation --federation-port 8001 --bootstrap-nodes "/ip4/192.168.1.1/tcp/8000/p2p/12D3KooWX...Z9PcBJP5" --node-name "node2"
+```
+
+For multi-node testing, see the [Federation Testing Environment](README_FEDERATION.md).
 
 ---
 
@@ -140,6 +246,7 @@ Comprehensive documentation is available:
 - **Bytecode System**: `docs/bytecode.md`
 - **Identity System**: `docs/identity.md`
 - **Storage System**: `docs/storage.md`
+- **Federation Layer**: `docs/federation.md`
 - **Typed Value System**: `docs/typed-values.md`
 
 ---
@@ -162,6 +269,7 @@ Comprehensive documentation is available:
 │   ├── architecture.md      # System architecture overview
 │   ├── bytecode.md          # Bytecode system documentation
 │   ├── economic_operations.md # Economic operations documentation
+│   ├── federation.md        # Federation layer documentation
 │   ├── governance.md        # Governance primitives documentation
 │   ├── identity.md          # Identity system documentation
 │   ├── storage.md           # Storage system documentation
@@ -171,6 +279,7 @@ Comprehensive documentation is available:
 │   ├── bytecode.rs          # Bytecode compiler and interpreter
 │   ├── compiler/            # Modular parser components
 │   ├── events.rs            # Event system for logging
+│   ├── federation/          # Networking and node communication
 │   ├── identity/            # Identity and authorization system
 │   ├── lib.rs               # Library exports
 │   ├── main.rs              # Command-line interface
@@ -186,17 +295,17 @@ Comprehensive documentation is available:
 
 ## Interactive REPL
 
-nano-cvm includes an interactive REPL mode for experimentation:
+icn-covm includes an interactive REPL mode for experimentation:
 
 ```bash
 # Start REPL with AST interpreter
-cargo run -- --interactive
+cargo run -- run --interactive
 
 # Start REPL with bytecode execution
-cargo run -- --interactive --bytecode
+cargo run -- run --interactive --bytecode
 
 # Start REPL with identity context
-cargo run -- --interactive --identity member1
+cargo run -- run --interactive --identity member1
 ```
 
 REPL commands:
@@ -205,8 +314,6 @@ REPL commands:
 - `memory` - Show memory contents
 - `mode ast` - Switch to AST interpreter mode
 - `mode bytecode` - Switch to bytecode mode
-- `identity` - Show current identity context
-- `storage` - Show storage backend status
 - `exit` or `quit` - Exit the REPL
 
 ---
