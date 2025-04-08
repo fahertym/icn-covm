@@ -16,6 +16,12 @@ use libp2p::{
     identity, noise, swarm::{SwarmEvent, ConnectionId, ConnectionError}, tcp, yamux, Multiaddr, PeerId, Swarm, 
     Transport,
 };
+// Import libp2p protocols
+use libp2p::ping;
+use libp2p::kad;
+use libp2p::mdns;
+use libp2p::identify;
+
 use log::{debug, info, warn, error};
 use std::{
     collections::{HashMap, HashSet},
@@ -298,22 +304,20 @@ impl NetworkNode {
     }
     
     /// Handle events from the ping protocol
-    async fn handle_ping_event(&mut self, event: libp2p::ping::Event) -> Result<(), FederationError> {
+    async fn handle_ping_event(&mut self, event: ping::Event) -> Result<(), FederationError> {
         match event {
-            libp2p::ping::Event {
+            ping::Event {
                 peer,
                 result: Ok(ping::Success { rtt }),
-                ..
             } => {
-                debug!("Ping success from {}, rtt: {:?}", peer, rtt);
+                info!("Ping success from {}: RTT = {:?}", peer, rtt);
             }
             
-            libp2p::ping::Event {
+            ping::Event {
                 peer,
-                result: Err(err),
-                ..
+                result: Err(error),
             } => {
-                warn!("Ping failure for {}: {}", peer, err);
+                warn!("Ping failure with {}: {}", peer, error);
             }
         }
         
@@ -433,40 +437,28 @@ impl NetworkNode {
         match event {
             identify::Event::Received {
                 peer_id,
-                info:
-                    identify::Info {
-                        protocol_version,
-                        agent_version,
-                        listen_addrs,
-                        protocols,
-                        observed_addr,
-                        ..
-                    },
+                info,
             } => {
                 info!(
-                    "Identify info from {}: agent={}, protocol={}, observed_addr={}",
-                    peer_id, agent_version, protocol_version, observed_addr
+                    "Received Identify info from {}: agent={}, protocol={}",
+                    peer_id, info.agent_version, info.protocol_version
                 );
                 
-                debug!("Protocols supported by {}: {:?}", peer_id, protocols);
+                debug!("Protocols supported by {}: {:?}", peer_id, info.protocols);
                 
                 // Add all listen addresses to Kademlia
-                for addr in listen_addrs {
+                for addr in info.listen_addrs {
                     debug!("Adding address {} for peer {}", addr, peer_id);
-                    self.swarm.behaviour_mut().kademlia.add_address(&peer_id, addr);
+                    self.swarm.behaviour_mut().kademlia.add_address(&peer_id, addr.clone());
                 }
             }
             
             identify::Event::Sent { peer_id } => {
-                debug!("Sent identify info to {}", peer_id);
+                debug!("Sent Identify info to {}", peer_id);
             }
             
             identify::Event::Error { peer_id, error } => {
                 warn!("Identify error with {}: {}", peer_id, error);
-            }
-            
-            _ => {
-                debug!("Unhandled identify event: {:?}", event);
             }
         }
         
