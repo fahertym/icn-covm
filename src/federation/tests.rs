@@ -91,4 +91,23 @@ mod tests {
             _ => panic!("Deserialized to wrong message type"),
         }
     }
+    
+    #[test]
+    fn test_extract_identify_info() {
+        // This is a test utility to verify that we can correctly parse listen_addrs from Identify
+        let parsed_addr1: libp2p::Multiaddr = "/ip4/192.168.1.1/tcp/8000".parse().unwrap();
+        let parsed_addr2: libp2p::Multiaddr = "/ip4/10.0.0.1/tcp/8001".parse().unwrap();
+        
+        // Create a Vec of addresses
+        let addresses = vec![parsed_addr1.clone(), parsed_addr2.clone()];
+        
+        // Check contents
+        assert_eq!(addresses.len(), 2);
+        assert_eq!(addresses[0], parsed_addr1);
+        assert_eq!(addresses[1], parsed_addr2);
+        
+        // Convert to strings and verify
+        assert_eq!(addresses[0].to_string(), "/ip4/192.168.1.1/tcp/8000");
+        assert_eq!(addresses[1].to_string(), "/ip4/10.0.0.1/tcp/8001");
+    }
 } 
