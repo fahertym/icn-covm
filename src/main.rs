@@ -159,6 +159,57 @@ fn main() {
                         )
                 )
         )
+        .subcommand(
+            Command::new("storage")
+                .about("Storage inspection commands")
+                .arg(
+                    Arg::new("storage-backend")
+                        .long("storage-backend")
+                        .value_name("TYPE")
+                        .help("Storage backend type (memory or file)")
+                        .default_value("file"),
+                )
+                .arg(
+                    Arg::new("storage-path")
+                        .long("storage-path")
+                        .value_name("PATH")
+                        .help("Path for file storage backend")
+                        .default_value("./storage"),
+                )
+                .subcommand(
+                    Command::new("list-keys")
+                        .about("List all keys in a namespace")
+                        .arg(
+                            Arg::new("namespace")
+                                .help("Namespace to list keys from")
+                                .required(true)
+                                .index(1),
+                        )
+                        .arg(
+                            Arg::new("prefix")
+                                .short('p')
+                                .long("prefix")
+                                .help("Only list keys with this prefix")
+                                .value_name("PREFIX"),
+                        )
+                )
+                .subcommand(
+                    Command::new("get-value")
+                        .about("Get a value from storage")
+                        .arg(
+                            Arg::new("namespace")
+                                .help("Namespace containing the key")
+                                .required(true)
+                                .index(1),
+                        )
+                        .arg(
+                            Arg::new("key")
+                                .help("Key to retrieve")
+                                .required(true)
+                                .index(2),
+                        )
+                )
+        )
         .get_matches();
 
     match matches.subcommand() {
@@ -227,6 +278,35 @@ fn main() {
                 },
                 _ => {
                     eprintln!("Unknown identity subcommand");
+                    process::exit(1);
+                }
+            }
+        },
+        Some(("storage", storage_matches)) => {
+            let storage_backend = storage_matches.get_one::<String>("storage-backend").unwrap();
+            let storage_path = storage_matches.get_one::<String>("storage-path").unwrap();
+            
+            match storage_matches.subcommand() {
+                Some(("list-keys", list_keys_matches)) => {
+                    let namespace = list_keys_matches.get_one::<String>("namespace").unwrap();
+                    let prefix = list_keys_matches.get_one::<String>("prefix");
+                    
+                    if let Err(err) = list_keys_command(namespace, prefix, storage_backend, storage_path) {
+                        eprintln!("Error listing keys: {}", err);
+                        process::exit(1);
+                    }
+                },
+                Some(("get-value", get_value_matches)) => {
+                    let namespace = get_value_matches.get_one::<String>("namespace").unwrap();
+                    let key = get_value_matches.get_one::<String>("key").unwrap();
+                    
+                    if let Err(err) = get_value_command(namespace, key, storage_backend, storage_path) {
+                        eprintln!("Error getting value: {}", err);
+                        process::exit(1);
+                    }
+                },
+                _ => {
+                    eprintln!("Unknown storage subcommand. Use one of: list-keys, get-value");
                     process::exit(1);
                 }
             }
@@ -889,78 +969,173 @@ fn register_identity(
     id_type: &str,
     output_file: Option<&String>,
 ) -> Result<(), AppError> {
-    // Read the identity file
-    let file_content = fs::read_to_string(id_file)?;
-    let json_data: serde_json::Value = serde_json::from_str(&file_content)?;
+    // Load the identity data from file
+    let id_data = fs::read_to_string(id_file)?;
     
-    // Extract identity information
-    let id = json_data["id"].as_str().ok_or_else(|| AppError::Other("Missing 'id' field".to_string()))?;
+    // Parse as JSON
+    let identity_data: serde_json::Value = serde_json::from_str(&id_data)?;
     
-    // Create a new identity
+    // Extract required fields
+    let id = identity_data.get("id").and_then(|v| v.as_str()).ok_or("Missing 'id' field")?;
+    
+    // Create the identity
     let mut identity = Identity::new(id, id_type);
     
-    // Add metadata from the JSON file
-    if let Some(metadata) = json_data["metadata"].as_object() {
+    // Add metadata
+    if let Some(metadata) = identity_data.get("metadata").and_then(|v| v.as_object()) {
         for (key, value) in metadata {
-            if let Some(value_str) = value.as_str() {
-                identity.add_metadata(key, value_str);
+            if let Some(val_str) = value.as_str() {
+                identity.add_metadata(key, val_str);
             }
         }
     }
     
-    // Add public key if provided
-    if let Some(public_key_str) = json_data["public_key"].as_str() {
-        if let Some(crypto_scheme) = json_data["crypto_scheme"].as_str() {
-            // In a real application, we would decode the public key here
-            // For now, just use the string as a placeholder
-            let public_key = public_key_str.as_bytes().to_vec();
-            identity.public_key = Some(public_key);
-            identity.crypto_scheme = Some(crypto_scheme.to_string());
-        }
-    }
+    // Create a basic auth context to simulate registration
+    let mut auth = AuthContext::new("system");
+    auth.add_role("global", "admin");
     
-    // If this is a member, create a profile
-    if id_type == "member" {
-        let timestamp = now();
-        let mut profile = MemberProfile::new(identity.clone(), timestamp);
-        
-        // Add roles if provided
-        if let Some(roles) = json_data["roles"].as_array() {
-            for role in roles {
-                if let Some(role_str) = role.as_str() {
-                    profile.add_role(role_str);
-                }
-            }
-        }
-        
-        // Add attributes if provided
-        if let Some(attributes) = json_data["attributes"].as_object() {
-            for (key, value) in attributes {
-                if let Some(value_str) = value.as_str() {
-                    profile.add_attribute(key, value_str);
-                }
-            }
-        }
-        
-        println!("Member profile created for '{}'", id);
-        
-        // In a real application, we would store this in persistent storage
-        // For now, just print the information
-        println!("  Roles: {:?}", profile.roles);
-        if let Some(reputation) = profile.reputation {
-            println!("  Reputation: {}", reputation);
-        }
-    }
+    // Register the identity
+    auth.register_identity(identity.clone());
     
-    // Save to output file if requested
-    if let Some(output_path) = output_file {
-        let identity_json = serde_json::to_string_pretty(&identity)?;
-        fs::write(output_path, identity_json)?;
-        println!("Identity saved to '{}'", output_path);
-    }
+    // Output the identity
+    println!("Identity registered successfully: {} (type: {})", id, id_type);
     
-    println!("Identity '{}' of type '{}' registered successfully", id, id_type);
-    println!("Namespace: {}", identity.get_namespace());
+    // Save to output file if specified
+    if let Some(out_file) = output_file {
+        let json = serde_json::to_string_pretty(&identity)?;
+        fs::write(out_file, json)?;
+        println!("Identity saved to: {}", out_file);
+    }
     
     Ok(())
+}
+
+/// Command to list keys in a namespace
+fn list_keys_command(
+    namespace: &str,
+    prefix: Option<&String>,
+    storage_backend: &str,
+    storage_path: &str,
+) -> Result<(), AppError> {
+    // Create an admin auth context for inspection purposes
+    let auth_context = create_admin_auth_context();
+
+    // Initialize the appropriate storage backend
+    let storage: Box<dyn StorageBackend> = if storage_backend == "file" {
+        // Create the storage directory if it doesn't exist
+        let storage_dir = Path::new(storage_path);
+        if !storage_dir.exists() {
+            println!("Creating storage directory: {}", storage_path);
+            fs::create_dir_all(storage_dir)
+                .map_err(|e| AppError::Other(format!("Failed to create storage directory: {}", e)))?;
+        }
+        
+        // Initialize FileStorage backend
+        let storage = FileStorage::new(storage_path)
+            .map_err(|e| AppError::Other(format!("Failed to initialize file storage: {}", e)))?;
+        Box::new(storage)
+    } else {
+        // Initialize InMemoryStorage backend
+        Box::new(InMemoryStorage::new())
+    };
+    
+    // Convert the optional prefix String to an optional &str
+    let prefix_str = prefix.map(|s| s.as_str());
+    
+    // List keys from the storage backend
+    match storage.list_keys(Some(&auth_context), namespace, prefix_str) {
+        Ok(keys) => {
+            if keys.is_empty() {
+                println!("No keys found in namespace '{}'{}", 
+                    namespace, 
+                    prefix.map_or(String::new(), |p| format!(" with prefix '{}'", p))
+                );
+            } else {
+                println!("Keys in namespace '{}'{}", 
+                    namespace, 
+                    prefix.map_or(String::new(), |p| format!(" with prefix '{}'", p))
+                );
+                for key in keys {
+                    println!("  - {}", key);
+                }
+                println!("Total: {} keys", keys.len());
+            }
+            Ok(())
+        },
+        Err(e) => Err(AppError::Other(format!("Failed to list keys: {}", e))),
+    }
+}
+
+/// Command to get a value from storage
+fn get_value_command(
+    namespace: &str,
+    key: &str,
+    storage_backend: &str,
+    storage_path: &str,
+) -> Result<(), AppError> {
+    // Create an admin auth context for inspection purposes
+    let auth_context = create_admin_auth_context();
+
+    // Initialize the appropriate storage backend
+    let storage: Box<dyn StorageBackend> = if storage_backend == "file" {
+        // Create the storage directory if it doesn't exist
+        let storage_dir = Path::new(storage_path);
+        if !storage_dir.exists() {
+            println!("Creating storage directory: {}", storage_path);
+            fs::create_dir_all(storage_dir)
+                .map_err(|e| AppError::Other(format!("Failed to create storage directory: {}", e)))?;
+        }
+        
+        // Initialize FileStorage backend
+        let storage = FileStorage::new(storage_path)
+            .map_err(|e| AppError::Other(format!("Failed to initialize file storage: {}", e)))?;
+        Box::new(storage)
+    } else {
+        // Initialize InMemoryStorage backend
+        Box::new(InMemoryStorage::new())
+    };
+    
+    // Get the value from storage
+    match storage.get(Some(&auth_context), namespace, key) {
+        Ok(data) => {
+            // Try to decode as UTF-8 string
+            match std::str::from_utf8(&data) {
+                Ok(text) => {
+                    println!("Value for {}:{}", namespace, key);
+                    println!("{}", text);
+                    
+                    // If it looks like JSON, try to pretty-print it
+                    if text.trim().starts_with('{') || text.trim().starts_with('[') {
+                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(text) {
+                            println!("\nFormatted JSON:");
+                            println!("{}", serde_json::to_string_pretty(&json).unwrap_or_else(|_| text.to_string()));
+                        }
+                    }
+                },
+                Err(_) => {
+                    println!("Value for {}:{} (binary data, {} bytes)", namespace, key, data.len());
+                    println!("{:?}", data);
+                }
+            }
+            Ok(())
+        },
+        Err(e) => Err(AppError::Other(format!("Failed to get value: {}", e))),
+    }
+}
+
+/// Creates an admin auth context for inspection purposes
+fn create_admin_auth_context() -> AuthContext {
+    let mut auth = AuthContext::new("admin");
+    
+    // Add admin roles for all operations
+    auth.add_role("global", "admin");
+    
+    // Set up identity
+    let mut identity = Identity::new("admin", "admin");
+    identity.add_metadata("description", "Storage CLI Admin");
+    
+    // Register the identity
+    auth.register_identity(identity);
+    
+    auth
 }
