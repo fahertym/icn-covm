@@ -1,8 +1,8 @@
 use libp2p::{
     swarm::NetworkBehaviour,
-    ping, kad, identify,
-    mdns::{self, Mdns},
+    ping, kad, mdns, identify,
 };
+use libp2p_swarm_derive::NetworkBehaviour;
 use std::time::Duration;
 
 /// Combines all the network protocols used by the federation into a single type.
@@ -16,7 +16,7 @@ pub struct IcnBehaviour {
     pub kademlia: kad::Behaviour<kad::store::MemoryStore>,
     
     /// mDNS for local network peer discovery
-    pub mdns: Mdns,
+    pub mdns: mdns::tokio::Behaviour,
     
     /// Identify protocol for sharing metadata about nodes
     pub identify: identify::Behaviour,
@@ -75,7 +75,8 @@ pub async fn create_behaviour(
     // Set up Kademlia DHT for peer discovery
     let kademlia_store = kad::store::MemoryStore::new(local_key.public().to_peer_id());
     let mut kademlia_config = kad::Config::default();
-    kademlia_config.set_protocol_name(format!("/icn/kad/{}", protocol_version).as_bytes());
+    let protocol_name = format!("/icn/kad/{}", protocol_version);
+    kademlia_config.set_protocol_names(vec![protocol_name.into()]);
     let kademlia = kad::Behaviour::with_config(
         local_key.public().to_peer_id(),
         kademlia_store,
@@ -83,8 +84,7 @@ pub async fn create_behaviour(
     );
     
     // Set up local network discovery with mDNS
-    let mdns = Mdns::new(mdns::Config::default())
-        .await
+    let mdns = mdns::tokio::Behaviour::new(mdns::Config::default(), local_key.public().to_peer_id())
         .expect("Failed to create mDNS behavior");
     
     // Set up identify protocol
@@ -98,5 +98,24 @@ pub async fn create_behaviour(
         kademlia,
         mdns,
         identify,
+    }
+}
+
+// Handler methods
+impl IcnBehaviour {
+    fn on_ping(&mut self, event: ping::Event) {
+        // Pass the event to the upper layer
+    }
+    
+    fn on_kademlia(&mut self, event: kad::Event) {
+        // Pass the event to the upper layer
+    }
+    
+    fn on_mdns(&mut self, event: mdns::Event) {
+        // Pass the event to the upper layer
+    }
+    
+    fn on_identify(&mut self, event: identify::Event) {
+        // Pass the event to the upper layer
     }
 } 

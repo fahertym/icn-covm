@@ -12,11 +12,23 @@ use futures::{
     SinkExt,
 };
 use libp2p::{
-    core::{transport::Boxed, upgrade},
-    identity, noise, swarm::{SwarmEvent, ConnectionId, ConnectionError}, tcp, yamux, Multiaddr, PeerId, Swarm, 
+    core::{upgrade},
+    identity, 
+    noise, 
+    swarm::{
+        SwarmEvent, 
+        ConnectionId,
+        dial_opts::DialOpts,
+    }, 
+    tcp, 
+    yamux, 
+    Multiaddr, 
+    PeerId, 
+    Swarm, 
     Transport,
 };
-// Import libp2p protocols
+
+// Protocol-specific imports
 use libp2p::ping;
 use libp2p::kad;
 use libp2p::mdns;
@@ -24,14 +36,15 @@ use libp2p::identify;
 
 use log::{debug, info, warn, error};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashSet},
+    io,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration},
 };
-use tokio::sync::{mpsc as tokio_mpsc, Mutex};
+use tokio::sync::{Mutex};
 
 /// Configuration options for a network node
 #[derive(Debug, Clone)]
@@ -98,7 +111,8 @@ impl NetworkNode {
         // Create the transport layer (TCP + Noise for encryption + Yamux for multiplexing)
         let transport = libp2p::tcp::tokio::Transport::new(tcp::Config::default().nodelay(true))
             .upgrade(upgrade::Version::V1)
-            .authenticate(noise::NoiseConfig::xx(local_key.clone()).into_authenticated())
+            .authenticate(noise::Keypair::<noise::X25519Spec>::new()
+                .into_authenticated(&local_key))
             .multiplex(yamux::Config::default())
             .timeout(Duration::from_secs(20))
             .boxed();
@@ -106,8 +120,13 @@ impl NetworkNode {
         // Create the network behavior
         let behaviour = create_behaviour(&local_key, config.protocol_version.clone()).await;
         
-        // Build the swarm
-        let swarm = libp2p::SwarmBuilder::with_tokio_executor(transport, behaviour, local_peer_id).build();
+        // Build the swarm with the correct API for libp2p 0.52
+        let swarm = Swarm::new(
+            transport,
+            behaviour,
+            local_peer_id,
+            libp2p::swarm::Config::default()
+        );
         
         // Create a channel for network events
         let (event_sender, event_receiver) = mpsc::channel::<NetworkEvent>(32);
@@ -151,7 +170,8 @@ impl NetworkNode {
         // Connect to bootstrap nodes
         for addr in &self.config.bootstrap_nodes {
             debug!("Dialing bootstrap node: {}", addr);
-            match self.swarm.dial(addr.clone()) {
+            let opts = DialOpts::unknown_peer_id().address(addr.clone());
+            match self.swarm.dial(opts) {
                 Ok(_) => {}
                 Err(e) => {
                     warn!("Failed to dial bootstrap node {}: {}", addr, e);
@@ -211,7 +231,7 @@ impl NetworkNode {
     }
     
     /// Handle events from the libp2p swarm
-    async fn handle_swarm_event(&mut self, event: SwarmEvent<IcnBehaviourEvent, ConnectionError>) -> Result<(), FederationError> {
+    async fn handle_swarm_event(&mut self, event: SwarmEvent<IcnBehaviourEvent, io::Error>) -> Result<(), FederationError> {
         match event {
             SwarmEvent::NewListenAddr { address, .. } => {
                 info!("Node listening on {}", address);
@@ -253,11 +273,11 @@ impl NetworkNode {
                 }
             }
             
-            SwarmEvent::IncomingConnectionError { local_addr, send_back_addr, error } => {
+            SwarmEvent::IncomingConnectionError { local_addr, send_back_addr, error, connection_id } => {
                 warn!("Error with incoming connection from {} to {}: {}", send_back_addr, local_addr, error);
             }
             
-            SwarmEvent::Dialing(peer_id) => {
+            SwarmEvent::Dialing { peer_id, connection_id: _ } => {
                 debug!("Dialing peer: {}", peer_id);
             }
             
@@ -308,7 +328,8 @@ impl NetworkNode {
         match event {
             ping::Event {
                 peer,
-                result: Ok(ping::Success { rtt }),
+                result: Ok(rtt),
+                connection: _,
             } => {
                 info!("Ping success from {}: RTT = {:?}", peer, rtt);
             }
@@ -316,6 +337,7 @@ impl NetworkNode {
             ping::Event {
                 peer,
                 result: Err(error),
+                connection: _,
             } => {
                 warn!("Ping failure with {}: {}", peer, error);
             }
@@ -325,23 +347,23 @@ impl NetworkNode {
     }
     
     /// Handle events from the Kademlia DHT
-    async fn handle_kademlia_event(&mut self, event: libp2p::kad::Event) -> Result<(), FederationError> {
+    async fn handle_kademlia_event(&mut self, event: kad::Event) -> Result<(), FederationError> {
         match event {
             kad::Event::OutboundQueryProgressed { 
                 id, 
                 result: kad::QueryResult::GetClosestPeers(Ok(peers)), 
-                stats, 
+                stats: _, 
                 .. 
             } => {
-                info!("Kademlia query {} found {} peers", id, peers.len());
+                info!("Kademlia query {:?} found {} peers", id, peers.peers.len());
                 
                 let _ = self.event_sender.send(NetworkEvent::DhtQueryCompleted {
-                    peers_found: peers.clone(),
+                    peers_found: peers.peers.clone(),
                     success: true,
                 }).await;
                 
                 // Optionally dial discovered peers
-                for peer in &peers {
+                for peer in &peers.peers {
                     if !self.known_peers.lock().await.contains(peer) {
                         debug!("Discovered new peer via DHT: {}", peer);
                     }
@@ -353,8 +375,8 @@ impl NetworkNode {
                 result: kad::QueryResult::Bootstrap(Ok(stats)), 
                 .. 
             } => {
-                info!("Kademlia bootstrap query {} completed with {} total peers", 
-                      id, stats.num_inserted_peers);
+                info!("Kademlia bootstrap query {:?} completed with {} remaining peers", 
+                      id, stats.num_remaining);
             }
             
             kad::Event::OutboundQueryProgressed { 
@@ -362,7 +384,7 @@ impl NetworkNode {
                 result: kad::QueryResult::GetClosestPeers(Err(err)), 
                 .. 
             } => {
-                warn!("Kademlia GetClosestPeers query {} failed: {}", id, err);
+                warn!("Kademlia GetClosestPeers query {:?} failed: {}", id, err);
                 
                 let _ = self.event_sender.send(NetworkEvent::DhtQueryCompleted {
                     peers_found: Vec::new(),
@@ -375,7 +397,7 @@ impl NetworkNode {
                 result: kad::QueryResult::Bootstrap(Err(err)), 
                 .. 
             } => {
-                warn!("Kademlia bootstrap query {} failed: {}", id, err);
+                warn!("Kademlia bootstrap query {:?} failed: {}", id, err);
             }
             
             kad::Event::RoutingUpdated {
@@ -399,7 +421,7 @@ impl NetworkNode {
     }
     
     /// Handle events from the mDNS discovery
-    async fn handle_mdns_event(&mut self, event: libp2p::mdns::Event) -> Result<(), FederationError> {
+    async fn handle_mdns_event(&mut self, event: mdns::Event) -> Result<(), FederationError> {
         match event {
             mdns::Event::Discovered(list) => {
                 for (peer, addr) in list {
@@ -415,7 +437,8 @@ impl NetworkNode {
                     let is_known = self.known_peers.lock().await.contains(&peer);
                     if !is_known {
                         debug!("Dialing newly discovered peer: {}", peer);
-                        if let Err(e) = self.swarm.dial(addr) {
+                        let opts = DialOpts::peer_id(peer).address(addr);
+                        if let Err(e) = self.swarm.dial(opts) {
                             warn!("Failed to dial discovered peer {}: {}", peer, e);
                         }
                     }
