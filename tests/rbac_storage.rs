@@ -1,4 +1,4 @@
-use icn_covm::storage::traits::StorageBackend;
+use icn_covm::storage::{AuthContext, InMemoryStorage, StorageBackend};
 use icn_covm::storage::errors::{StorageError, StorageResult};
 use icn_covm::storage::traits::StorageExtensions;
 use serde::{Serialize, Deserialize};
@@ -16,20 +16,20 @@ fn test_rbac_basic() -> StorageResult<()> {
     let observer = create_observer_auth("observer_user");
     
     // Admin can write to governance namespace
-    storage.set(&admin, "governance/config", "vote_threshold", to_bytes("66.0"))?;
+    storage.set(Some(&admin), "governance/config", "vote_threshold", to_bytes("66.0"))?;
     
     // Member can read from governance namespace
-    assert_eq!(from_bytes(&storage.get(&member, "governance/config", "vote_threshold")?), "66.0");
+    assert_eq!(from_bytes(&storage.get(Some(&member), "governance/config", "vote_threshold")?), "66.0");
     
     // Member should be able to write to their own votes
-    storage.set(&member, "governance/votes/member1", "prop-001", to_bytes("1.0"))?;
+    storage.set(Some(&member), "governance/votes/member1", "prop-001", to_bytes("1.0"))?;
     
     // Member cannot write to governance config
-    let result = storage.set(&member, "governance/config", "vote_threshold", to_bytes("50.0"));
+    let result = storage.set(Some(&member), "governance/config", "vote_threshold", to_bytes("50.0"));
     assert!(result.is_err());
     
     // Observer cannot write to governance namespace
-    let result = storage.set(&observer, "governance/votes", "prop-001/observer_user", to_bytes("1.0"));
+    let result = storage.set(Some(&observer), "governance/votes", "prop-001/observer_user", to_bytes("1.0"));
     assert!(result.is_err());
     if let Err(StorageError::PermissionDenied { .. }) = result {
         // Expected error
@@ -46,18 +46,18 @@ fn test_governance_namespaces() -> StorageResult<()> {
     let admin = create_admin_auth();
     
     // Test different governance namespaces
-    storage.set(&admin, "governance/proposals", "prop-001", to_bytes("Proposal data"))?;
-    storage.set(&admin, "governance/votes", "prop-001/admin_user", to_bytes("1.0"))?;
-    storage.set(&admin, "governance/delegations", "member1/member2", to_bytes("1.0"))?;
-    storage.set(&admin, "governance/members", "member1", to_bytes("Member data"))?;
-    storage.set(&admin, "governance/config", "quorum", to_bytes("0.5"))?;
+    storage.set(Some(&admin), "governance/proposals", "prop-001", to_bytes("Proposal data"))?;
+    storage.set(Some(&admin), "governance/votes", "prop-001/admin_user", to_bytes("1.0"))?;
+    storage.set(Some(&admin), "governance/delegations", "member1/member2", to_bytes("1.0"))?;
+    storage.set(Some(&admin), "governance/members", "member1", to_bytes("Member data"))?;
+    storage.set(Some(&admin), "governance/config", "quorum", to_bytes("0.5"))?;
     
     // Verify data was stored correctly
-    assert_eq!(from_bytes(&storage.get(&admin, "governance/proposals", "prop-001")?), "Proposal data");
-    assert_eq!(from_bytes(&storage.get(&admin, "governance/votes", "prop-001/admin_user")?), "1.0");
-    assert_eq!(from_bytes(&storage.get(&admin, "governance/delegations", "member1/member2")?), "1.0");
-    assert_eq!(from_bytes(&storage.get(&admin, "governance/members", "member1")?), "Member data");
-    assert_eq!(from_bytes(&storage.get(&admin, "governance/config", "quorum")?), "0.5");
+    assert_eq!(from_bytes(&storage.get(Some(&admin), "governance/proposals", "prop-001")?), "Proposal data");
+    assert_eq!(from_bytes(&storage.get(Some(&admin), "governance/votes", "prop-001/admin_user")?), "1.0");
+    assert_eq!(from_bytes(&storage.get(Some(&admin), "governance/delegations", "member1/member2")?), "1.0");
+    assert_eq!(from_bytes(&storage.get(Some(&admin), "governance/members", "member1")?), "Member data");
+    assert_eq!(from_bytes(&storage.get(Some(&admin), "governance/config", "quorum")?), "0.5");
     
     Ok(())
 }
@@ -68,16 +68,16 @@ fn test_versioning() -> StorageResult<()> {
     let admin = create_admin_auth();
     
     // Create a proposal with multiple versions
-    storage.set(&admin, "governance/proposals", "prop-001", to_bytes("Initial draft"))?;
-    storage.set(&admin, "governance/proposals", "prop-001", to_bytes("Revised draft"))?;
-    storage.set(&admin, "governance/proposals", "prop-001", to_bytes("Final version"))?;
+    storage.set(Some(&admin), "governance/proposals", "prop-001", to_bytes("Initial draft"))?;
+    storage.set(Some(&admin), "governance/proposals", "prop-001", to_bytes("Revised draft"))?;
+    storage.set(Some(&admin), "governance/proposals", "prop-001", to_bytes("Final version"))?;
     
     // Get latest version
-    let latest_version = from_bytes(&storage.get(&admin, "governance/proposals", "prop-001")?);
+    let latest_version = from_bytes(&storage.get(Some(&admin), "governance/proposals", "prop-001")?);
     assert_eq!(latest_version, "Final version");
     
     // List versions
-    let versions = storage.list_versions(&admin, "governance/proposals", "prop-001")?;
+    let versions = storage.list_versions(Some(&admin), "governance/proposals", "prop-001")?;
     assert_eq!(versions.len(), 3);
     assert_eq!(versions[0].version, 1);
     assert_eq!(versions[1].version, 2);
@@ -85,17 +85,17 @@ fn test_versioning() -> StorageResult<()> {
     assert_eq!(versions[0].created_by, "admin_user");
     
     // Get version 1
-    let (v1_data, v1_info) = storage.get_version(&admin, "governance/proposals", "prop-001", 1)?;
+    let (v1_data, v1_info) = storage.get_version(Some(&admin), "governance/proposals", "prop-001", 1)?;
     assert_eq!(from_bytes(&v1_data), "Initial draft");
     assert_eq!(v1_info.version, 1);
     
     // Get version 2
-    let (v2_data, v2_info) = storage.get_version(&admin, "governance/proposals", "prop-001", 2)?;
+    let (v2_data, v2_info) = storage.get_version(Some(&admin), "governance/proposals", "prop-001", 2)?;
     assert_eq!(from_bytes(&v2_data), "Revised draft");
     assert_eq!(v2_info.version, 2);
     
     // Get version 3
-    let (v3_data, v3_info) = storage.get_version(&admin, "governance/proposals", "prop-001", 3)?;
+    let (v3_data, v3_info) = storage.get_version(Some(&admin), "governance/proposals", "prop-001", 3)?;
     assert_eq!(from_bytes(&v3_data), "Final version");
     assert_eq!(v3_info.version, 3);
     
@@ -122,10 +122,10 @@ fn test_json_serialization() -> StorageResult<()> {
     };
     
     // Store as JSON
-    storage.set_json(&admin, "governance/config", "json_test", &test_data)?;
+    storage.set_json(Some(&admin), "governance/config", "json_test", &test_data)?;
     
     // Retrieve the raw JSON
-    let raw_json = storage.get(&admin, "governance/config", "json_test")?;
+    let raw_json = storage.get(Some(&admin), "governance/config", "json_test")?;
     let raw_json_str = from_bytes(&raw_json);
     
     // Check for content in the JSON string
@@ -134,7 +134,7 @@ fn test_json_serialization() -> StorageResult<()> {
     assert!(raw_json_str.contains("tag1"));
     
     // Retrieve and deserialize
-    let retrieved: TestStruct = storage.get_json(&admin, "governance/config", "json_test")?;
+    let retrieved: TestStruct = storage.get_json(Some(&admin), "governance/config", "json_test")?;
     assert_eq!(retrieved, test_data);
     
     Ok(())

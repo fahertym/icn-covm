@@ -1055,10 +1055,11 @@ fn list_keys_command(
                     namespace, 
                     prefix.map_or(String::new(), |p| format!(" with prefix '{}'", p))
                 );
+                let keys_count = keys.len();
                 for key in keys {
                     println!("  - {}", key);
                 }
-                println!("Total: {} keys", keys.len());
+                println!("Total: {} keys", keys_count);
             }
             Ok(())
         },

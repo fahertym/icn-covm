@@ -8,34 +8,35 @@ fn test_auth_context() {
     let observer = AuthContext::with_roles("observer_user", vec!["observer".to_string()]);
     
     // Test role checking
-    assert!(admin.has_role("admin"));
-    assert!(!admin.has_role("member"));
-    assert!(member.has_role("member"));
-    assert!(!member.has_role("admin"));
-    assert!(observer.has_role("observer"));
-    assert!(!observer.has_role("member"));
+    assert!(admin.has_role("global", "admin"));
+    assert!(!admin.has_role("global", "member"));
+    assert!(member.has_role("global", "member"));
+    assert!(!member.has_role("global", "admin"));
+    assert!(observer.has_role("global", "observer"));
+    assert!(!observer.has_role("global", "member"));
     
     // Test role modification
     let mut multi_role = AuthContext::new("multi_user");
-    assert!(!multi_role.has_role("admin"));
-    multi_role.add_role("admin");
-    assert!(multi_role.has_role("admin"));
-    multi_role.add_role("member");
-    assert!(multi_role.has_role("member"));
+    assert!(!multi_role.has_role("global", "admin"));
+    multi_role.add_role("global", "admin");
+    assert!(multi_role.has_role("global", "admin"));
+    multi_role.add_role("global", "member");
+    assert!(multi_role.has_role("global", "member"));
 }
 
 #[test]
 fn test_inmemory_storage() {
     let mut storage = InMemoryStorage::new();
+    let admin = AuthContext::new("admin");
     
     // Test basic operations
-    assert!(storage.set("test_key", "test_value").is_ok());
-    assert_eq!(storage.get("test_key").unwrap(), "test_value");
-    assert!(storage.contains("test_key"));
-    assert!(!storage.contains("nonexistent"));
+    assert!(storage.set(Some(&admin), "default", "test_key", "test_value".as_bytes().to_vec()).is_ok());
+    assert_eq!(storage.get(Some(&admin), "default", "test_key").unwrap(), "test_value".as_bytes().to_vec());
+    assert!(storage.contains(Some(&admin), "default", "test_key").unwrap());
+    assert!(!storage.contains(Some(&admin), "default", "nonexistent").unwrap());
     
     // Test deletion
-    assert!(storage.delete("test_key").is_ok());
-    assert!(!storage.contains("test_key"));
-    assert!(storage.get("test_key").is_err());
+    assert!(storage.delete(Some(&admin), "default", "test_key").is_ok());
+    assert!(!storage.contains(Some(&admin), "default", "test_key").unwrap());
+    assert!(storage.get(Some(&admin), "default", "test_key").is_err());
 } 

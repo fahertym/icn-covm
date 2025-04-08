@@ -36,8 +36,7 @@ emit "Function returned"
 
 # We can't access temp_var1 now, but we can't directly test this 
 # since there's no try/catch in the DSL.
-# If memory scoping is implemented correctly, the next line 
-# would cause an error if uncommented:
+emit "NOTE: If memory scoping is implemented correctly, uncommenting the next line would cause an error:"
 # load temp_var1
 
 # Instead we'll just verify global variable is still accessible
