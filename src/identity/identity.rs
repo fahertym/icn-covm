@@ -58,6 +58,21 @@ impl Identity {
         self.metadata.get(key)
     }
     
+    /// Check if this identity belongs to the specified cooperative
+    pub fn belongs_to(&self, coop_id: &str) -> bool {
+        if self.identity_type == "cooperative" {
+            // If this is a cooperative identity, check if it's the same coop
+            return self.id == coop_id;
+        }
+        
+        // For members and other identities, check the coop_id metadata
+        if let Some(member_coop_id) = self.get_metadata("coop_id") {
+            return member_coop_id == coop_id;
+        }
+        
+        false
+    }
+    
     /// Get the namespace for this identity
     pub fn get_namespace(&self) -> String {
         match self.identity_type.as_str() {
