@@ -6,6 +6,7 @@ use serde::{Serialize, Deserialize};
 use log::{debug, info, warn, error};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const FEDERATION_PROPOSAL_PREFIX: &str = "federation/proposals/";
 const FEDERATION_VOTES_PREFIX: &str = "federation/votes/";
@@ -80,12 +81,25 @@ impl FederationStorage {
         // First, get the proposal to check scope-based eligibility
         let proposal = self.get_proposal(storage, &vote.proposal_id)?;
         
+        // Check if the proposal has expired
+        if let Some(expires_at) = proposal.expires_at {
+            let current_time = current_timestamp();
+            if current_time > expires_at {
+                warn!("Vote rejected: Proposal {} has expired at timestamp {}", 
+                    vote.proposal_id, expires_at);
+                return Err(StorageError::Other { 
+                    details: format!("Proposal has expired at {}", expires_at) 
+                });
+            }
+        }
+        
         // Load the voter identity from storage if not provided
+        let loaded_identity;
         let identity = if let Some(ident) = voter_identity {
             ident
         } else {
             // Try to load the identity from storage
-            match storage.get_identity(&vote.voter) {
+            loaded_identity = match storage.get_identity(&vote.voter) {
                 Ok(ident) => ident,
                 Err(_) => {
                     // If we can't load the identity, we can't enforce eligibility
@@ -94,7 +108,8 @@ impl FederationStorage {
                         details: format!("Could not load identity for voter {}", vote.voter) 
                     });
                 }
-            }
+            };
+            &loaded_identity
         };
         
         // Verify the signature if the identity has a public key
@@ -317,4 +332,12 @@ impl FederationStorage {
             }
         }
     }
+}
+
+// Helper function to get current Unix timestamp
+fn current_timestamp() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 } 

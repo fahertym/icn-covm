@@ -330,6 +330,13 @@ async fn main() -> Result<(), AppError> {
                                 .help("Comma-separated list of cooperative IDs (for multi scope)")
                                 .default_value(""),
                         )
+                        .arg(
+                            Arg::new("expires-in")
+                                .long("expires-in")
+                                .value_name("SECONDS")
+                                .help("Set proposal to expire after specified number of seconds")
+                                .value_parser(clap::value_parser!(u64))
+                        )
                 )
                 .subcommand(
                     Command::new("submit-vote")
@@ -343,12 +350,18 @@ async fn main() -> Result<(), AppError> {
                 )
                 .subcommand(
                     Command::new("execute-proposal")
-                        .about("Execute a proposal with collected votes")
+                        .about("Execute a proposal to tally votes and determine the result")
                         .arg(
                             Arg::new("proposal-id")
-                                .help("ID of the proposal to execute")
+                                .help("Unique ID of the proposal to execute")
                                 .required(true)
                                 .index(1),
+                        )
+                        .arg(
+                            Arg::new("force")
+                                .long("force")
+                                .help("Force execution even if the proposal hasn't expired yet")
+                                .action(clap::ArgAction::SetTrue)
                         )
                 )
         )
@@ -483,7 +496,8 @@ async fn main() -> Result<(), AppError> {
                     let scope = broadcast_matches.get_one::<String>("scope").unwrap();
                     let model = broadcast_matches.get_one::<String>("model").unwrap();
                     let coops = broadcast_matches.get_one::<String>("coops").unwrap();
-                    broadcast_proposal(proposal_file, storage_backend, storage_path, federation_port, bootstrap_nodes, node_name, scope, model, coops)
+                    let expires_in = broadcast_matches.get_one::<u64>("expires-in").map(|v| *v);
+                    broadcast_proposal(proposal_file, storage_backend, storage_path, federation_port, bootstrap_nodes, node_name, scope, model, coops, expires_in)
                 },
                 Some(("submit-vote", submit_matches)) => {
                     let vote_file = submit_matches.get_one::<String>("vote-file").unwrap();
@@ -491,7 +505,8 @@ async fn main() -> Result<(), AppError> {
                 },
                 Some(("execute-proposal", execute_matches)) => {
                     let proposal_id = execute_matches.get_one::<String>("proposal-id").unwrap();
-                    execute_proposal(proposal_id, storage_backend, storage_path, federation_port, bootstrap_nodes, node_name)
+                    let force = execute_matches.get_flag("force");
+                    execute_proposal(proposal_id, storage_backend, storage_path, federation_port, bootstrap_nodes, node_name, force)
                 },
                 _ => Err("Unknown federation subcommand".into()),
             }
@@ -1395,6 +1410,7 @@ async fn broadcast_proposal(
     scope: &str,
     model: &str,
     coops: &str,
+    expires_in: Option<u64>,
 ) -> Result<(), AppError> {
     info!("Broadcasting proposal from file: {}", proposal_file);
     
@@ -1451,6 +1467,7 @@ async fn broadcast_proposal(
         created_at: now() as i64,
         scope: proposal_scope,
         voting_model,
+        expires_at: expires_in.map(|seconds| (now() as i64) + (seconds as i64)),
     };
     
     // Configure federation
@@ -1611,6 +1628,7 @@ async fn execute_proposal(
     federation_port: u16,
     bootstrap_nodes: Vec<libp2p::Multiaddr>,
     node_name: String,
+    force: bool,
 ) -> Result<(), AppError> {
     info!("Executing proposal: {}", proposal_id);
     
@@ -1645,6 +1663,30 @@ async fn execute_proposal(
         Ok(proposal) => proposal,
         Err(e) => return Err(AppError::Federation(format!("Failed to get proposal: {}", e))),
     };
+    
+    // Check if the proposal has an expiry time
+    if let Some(expires_at) = proposal.expires_at {
+        let current_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+            
+        if current_time < expires_at && !force {
+            // If the proposal hasn't expired yet and we're not forcing execution
+            let remaining_seconds = expires_at - current_time;
+            let remaining_minutes = remaining_seconds / 60;
+            let remaining_hours = remaining_minutes / 60;
+            
+            return Err(AppError::Federation(
+                format!("Proposal has not expired yet. {} hours {} minutes remaining. Use --force to override.", 
+                    remaining_hours, remaining_minutes % 60)
+            ));
+        } else if current_time < expires_at && force {
+            info!("Forcing execution of proposal before expiry due to --force flag");
+        } else {
+            info!("Proposal has expired, proceeding with execution");
+        }
+    }
     
     // Get all votes for this proposal
     let votes = match federation_storage.get_votes(&storage, proposal_id) {

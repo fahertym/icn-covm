@@ -82,16 +82,16 @@ pub enum VotingModel {
     OneCoopOneVote,
 }
 
-/// Proposal for federation-wide voting
+/// Proposal that can be voted on by federation members
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FederatedProposal {
-    /// Unique identifier for the proposal
+    /// Unique identifier of the proposal
     pub proposal_id: String,
     
-    /// Namespace in which this proposal belongs
+    /// Namespace for categorizing proposals
     pub namespace: String,
     
-    /// Available voting options for this proposal
+    /// List of options that can be voted on
     pub options: Vec<String>,
     
     /// Identifier of the proposal creator
@@ -100,11 +100,14 @@ pub struct FederatedProposal {
     /// Timestamp when the proposal was created
     pub created_at: i64,
     
-    /// Scope defining which cooperatives can participate in voting
+    /// Scope determining which cooperatives can vote
     pub scope: ProposalScope,
     
-    /// Model defining how votes are counted
+    /// Model determining how votes are counted
     pub voting_model: VotingModel,
+    
+    /// Optional expiration timestamp (Unix seconds)
+    pub expires_at: Option<i64>,
 }
 
 /// Vote on a federated proposal
