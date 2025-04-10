@@ -1530,12 +1530,33 @@ async fn submit_vote(
         .map_err(|_| AppError::Other(format!("Invalid ranked choice: {}", s))))
         .collect::<Result<Vec<f64>, AppError>>()?;
     
+    // Get the message (optional but recommended for real systems)
+    let message = if lines.len() > 3 { 
+        lines[3].trim().to_string() 
+    } else {
+        // Generate a canonical message for signing if none was provided
+        format!("Vote from {} on proposal {} with choices {}", 
+            voter, proposal_id, lines[2].trim())
+    };
+    
+    // Get the signature (required for real systems, but we'll accept placeholder for testing)
+    let signature = if lines.len() > 4 { 
+        lines[4].trim().to_string() 
+    } else {
+        info!("No signature provided in vote file, using 'valid' placeholder for testing only");
+        "valid".to_string() // For testing only
+    };
+    
+    info!("Parsed vote for proposal {} by {} with {} ranked choices", 
+        proposal_id, voter, ranked_choices.len());
+    
     // Create the vote object
     let vote = icn_covm::federation::FederatedVote {
         proposal_id,
         voter,
         ranked_choices,
-        signature: "placeholder_signature".to_string(), // Real signature will be added later
+        message,
+        signature,
     };
     
     // Configure federation

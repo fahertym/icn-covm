@@ -119,6 +119,9 @@ pub struct FederatedVote {
     /// Ranked preferences for each option (preference values)
     pub ranked_choices: Vec<f64>,
     
+    /// The canonical message that was signed
+    pub message: String,
+    
     /// Signature to verify the vote's authenticity
     pub signature: String,
 } 

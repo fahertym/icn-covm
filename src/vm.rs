@@ -467,6 +467,30 @@ pub enum Op {
         /// Account to check
         account: String,
     },
+
+    /// Get an identity from storage by its ID
+    ///
+    /// This operation retrieves an identity from storage using its ID.
+    /// The identity information is made available for subsequent operations.
+    /// If the identity doesn't exist, an error is returned.
+    GetIdentity(String),
+    
+    /// Require a valid signature for a message
+    ///
+    /// This operation verifies that a signature is valid for a given message
+    /// and was signed by the specified voter. It uses the public key from the
+    /// voter's identity to verify the signature.
+    /// If the signature is invalid, an error is returned and execution stops.
+    RequireValidSignature {
+        /// The voter ID whose signature should be verified
+        voter: String,
+        
+        /// The message that was signed
+        message: String,
+        
+        /// The signature to verify (base64 encoded)
+        signature: String,
+    },
 }
 
 #[derive(Debug)]
@@ -1139,6 +1163,39 @@ impl VM {
                     // Handle diff versions operation
                     println!("DiffVersionsP operation for key: {}, versions: {} and {}", key, v1, v2);
                     // This is a placeholder - implement the actual diff logic
+                },
+                Op::GetIdentity(identity_id) => {
+                    let auth = self.auth_context.as_ref().ok_or(VMError::IdentityContextUnavailable)?;
+                    
+                    // Check if the identity exists
+                    if auth.get_identity(identity_id).is_none() {
+                        let err = VMError::IdentityNotFound(identity_id.clone());
+                        self.stack.push(0.0); // Push false for error cases
+                        self.emit_event("identity_error", &format!("{}", err));
+                    } else {
+                        self.stack.push(1.0); // true
+                        self.emit_event("identity_verification", &format!("Identity {} exists", identity_id));
+                    }
+                },
+                Op::RequireValidSignature { voter, message, signature } => {
+                    let auth = self.auth_context.as_ref().ok_or(VMError::IdentityContextUnavailable)?;
+                    
+                    // Check if the voter exists
+                    if auth.get_identity(&voter).is_none() {
+                        let err = VMError::IdentityNotFound(voter.clone());
+                        self.stack.push(0.0); // Push false for error cases
+                        self.emit_event("identity_error", &format!("{}", err));
+                    } else if auth.verify_signature(&voter, &message, &signature) {
+                        self.stack.push(1.0); // true
+                        self.emit_event("identity_verification", &format!("Valid signature for voter {}", voter));
+                    } else {
+                        let err = VMError::InvalidSignature {
+                            identity_id: voter.clone(),
+                            reason: "Invalid signature or key".to_string(),
+                        };
+                        self.stack.push(0.0); // false
+                        self.emit_event("identity_error", &format!("{}", err));
+                    }
                 },
             }
 

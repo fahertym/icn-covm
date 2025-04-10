@@ -75,6 +75,7 @@ pub trait StorageBackend {
 pub trait StorageExtensions: StorageBackend {
     fn get_json<T: DeserializeOwned>(&self, auth: Option<&AuthContext>, namespace: &str, key: &str) -> StorageResult<T>;
     fn set_json<T: Serialize>(&mut self, auth: Option<&AuthContext>, namespace: &str, key: &str, value: &T) -> StorageResult<()>;
+    fn get_identity(&self, identity_id: &str) -> StorageResult<crate::identity::Identity>;
 }
 
 // Default implementation for the extension trait
@@ -89,6 +90,15 @@ impl<S: StorageBackend> StorageExtensions for S {
         let bytes = serde_json::to_vec(value)
             .map_err(|e| crate::storage::errors::StorageError::SerializationError { details: e.to_string() })?;
         self.set(auth, namespace, key, bytes)
+    }
+    
+    fn get_identity(&self, identity_id: &str) -> StorageResult<crate::identity::Identity> {
+        // Identity storage key convention: identities/{id}
+        let key = format!("identities/{}", identity_id);
+        self.get_json(None, "identity", &key)
+            .map_err(|_| crate::storage::errors::StorageError::Other { 
+                details: format!("Identity not found: {}", identity_id)
+            })
     }
 }
 

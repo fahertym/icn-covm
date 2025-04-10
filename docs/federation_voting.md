@@ -141,4 +141,106 @@ The system includes several demo files to illustrate the workflow:
 - `demo/federation/vote_alice.icn`: Alice's vote on the proposal
 - `demo/federation/vote_bob.icn`: Bob's vote on the proposal
 - `demo/federation/vote_carol.icn`: Carol's vote on the proposal
-- `demo/federation/federated_vote_execute.dsl`: DSL script demonstrating vote execution 
+- `demo/federation/federated_vote_execute.dsl`: DSL script demonstrating vote execution
+
+# Federated Voting with Digital Signatures
+
+This document explains the signature-based verification flow for voting in the ICN-COVM federation system.
+
+## Overview
+
+The federated voting system uses cryptographic signatures to ensure:
+
+1. **Authenticity** - Votes come from legitimate federation members
+2. **Integrity** - Votes haven't been tampered with
+3. **Non-repudiation** - Voters cannot deny having cast their vote
+
+## Identity Requirements
+
+Each voter must have a registered identity in the federation with:
+
+- A unique `id`
+- A `public_key` stored in the identity record
+- A `crypto_scheme` defining the signature algorithm (e.g., "ed25519", "secp256k1")
+
+## Voting Process
+
+### 1. Creating a Vote
+
+When a member wants to vote on a proposal:
+
+```
+# 1. Create a canonical message that includes:
+message = "Vote from {voter_id} on proposal {proposal_id} with choices {choice_values}"
+
+# 2. Sign the message with their private key
+signature = sign(message, private_key)
+
+# 3. Create the vote structure with:
+vote = {
+  proposal_id: "prop-id",
+  voter: "voter-id",
+  ranked_choices: [2.0, 1.0, 0.0],
+  message: message,
+  signature: signature
+}
+```
+
+### 2. Submitting a Vote
+
+Votes can be submitted using the CLI:
+
+```bash
+icn-covm federation submit-vote my_vote.icn
+```
+
+Where `my_vote.icn` contains:
+
+```
+prop-2023-07-15
+alice
+2.0,1.0,0.0
+vote for prop-2023-07-15 by alice
+<base64-signature>
+```
+
+### 3. Verification Process
+
+When the vote is submitted:
+
+1. The system loads the voter's identity from storage
+2. It verifies the signature using the stored public key
+3. It checks that the voter is eligible based on proposal scope
+4. If everything checks out, the vote is recorded
+
+## Programming Interface
+
+The system provides new VM operations for validation:
+
+- `GetIdentity` - Loads an identity from storage
+- `RequireValidSignature` - Verifies a signature against an identity's public key
+
+Example DSL code for validation:
+
+```
+# Get the identity
+GetIdentity "alice"
+
+# Verify the signature
+RequireValidSignature {
+  voter: "alice",
+  message: "vote for prop-2023-07-15 by alice",
+  signature: "base64-encoded-signature"
+}
+```
+
+## Security Considerations
+
+- **Private Key Security**: Voters must keep their private keys secure
+- **Public Key Verification**: Federation nodes should verify the authenticity of public keys
+- **Replay Protection**: The message format includes specific proposal and voter IDs to prevent replay attacks
+- **Multiple Votes**: The system prevents a voter from voting more than once on the same proposal
+
+## Testing
+
+For testing purposes, the signature "valid" or "mock_signature" will be accepted as valid without cryptographic verification. 
