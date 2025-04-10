@@ -492,7 +492,7 @@ impl NetworkNode {
         
         // Get all connected peers
         let peer_ids = {
-            let peers = self.known_peers.lock().expect("Failed to lock known_peers");
+            let peers = self.known_peers.lock().await;
             peers.iter().cloned().collect::<Vec<_>>()
         };
         

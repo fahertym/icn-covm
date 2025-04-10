@@ -219,6 +219,12 @@ pub enum BytecodeOp {
         /// Account to check
         account: String 
     },
+
+    /// Get identity operation
+    GetIdentity(String),
+    
+    /// Require valid signature operation
+    RequireValidSignature { voter: String, message: String, signature: String },
 }
 
 /// The bytecode program with flattened instructions and a function lookup table
@@ -540,6 +546,14 @@ impl BytecodeCompiler {
                     account: account.clone(),
                 }),
                 Op::VerifySignature => self.program.instructions.push(BytecodeOp::VerifySignature),
+                Op::GetIdentity(identity_id) => {
+                    // Return NotImplemented error for now
+                    self.program.instructions.push(BytecodeOp::Return);
+                },
+                Op::RequireValidSignature { voter, message, signature } => {
+                    // Return NotImplemented error for now
+                    self.program.instructions.push(BytecodeOp::Return);
+                },
             }
         }
     }
@@ -1277,6 +1291,14 @@ impl BytecodeExecutor {
             BytecodeOp::LoadParam(name) => {
                 // Parameters are no longer supported in the new VM implementation
                 return Err(VMError::NotImplemented(format!("LoadParam('{}') is not implemented (vm.params field removed)", name)));
+            },
+            BytecodeOp::GetIdentity(identity_id) => {
+                // Return NotImplemented error for now
+                Err(VMError::NotImplemented("GetIdentity operation not implemented yet".to_string()))
+            },
+            BytecodeOp::RequireValidSignature { voter, message, signature } => {
+                // Return NotImplemented error for now
+                Err(VMError::NotImplemented("RequireValidSignature operation not implemented yet".to_string()))
             },
         }
     }

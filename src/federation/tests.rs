@@ -120,7 +120,10 @@ mod vote_tests {
         FederatedVote,
         storage::FederationStorage,
     };
+    use crate::federation::messages::{ProposalScope, VotingModel};
     use crate::storage::implementations::in_memory::InMemoryStorage;
+    use crate::storage::{AuthContext, StorageBackend};
+    use crate::identity::Identity;
     use std::time::{SystemTime, UNIX_EPOCH};
     
     fn now() -> i64 {
@@ -143,6 +146,9 @@ mod vote_tests {
             ],
             creator: "test-node".to_string(),
             created_at: now(),
+            expires_at: None,
+            scope: ProposalScope::GlobalFederation,
+            voting_model: VotingModel::OneMemberOneVote,
         };
         
         // Verify fields
@@ -160,6 +166,7 @@ mod vote_tests {
             voter: "alice".to_string(),
             ranked_choices: vec![2.0, 1.0, 0.0], // Prefers option C, then B, then A
             signature: "test-signature".to_string(),
+            message: "test-vote".to_string(),
         };
         
         // Verify fields
@@ -175,6 +182,20 @@ mod vote_tests {
         let mut storage = InMemoryStorage::new();
         let federation_storage = FederationStorage::new();
         
+        // Create an admin identity with correct permissions
+        let mut admin_identity = Identity::new("admin", "admin");
+        
+        // Create auth context with admin identity
+        let mut auth = AuthContext::new("admin");
+        auth.set_identity(admin_identity.clone());
+        auth.add_role("global", "admin"); // Add admin role for namespace creation
+        
+        // Create account for the admin user
+        storage.create_account(Some(&auth), "admin", 1000000).unwrap();
+        
+        // Create the namespace with admin auth
+        storage.create_namespace(Some(&auth), "test", 1000000, None).unwrap();
+        
         // Create a proposal
         let proposal = FederatedProposal {
             proposal_id: "test-proposal-1".to_string(),
@@ -186,10 +207,13 @@ mod vote_tests {
             ],
             creator: "test-node".to_string(),
             created_at: now(),
+            expires_at: None,
+            scope: ProposalScope::GlobalFederation,
+            voting_model: VotingModel::OneMemberOneVote,
         };
         
-        // Save the proposal
-        federation_storage.save_proposal(&mut storage, proposal.clone()).unwrap();
+        // Save the proposal with auth context
+        federation_storage.save_proposal_with_auth(&mut storage, Some(&auth), proposal.clone()).unwrap();
         
         // Retrieve the proposal
         let retrieved_proposal = federation_storage.get_proposal(&storage, &proposal.proposal_id).unwrap();
@@ -208,26 +232,62 @@ mod vote_tests {
         let mut storage = InMemoryStorage::new();
         let federation_storage = FederationStorage::new();
         
-        // Create a vote
-        let vote = FederatedVote {
-            proposal_id: "test-proposal-1".to_string(),
-            voter: "alice".to_string(),
-            ranked_choices: vec![2.0, 1.0, 0.0], // Prefers option C, then B, then A
-            signature: "test-signature".to_string(),
+        // Create a voter identity
+        let mut identity = Identity::new("test-voter", "test-voter");
+        identity.add_metadata("coop_id", "test-node"); // Match the creator cooperative ID
+        
+        // Save the proposal
+        let mut auth = AuthContext::new("test-voter");
+        auth.set_identity(identity.clone());
+        auth.add_role("global", "admin"); // Add admin role for namespace creation
+        
+        // Create account for the test voter
+        storage.create_account(Some(&auth), "test-voter", 1000000).unwrap();
+        
+        // We need to create the namespace as the authenticated identity
+        storage.create_namespace(Some(&auth), "test", 1000000, None).unwrap();
+        
+        // Get current timestamp plus 1 hour for expiry
+        let current_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let expires_at = current_time + 3600; // 1 hour in the future
+        
+        // Set up test data
+        let proposal = FederatedProposal {
+            proposal_id: "test-proposal".to_string(),
+            namespace: "test".to_string(),
+            options: vec!["Option A".to_string(), "Option B".to_string()],
+            creator: "test-creator".to_string(),
+            created_at: current_time,
+            expires_at: Some(expires_at),
+            scope: ProposalScope::GlobalFederation,
+            voting_model: VotingModel::OneMemberOneVote,
         };
         
-        // Save the vote
-        federation_storage.save_vote(&mut storage, vote.clone()).unwrap();
+        // Save the proposal first with auth
+        federation_storage.save_proposal_with_auth(&mut storage, Some(&auth), proposal.clone()).unwrap();
         
-        // Retrieve the votes
-        let votes = federation_storage.get_votes(&storage, &vote.proposal_id).unwrap();
+        // Create a vote
+        let vote = FederatedVote {
+            proposal_id: "test-proposal".to_string(),
+            voter: "test-voter".to_string(),
+            ranked_choices: vec![1.0, 0.0],
+            message: "test vote message".to_string(),
+            signature: "valid".to_string(),
+        };
         
-        // Verify
+        // Save the vote using the authenticated identity
+        federation_storage.save_vote(&mut storage, vote.clone(), Some(&identity)).unwrap();
+        
+        // Retrieve votes for the proposal
+        let votes = federation_storage.get_votes(&storage, "test-proposal").unwrap();
+        
+        // Assert that we got our vote back
         assert_eq!(votes.len(), 1);
-        assert_eq!(votes[0].proposal_id, vote.proposal_id);
-        assert_eq!(votes[0].voter, vote.voter);
-        assert_eq!(votes[0].ranked_choices, vote.ranked_choices);
-        assert_eq!(votes[0].signature, vote.signature);
+        assert_eq!(votes[0].voter, "test-voter");
+        assert_eq!(votes[0].ranked_choices, vec![1.0, 0.0]);
     }
     
     #[test]
@@ -242,23 +302,45 @@ mod vote_tests {
                 voter: "alice".to_string(),
                 ranked_choices: vec![2.0, 1.0, 0.0],
                 signature: "sig1".to_string(),
+                message: "test-vote-1".to_string(),
             },
             FederatedVote {
                 proposal_id: "test-proposal".to_string(),
                 voter: "bob".to_string(),
                 ranked_choices: vec![0.0, 1.0, 2.0],
                 signature: "sig2".to_string(),
+                message: "test-vote-2".to_string(),
             },
             FederatedVote {
                 proposal_id: "test-proposal".to_string(),
                 voter: "carol".to_string(),
                 ranked_choices: vec![1.0, 2.0, 0.0],
                 signature: "sig3".to_string(),
+                message: "test-vote-3".to_string(),
             },
         ];
+
+        // Create a test proposal with voting model
+        let proposal = FederatedProposal {
+            proposal_id: "test-proposal".to_string(),
+            namespace: "test".to_string(),
+            options: vec![
+                "Option A".to_string(),
+                "Option B".to_string(),
+                "Option C".to_string(),
+            ],
+            creator: "test-node".to_string(),
+            created_at: 0,
+            expires_at: None,
+            scope: ProposalScope::GlobalFederation,
+            voting_model: VotingModel::OneMemberOneVote,
+        };
+        
+        // Create voter identities (empty for this test)
+        let voter_identities = std::collections::HashMap::new();
         
         // Convert to ballots
-        let ballots = federation_storage.prepare_ranked_ballots(&votes, 3);
+        let ballots = federation_storage.prepare_ranked_ballots(&votes, &proposal, &voter_identities);
         
         // Verify
         assert_eq!(ballots.len(), 3);

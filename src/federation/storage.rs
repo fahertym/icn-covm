@@ -2,6 +2,7 @@ use crate::federation::messages::{FederatedProposal, FederatedVote, ProposalScop
 use crate::storage::traits::StorageExtensions;
 use crate::storage::errors::{StorageResult, StorageError};
 use crate::identity::Identity;
+use crate::storage::auth::AuthContext;
 use serde::{Serialize, Deserialize};
 use log::{debug, info, warn, error};
 use std::collections::HashMap;
@@ -68,6 +69,27 @@ impl FederationStorage {
         cache.proposals.insert(proposal.proposal_id.clone(), proposal);
         
         info!("Saved federation proposal to storage and cache");
+        Ok(())
+    }
+    
+    /// Save a proposal to storage and cache with explicit auth
+    pub fn save_proposal_with_auth<S: StorageExtensions>(
+        &self, 
+        storage: &mut S, 
+        auth: Option<&AuthContext>,
+        proposal: FederatedProposal
+    ) -> StorageResult<()> {
+        // Create the storage key
+        let key = format!("{}{}", FEDERATION_PROPOSAL_PREFIX, proposal.proposal_id);
+        
+        // Store in the backend with auth
+        storage.set_json(auth, &proposal.namespace, &key, &proposal)?;
+        
+        // Add to the cache
+        let mut cache = self.cache.lock().unwrap();
+        cache.proposals.insert(proposal.proposal_id.clone(), proposal);
+        
+        info!("Saved federation proposal to storage and cache with explicit auth");
         Ok(())
     }
     

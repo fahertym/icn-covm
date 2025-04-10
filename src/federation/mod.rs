@@ -4,7 +4,7 @@
 //! allowing them to discover each other and exchange messages.
 
 mod node;
-mod messages;
+pub mod messages;
 mod error;
 mod behaviour;
 mod events;
