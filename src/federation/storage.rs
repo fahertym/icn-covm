@@ -1,6 +1,7 @@
-use crate::federation::messages::{FederatedProposal, FederatedVote};
+use crate::federation::messages::{FederatedProposal, FederatedVote, ProposalScope};
 use crate::storage::traits::StorageExtensions;
-use crate::storage::errors::StorageResult;
+use crate::storage::errors::{StorageResult, StorageError};
+use crate::identity::Identity;
 use serde::{Serialize, Deserialize};
 use log::{debug, info, warn, error};
 use std::collections::HashMap;
@@ -73,8 +74,54 @@ impl FederationStorage {
     pub fn save_vote<S: StorageExtensions>(
         &self,
         storage: &mut S,
-        vote: FederatedVote
+        vote: FederatedVote,
+        voter_identity: Option<&Identity>
     ) -> StorageResult<()> {
+        // First, get the proposal to check scope-based eligibility
+        let proposal = self.get_proposal(storage, &vote.proposal_id)?;
+        
+        // Check eligibility based on proposal scope if we have voter identity information
+        if let Some(identity) = voter_identity {
+            let is_eligible = match &proposal.scope {
+                ProposalScope::SingleCoop(coop_id) => {
+                    // Only members of this specific coop can vote
+                    if !identity.belongs_to(coop_id) {
+                        warn!("Vote rejected: Voter {} not a member of cooperative {}", 
+                            vote.voter, coop_id);
+                        return Err(StorageError::Other { 
+                            details: format!("Voter not a member of eligible cooperative {}", coop_id) 
+                        });
+                    }
+                    true
+                },
+                ProposalScope::MultiCoop(coop_ids) => {
+                    // Check if the voter belongs to any of the eligible coops
+                    let belongs = coop_ids.iter().any(|coop_id| identity.belongs_to(coop_id));
+                    if !belongs {
+                        warn!("Vote rejected: Voter {} not a member of any eligible cooperatives", 
+                            vote.voter);
+                        return Err(StorageError::Other { 
+                            details: "Voter not a member of any eligible cooperatives".to_string() 
+                        });
+                    }
+                    true
+                },
+                ProposalScope::GlobalFederation => {
+                    // All federation members can vote
+                    true
+                },
+            };
+            
+            if !is_eligible {
+                return Err(StorageError::Other { 
+                    details: "Voter not eligible for this proposal scope".to_string() 
+                });
+            }
+        } else {
+            // Without identity information, we can't enforce eligibility
+            debug!("No voter identity provided, skipping eligibility check");
+        }
+        
         // Create the storage key - we'll store votes as a list under the proposal
         let key = format!("{}{}", FEDERATION_VOTES_PREFIX, vote.proposal_id);
         
