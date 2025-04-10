@@ -262,6 +262,75 @@ async fn main() -> Result<(), AppError> {
                         )
                 )
         )
+        .subcommand(
+            Command::new("federation")
+                .about("Federation commands for cooperative voting")
+                .arg(
+                    Arg::new("storage-backend")
+                        .long("storage-backend")
+                        .value_name("TYPE")
+                        .help("Storage backend type (memory or file)")
+                        .default_value("file"),
+                )
+                .arg(
+                    Arg::new("storage-path")
+                        .long("storage-path")
+                        .value_name("PATH")
+                        .help("Path for file storage backend")
+                        .default_value("./storage"),
+                )
+                .arg(
+                    Arg::new("federation-port")
+                        .long("federation-port")
+                        .value_name("PORT")
+                        .help("Port number for federation listening")
+                        .default_value("4001"),
+                )
+                .arg(
+                    Arg::new("bootstrap-nodes")
+                        .long("bootstrap-nodes")
+                        .value_name("MULTIADDR")
+                        .help("Multiaddresses of bootstrap nodes (can be used multiple times)")
+                        .action(ArgAction::Append),
+                )
+                .arg(
+                    Arg::new("node-name")
+                        .long("node-name")
+                        .value_name("NAME")
+                        .help("Human-readable name for this node")
+                        .default_value("icn-covm-node"),
+                )
+                .subcommand(
+                    Command::new("broadcast-proposal")
+                        .about("Broadcast a proposal to the federation")
+                        .arg(
+                            Arg::new("proposal-file")
+                                .help("Path to proposal DSL file")
+                                .required(true)
+                                .index(1),
+                        )
+                )
+                .subcommand(
+                    Command::new("submit-vote")
+                        .about("Submit a vote for a federated proposal")
+                        .arg(
+                            Arg::new("vote-file")
+                                .help("Path to vote DSL file")
+                                .required(true)
+                                .index(1),
+                        )
+                )
+                .subcommand(
+                    Command::new("execute-proposal")
+                        .about("Execute a proposal with collected votes")
+                        .arg(
+                            Arg::new("proposal-id")
+                                .help("ID of the proposal to execute")
+                                .required(true)
+                                .index(1),
+                        )
+                )
+        )
         .get_matches();
 
     // Handle subcommands
@@ -374,6 +443,33 @@ async fn main() -> Result<(), AppError> {
                     get_value_command(namespace, key, storage_backend, storage_path)
                 },
                 _ => Err("Unknown storage subcommand".into()),
+            }
+        }
+        Some(("federation", federation_matches)) => {
+            let storage_backend = federation_matches.get_one::<String>("storage-backend").unwrap();
+            let storage_path = federation_matches.get_one::<String>("storage-path").unwrap();
+            let federation_port = federation_matches.get_one::<String>("federation-port").unwrap().parse::<u16>().unwrap();
+            let bootstrap_nodes = federation_matches
+                .get_many::<String>("bootstrap-nodes")
+                .unwrap_or_default()
+                .map(|s| s.parse().expect("Invalid multiaddress format"))
+                .collect::<Vec<_>>();
+            let node_name = federation_matches.get_one::<String>("node-name").unwrap().to_string();
+
+            match federation_matches.subcommand() {
+                Some(("broadcast-proposal", broadcast_matches)) => {
+                    let proposal_file = broadcast_matches.get_one::<String>("proposal-file").unwrap();
+                    broadcast_proposal(proposal_file, storage_backend, storage_path, federation_port, bootstrap_nodes, node_name)
+                },
+                Some(("submit-vote", submit_matches)) => {
+                    let vote_file = submit_matches.get_one::<String>("vote-file").unwrap();
+                    submit_vote(vote_file, storage_backend, storage_path, federation_port, bootstrap_nodes, node_name)
+                },
+                Some(("execute-proposal", execute_matches)) => {
+                    let proposal_id = execute_matches.get_one::<String>("proposal-id").unwrap();
+                    execute_proposal(proposal_id, storage_backend, storage_path, federation_port, bootstrap_nodes, node_name)
+                },
+                _ => Err("Unknown federation subcommand".into()),
             }
         }
         _ => Err("Unknown command".into()),
@@ -1262,4 +1358,290 @@ fn create_admin_auth_context() -> AuthContext {
     auth.register_identity(identity);
     
     auth
+}
+
+/// Handle the broadcast-proposal federation command
+async fn broadcast_proposal(
+    proposal_file: &str,
+    storage_backend: &str,
+    storage_path: &str,
+    federation_port: u16,
+    bootstrap_nodes: Vec<libp2p::Multiaddr>,
+    node_name: String,
+) -> Result<(), AppError> {
+    info!("Broadcasting proposal from file: {}", proposal_file);
+    
+    // Read and parse the proposal file
+    let proposal_content = fs::read_to_string(proposal_file)
+        .map_err(|e| AppError::IO(e))?;
+    
+    // Parse the proposal content (simple format for now)
+    let lines: Vec<&str> = proposal_content.lines().collect();
+    if lines.len() < 4 {
+        return Err(AppError::Other(
+            "Invalid proposal file format. Expected at least 4 lines: ID, namespace, creator, options".to_string(),
+        ));
+    }
+    
+    let proposal_id = lines[0].trim().to_string();
+    let namespace = lines[1].trim().to_string();
+    let creator = lines[2].trim().to_string();
+    let options: Vec<String> = lines[3..]
+        .iter()
+        .map(|&s| s.trim().to_string())
+        .collect();
+    
+    // Create the proposal object
+    let proposal = icn_covm::federation::FederatedProposal {
+        proposal_id,
+        namespace,
+        options,
+        creator,
+        created_at: now() as i64,
+    };
+    
+    // Configure federation
+    let node_config = NodeConfig {
+        port: Some(federation_port),
+        bootstrap_nodes,
+        name: Some(node_name),
+        capabilities: vec!["voting".to_string()],
+        protocol_version: "1.0.0".to_string(),
+    };
+    
+    // Create and start network node
+    let mut network_node = match NetworkNode::new(node_config).await {
+        Ok(node) => node,
+        Err(e) => return Err(AppError::Federation(format!("Failed to create network node: {}", e))),
+    };
+    
+    info!("Local peer ID: {}", network_node.local_peer_id());
+    
+    // Start the network node
+    if let Err(e) = network_node.start().await {
+        return Err(AppError::Federation(format!("Failed to start network node: {}", e)));
+    }
+    
+    // Get a storage backend
+    let mut storage = create_storage_backend(storage_backend, storage_path)?;
+    
+    // Store the proposal locally
+    let federation_storage = network_node.federation_storage();
+    if let Err(e) = federation_storage.save_proposal(&mut storage, proposal.clone()) {
+        return Err(AppError::Federation(format!("Failed to store proposal: {}", e)));
+    }
+    
+    // Broadcast the proposal to the network
+    if let Err(e) = network_node.broadcast_proposal(proposal).await {
+        return Err(AppError::Federation(format!("Failed to broadcast proposal: {}", e)));
+    }
+    
+    info!("Proposal broadcasted successfully");
+    
+    // Keep the node running for a short time to ensure propagation
+    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+    
+    Ok(())
+}
+
+/// Handle the submit-vote federation command
+async fn submit_vote(
+    vote_file: &str,
+    storage_backend: &str,
+    storage_path: &str,
+    federation_port: u16,
+    bootstrap_nodes: Vec<libp2p::Multiaddr>,
+    node_name: String,
+) -> Result<(), AppError> {
+    info!("Submitting vote from file: {}", vote_file);
+    
+    // Read and parse the vote file
+    let vote_content = fs::read_to_string(vote_file)
+        .map_err(|e| AppError::IO(e))?;
+    
+    // Parse the vote content (simple format for now)
+    let lines: Vec<&str> = vote_content.lines().collect();
+    if lines.len() < 3 {
+        return Err(AppError::Other(
+            "Invalid vote file format. Expected at least 3 lines: proposal ID, voter ID, ranked choices".to_string(),
+        ));
+    }
+    
+    let proposal_id = lines[0].trim().to_string();
+    let voter = lines[1].trim().to_string();
+    
+    // Parse the ranked choices
+    let ranked_choices: Vec<f64> = lines[2]
+        .split(',')
+        .map(|s| s.trim().parse::<f64>()
+        .map_err(|_| AppError::Other(format!("Invalid ranked choice: {}", s))))
+        .collect::<Result<Vec<f64>, AppError>>()?;
+    
+    // Create the vote object
+    let vote = icn_covm::federation::FederatedVote {
+        proposal_id,
+        voter,
+        ranked_choices,
+        signature: "placeholder_signature".to_string(), // Real signature will be added later
+    };
+    
+    // Configure federation
+    let node_config = NodeConfig {
+        port: Some(federation_port),
+        bootstrap_nodes,
+        name: Some(node_name),
+        capabilities: vec!["voting".to_string()],
+        protocol_version: "1.0.0".to_string(),
+    };
+    
+    // Create and start network node
+    let mut network_node = match NetworkNode::new(node_config).await {
+        Ok(node) => node,
+        Err(e) => return Err(AppError::Federation(format!("Failed to create network node: {}", e))),
+    };
+    
+    info!("Local peer ID: {}", network_node.local_peer_id());
+    
+    // Start the network node
+    if let Err(e) = network_node.start().await {
+        return Err(AppError::Federation(format!("Failed to start network node: {}", e)));
+    }
+    
+    // Get a storage backend
+    let mut storage = create_storage_backend(storage_backend, storage_path)?;
+    
+    // Store the vote locally
+    let federation_storage = network_node.federation_storage();
+    if let Err(e) = federation_storage.save_vote(&mut storage, vote.clone()) {
+        return Err(AppError::Federation(format!("Failed to store vote: {}", e)));
+    }
+    
+    // Submit the vote to the network
+    if let Err(e) = network_node.submit_vote(vote).await {
+        return Err(AppError::Federation(format!("Failed to submit vote: {}", e)));
+    }
+    
+    info!("Vote submitted successfully");
+    
+    // Keep the node running for a short time to ensure propagation
+    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+    
+    Ok(())
+}
+
+/// Handle the execute-proposal federation command
+async fn execute_proposal(
+    proposal_id: &str,
+    storage_backend: &str,
+    storage_path: &str,
+    federation_port: u16,
+    bootstrap_nodes: Vec<libp2p::Multiaddr>,
+    node_name: String,
+) -> Result<(), AppError> {
+    info!("Executing proposal: {}", proposal_id);
+    
+    // Configure federation
+    let node_config = NodeConfig {
+        port: Some(federation_port),
+        bootstrap_nodes,
+        name: Some(node_name),
+        capabilities: vec!["voting".to_string()],
+        protocol_version: "1.0.0".to_string(),
+    };
+    
+    // Create and start network node
+    let mut network_node = match NetworkNode::new(node_config).await {
+        Ok(node) => node,
+        Err(e) => return Err(AppError::Federation(format!("Failed to create network node: {}", e))),
+    };
+    
+    info!("Local peer ID: {}", network_node.local_peer_id());
+    
+    // Start the network node
+    if let Err(e) = network_node.start().await {
+        return Err(AppError::Federation(format!("Failed to start network node: {}", e)));
+    }
+    
+    // Get a storage backend
+    let storage = create_storage_backend(storage_backend, storage_path)?;
+    
+    // Get the proposal
+    let federation_storage = network_node.federation_storage();
+    let proposal = match federation_storage.get_proposal(&storage, proposal_id) {
+        Ok(proposal) => proposal,
+        Err(e) => return Err(AppError::Federation(format!("Failed to get proposal: {}", e))),
+    };
+    
+    // Get all votes for this proposal
+    let votes = match federation_storage.get_votes(&storage, proposal_id) {
+        Ok(votes) => votes,
+        Err(e) => return Err(AppError::Federation(format!("Failed to get votes: {}", e))),
+    };
+    
+    if votes.is_empty() {
+        return Err(AppError::Federation(format!("No votes found for proposal {}", proposal_id)));
+    }
+    
+    info!("Found {} votes for proposal {}", votes.len(), proposal_id);
+    
+    // Convert votes to ranked ballots format
+    let ballots = federation_storage.prepare_ranked_ballots(&votes, proposal.options.len());
+    
+    // Create and configure a VM to execute the ranked vote
+    let mut vm = VM::new();
+    
+    // Prepare the stack with ballot data
+    for ballot in ballots {
+        for preference in ballot {
+            vm.push(preference);
+        }
+    }
+    
+    // Execute ranked vote operation
+    match vm.exec_op(&icn_covm::vm::Op::RankedVote {
+        candidates: proposal.options.len(),
+        ballots: votes.len(),
+    }) {
+        Ok(_) => {
+            // Get the winning option index
+            if let Some(winner_index) = vm.pop() {
+                let winner_index = winner_index as usize;
+                let winner_option = proposal.options.get(winner_index)
+                    .ok_or_else(|| AppError::Federation(format!("Invalid winner index: {}", winner_index)))?;
+                
+                info!("Proposal voting complete!");
+                info!("Winning option ({}/{}): {}", winner_index + 1, proposal.options.len(), winner_option);
+                
+                // Print out all options and votes for clarity
+                for (i, option) in proposal.options.iter().enumerate() {
+                    println!("Option {}: {}", i + 1, option);
+                }
+                
+                println!("\nTotal votes: {}", votes.len());
+                println!("WINNER: Option {} - {}", winner_index + 1, winner_option);
+            } else {
+                return Err(AppError::Federation("No result from ranked vote".to_string()));
+            }
+        }
+        Err(e) => {
+            return Err(AppError::VM(e));
+        }
+    }
+    
+    Ok(())
+}
+
+/// Helper to create the appropriate storage backend
+fn create_storage_backend(backend_type: &str, path: &str) -> Result<Box<dyn StorageBackend>, AppError> {
+    match backend_type {
+        "memory" => Ok(Box::new(InMemoryStorage::new())),
+        "file" => {
+            // Create directory if it doesn't exist
+            fs::create_dir_all(path)
+                .map_err(|e| AppError::IO(e))?;
+            
+            Ok(Box::new(FileStorage::new(path)))
+        },
+        _ => Err(AppError::Other(format!("Unknown storage backend: {}", backend_type))),
+    }
 }
