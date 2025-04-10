@@ -59,6 +59,29 @@ pub struct Pong {
     pub ttl: Option<Duration>,
 }
 
+/// Defines the scope of a proposal and which cooperatives can participate in voting
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ProposalScope {
+    /// Only members of the specified cooperative can vote
+    SingleCoop(String),
+    
+    /// Only members of the listed cooperatives can vote
+    MultiCoop(Vec<String>),
+    
+    /// All federation members can vote regardless of cooperative
+    GlobalFederation,
+}
+
+/// Defines how votes are counted for a proposal
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum VotingModel {
+    /// Each member gets one vote (traditional direct democracy)
+    OneMemberOneVote,
+    
+    /// Each cooperative gets one vote (federated representation)
+    OneCoopOneVote,
+}
+
 /// Proposal for federation-wide voting
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FederatedProposal {
@@ -76,6 +99,12 @@ pub struct FederatedProposal {
     
     /// Timestamp when the proposal was created
     pub created_at: i64,
+    
+    /// Scope defining which cooperatives can participate in voting
+    pub scope: ProposalScope,
+    
+    /// Model defining how votes are counted
+    pub voting_model: VotingModel,
 }
 
 /// Vote on a federated proposal
