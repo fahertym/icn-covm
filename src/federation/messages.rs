@@ -12,6 +12,12 @@ pub enum NetworkMessage {
     
     /// Pong response to a ping message
     Pong(Pong),
+    
+    /// Broadcast a proposal to the federation network
+    ProposalBroadcast(FederatedProposal),
+    
+    /// Submit a vote for a federated proposal
+    VoteSubmission(FederatedVote),
 }
 
 /// Message announcing a node's presence and capabilities on the network
@@ -51,4 +57,39 @@ pub struct Pong {
     
     /// Optional time-to-live for this node's connection
     pub ttl: Option<Duration>,
+}
+
+/// Proposal for federation-wide voting
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FederatedProposal {
+    /// Unique identifier for the proposal
+    pub proposal_id: String,
+    
+    /// Namespace in which this proposal belongs
+    pub namespace: String,
+    
+    /// Available voting options for this proposal
+    pub options: Vec<String>,
+    
+    /// Identifier of the proposal creator
+    pub creator: String,
+    
+    /// Timestamp when the proposal was created
+    pub created_at: i64,
+}
+
+/// Vote on a federated proposal
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FederatedVote {
+    /// Unique identifier of the proposal being voted on
+    pub proposal_id: String,
+    
+    /// Identifier of the voter
+    pub voter: String,
+    
+    /// Ranked preferences for each option (preference values)
+    pub ranked_choices: Vec<f64>,
+    
+    /// Signature to verify the vote's authenticity
+    pub signature: String,
 } 
