@@ -31,6 +31,18 @@ pub enum NetworkEvent {
         success: bool,
     },
     
+    /// A proposal was successfully broadcasted
+    ProposalBroadcasted,
+    
+    /// A proposal was received from the network
+    ProposalReceived,
+    
+    /// A vote was successfully submitted
+    VoteSubmitted,
+    
+    /// A vote was received from the network
+    VoteReceived,
+    
     /// Error occurred in the network layer
     Error(String),
 } 

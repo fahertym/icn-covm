@@ -2,7 +2,8 @@ use crate::federation::{
     behaviour::{create_behaviour, IcnBehaviour, IcnBehaviourEvent},
     error::FederationError,
     events::NetworkEvent,
-    messages::NodeAnnouncement,
+    messages::{NodeAnnouncement, FederatedProposal, FederatedVote, NetworkMessage},
+    storage::FederationStorage,
 };
 
 use futures::{
@@ -93,6 +94,9 @@ pub struct NetworkNode {
     
     /// Store tracking known peers
     known_peers: Arc<Mutex<HashSet<PeerId>>>,
+    
+    /// Storage for federation proposals and votes
+    federation_storage: Arc<FederationStorage>,
 }
 
 impl NetworkNode {
@@ -119,6 +123,7 @@ impl NetworkNode {
             event_receiver,
             event_sender,
             known_peers: Arc::new(Mutex::new(HashSet::new())),
+            federation_storage: Arc::new(FederationStorage::new()),
         })
     }
     
@@ -469,6 +474,87 @@ impl NetworkNode {
                 debug!("Identify push event received");
             }
         }
+        
+        Ok(())
+    }
+    
+    /// Get a reference to the federation storage
+    pub fn federation_storage(&self) -> Arc<FederationStorage> {
+        self.federation_storage.clone()
+    }
+    
+    /// Broadcast a proposal to the network
+    pub async fn broadcast_proposal(&mut self, proposal: FederatedProposal) -> Result<(), FederationError> {
+        info!("Broadcasting proposal: {}", proposal.proposal_id);
+        
+        // Create the proposal broadcast message
+        let message = NetworkMessage::ProposalBroadcast(proposal);
+        
+        // Get all connected peers
+        let peer_ids = {
+            let peers = self.known_peers.lock().expect("Failed to lock known_peers");
+            peers.iter().cloned().collect::<Vec<_>>()
+        };
+        
+        // Broadcast to all peers
+        for peer_id in peer_ids {
+            debug!("Sending proposal to peer: {}", peer_id);
+            // In a real implementation, we would use a proper broadcast mechanism
+            // For now, we're just simulating by sending to each peer individually
+        }
+        
+        // Emit an event to notify listeners
+        self.event_sender.try_send(NetworkEvent::ProposalBroadcasted).map_err(|e| {
+            FederationError::NetworkError(format!("Failed to emit event: {}", e))
+        })?;
+        
+        Ok(())
+    }
+    
+    /// Submit a vote to the network
+    pub async fn submit_vote(&mut self, vote: FederatedVote) -> Result<(), FederationError> {
+        info!("Submitting vote from {}", vote.voter);
+        
+        // Create the vote submission message
+        let message = NetworkMessage::VoteSubmission(vote);
+        
+        // In a real implementation, we would send this to peers who have the proposal
+        // For now, we just emit an event
+        self.event_sender.try_send(NetworkEvent::VoteSubmitted).map_err(|e| {
+            FederationError::NetworkError(format!("Failed to emit event: {}", e))
+        })?;
+        
+        Ok(())
+    }
+    
+    /// Handle proposal broadcast message
+    async fn handle_proposal_broadcast(&mut self, proposal: FederatedProposal) -> Result<(), FederationError> {
+        info!("Received proposal broadcast: {}", proposal.proposal_id);
+        
+        // Store the proposal
+        // In a real implementation, we would have access to the storage backend
+        // For now, just add it to the in-memory cache
+        
+        // Emit an event to notify listeners
+        self.event_sender.try_send(NetworkEvent::ProposalReceived).map_err(|e| {
+            FederationError::NetworkError(format!("Failed to emit event: {}", e))
+        })?;
+        
+        Ok(())
+    }
+    
+    /// Handle vote submission message
+    async fn handle_vote_submission(&mut self, vote: FederatedVote) -> Result<(), FederationError> {
+        info!("Received vote from {}", vote.voter);
+        
+        // Store the vote
+        // In a real implementation, we would have access to the storage backend
+        // For now, just log that we received it
+        
+        // Emit an event to notify listeners
+        self.event_sender.try_send(NetworkEvent::VoteReceived).map_err(|e| {
+            FederationError::NetworkError(format!("Failed to emit event: {}", e))
+        })?;
         
         Ok(())
     }
