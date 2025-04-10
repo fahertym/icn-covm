@@ -322,9 +322,7 @@ impl TypedVM {
         self.stack
             .pop()
             .ok_or_else(|| crate::vm::VMError::StackUnderflow {
-                op: op_name.to_string(),
-                needed: 1,
-                found: 0,
+                op_name: op_name.to_string(),
             })
     }
 
@@ -332,15 +330,13 @@ impl TypedVM {
     fn pop_two(&mut self, op_name: &str) -> Result<(TypedValue, TypedValue), crate::vm::VMError> {
         if self.stack.len() < 2 {
             return Err(crate::vm::VMError::StackUnderflow {
-                op: op_name.to_string(),
-                needed: 2,
-                found: self.stack.len(),
+                op_name: op_name.to_string(),
             });
         }
 
         let b = self.stack.pop().unwrap();
         let a = self.stack.pop().unwrap();
-        Ok((b, a))
+        Ok((a, b))
     }
 
     /// Execute a list of operations
