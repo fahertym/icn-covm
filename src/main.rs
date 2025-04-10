@@ -309,6 +309,27 @@ async fn main() -> Result<(), AppError> {
                                 .required(true)
                                 .index(1),
                         )
+                        .arg(
+                            Arg::new("scope")
+                                .long("scope")
+                                .value_name("SCOPE")
+                                .help("Scope of the proposal (single|multi|global)")
+                                .default_value("global"),
+                        )
+                        .arg(
+                            Arg::new("model")
+                                .long("model")
+                                .value_name("MODEL")
+                                .help("Voting model to use (member|coop)")
+                                .default_value("member"),
+                        )
+                        .arg(
+                            Arg::new("coops")
+                                .long("coops")
+                                .value_name("COOPS")
+                                .help("Comma-separated list of cooperative IDs (for multi scope)")
+                                .default_value(""),
+                        )
                 )
                 .subcommand(
                     Command::new("submit-vote")
@@ -459,7 +480,10 @@ async fn main() -> Result<(), AppError> {
             match federation_matches.subcommand() {
                 Some(("broadcast-proposal", broadcast_matches)) => {
                     let proposal_file = broadcast_matches.get_one::<String>("proposal-file").unwrap();
-                    broadcast_proposal(proposal_file, storage_backend, storage_path, federation_port, bootstrap_nodes, node_name)
+                    let scope = broadcast_matches.get_one::<String>("scope").unwrap();
+                    let model = broadcast_matches.get_one::<String>("model").unwrap();
+                    let coops = broadcast_matches.get_one::<String>("coops").unwrap();
+                    broadcast_proposal(proposal_file, storage_backend, storage_path, federation_port, bootstrap_nodes, node_name, scope, model, coops)
                 },
                 Some(("submit-vote", submit_matches)) => {
                     let vote_file = submit_matches.get_one::<String>("vote-file").unwrap();
@@ -1368,6 +1392,9 @@ async fn broadcast_proposal(
     federation_port: u16,
     bootstrap_nodes: Vec<libp2p::Multiaddr>,
     node_name: String,
+    scope: &str,
+    model: &str,
+    coops: &str,
 ) -> Result<(), AppError> {
     info!("Broadcasting proposal from file: {}", proposal_file);
     
@@ -1391,6 +1418,30 @@ async fn broadcast_proposal(
         .map(|&s| s.trim().to_string())
         .collect();
     
+    // Parse scope
+    let proposal_scope = match scope {
+        "single" => icn_covm::federation::ProposalScope::SingleCoop(creator.clone()),
+        "multi" => {
+            let coop_list: Vec<String> = coops.split(',')
+                .filter(|s| !s.is_empty())
+                .map(|s| s.trim().to_string())
+                .collect();
+            
+            if coop_list.is_empty() {
+                return Err(AppError::Other("Multi-coop scope requires a list of cooperatives using --coops".to_string()));
+            }
+            
+            icn_covm::federation::ProposalScope::MultiCoop(coop_list)
+        },
+        _ => icn_covm::federation::ProposalScope::GlobalFederation,
+    };
+    
+    // Parse voting model
+    let voting_model = match model {
+        "coop" => icn_covm::federation::VotingModel::OneCoopOneVote,
+        _ => icn_covm::federation::VotingModel::OneMemberOneVote,
+    };
+    
     // Create the proposal object
     let proposal = icn_covm::federation::FederatedProposal {
         proposal_id,
@@ -1398,6 +1449,8 @@ async fn broadcast_proposal(
         options,
         creator,
         created_at: now() as i64,
+        scope: proposal_scope,
+        voting_model,
     };
     
     // Configure federation
@@ -1512,7 +1565,7 @@ async fn submit_vote(
     
     // Store the vote locally
     let federation_storage = network_node.federation_storage();
-    if let Err(e) = federation_storage.save_vote(&mut storage, vote.clone()) {
+    if let Err(e) = federation_storage.save_vote(&mut storage, vote.clone(), None) {
         return Err(AppError::Federation(format!("Failed to store vote: {}", e)));
     }
     
@@ -1584,8 +1637,61 @@ async fn execute_proposal(
     
     info!("Found {} votes for proposal {}", votes.len(), proposal_id);
     
-    // Convert votes to ranked ballots format
-    let ballots = federation_storage.prepare_ranked_ballots(&votes, proposal.options.len());
+    // Create a map of voter identities for coop association (in a real system, these would be fetched from an identity store)
+    let mut voter_identities = std::collections::HashMap::new();
+    
+    // For demo purposes, we'll create mock identities for the voters
+    // In a real system, we'd look these up from the identity system
+    for vote in &votes {
+        if !voter_identities.contains_key(&vote.voter) {
+            // Create a simple mock identity - in a real system, this would be loaded from storage
+            let mut identity = icn_covm::identity::Identity::new(&vote.voter, "member");
+            
+            // For demo purposes, assign voters to coops based on their name
+            // (In a real system, this metadata would come from the identity system)
+            let coop_id = match vote.voter.as_str() {
+                "alice" => "coopA",
+                "bob" => "coopB",
+                "carol" => "coopA", // Carol and Alice are in the same coop
+                "dave" => "coopC",
+                _ => "unknown",     // Default for any other voters
+            };
+            
+            identity.add_metadata("coop_id", coop_id);
+            voter_identities.insert(vote.voter.clone(), identity);
+        }
+    }
+    
+    // Convert votes to ranked ballots format based on the voting model
+    let ballots = federation_storage.prepare_ranked_ballots(&votes, &proposal, &voter_identities);
+    
+    // Print voting model info
+    match proposal.voting_model {
+        icn_covm::federation::VotingModel::OneMemberOneVote => {
+            info!("Using OneMemberOneVote model: All {} votes will be counted individually", votes.len());
+        },
+        icn_covm::federation::VotingModel::OneCoopOneVote => {
+            info!("Using OneCoopOneVote model: Only one vote per cooperative will be counted");
+            
+            // Count unique coops
+            let mut unique_coops = std::collections::HashSet::new();
+            for vote in &votes {
+                if let Some(identity) = voter_identities.get(&vote.voter) {
+                    if let Some(coop_id) = identity.get_metadata("coop_id") {
+                        unique_coops.insert(coop_id);
+                    } else {
+                        // If no coop_id, use the voter ID as a fallback
+                        unique_coops.insert(&vote.voter);
+                    }
+                } else {
+                    unique_coops.insert(&vote.voter);
+                }
+            }
+            
+            info!("Votes from {} voters representing {} cooperatives", 
+                  votes.len(), unique_coops.len());
+        }
+    }
     
     // Create and configure a VM to execute the ranked vote
     let mut vm = VM::new();
@@ -1600,7 +1706,7 @@ async fn execute_proposal(
     // Execute ranked vote operation
     match vm.exec_op(&icn_covm::vm::Op::RankedVote {
         candidates: proposal.options.len(),
-        ballots: votes.len(),
+        ballots: ballots.len(),
     }) {
         Ok(_) => {
             // Get the winning option index
@@ -1618,6 +1724,11 @@ async fn execute_proposal(
                 }
                 
                 println!("\nTotal votes: {}", votes.len());
+                println!("Voting model: {}", match proposal.voting_model {
+                    icn_covm::federation::VotingModel::OneMemberOneVote => "One Member, One Vote",
+                    icn_covm::federation::VotingModel::OneCoopOneVote => "One Cooperative, One Vote",
+                });
+                println!("Eligible votes counted: {}", ballots.len());
                 println!("WINNER: Option {} - {}", winner_index + 1, winner_option);
             } else {
                 return Err(AppError::Federation("No result from ranked vote".to_string()));

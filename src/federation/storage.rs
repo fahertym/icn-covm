@@ -1,4 +1,4 @@
-use crate::federation::messages::{FederatedProposal, FederatedVote, ProposalScope};
+use crate::federation::messages::{FederatedProposal, FederatedVote, ProposalScope, VotingModel};
 use crate::storage::traits::StorageExtensions;
 use crate::storage::errors::{StorageResult, StorageError};
 use crate::identity::Identity;
@@ -188,9 +188,55 @@ impl FederationStorage {
     }
     
     /// Convert votes to a format suitable for the ranked vote algorithm
-    pub fn prepare_ranked_ballots(&self, votes: &[FederatedVote], option_count: usize) -> Vec<Vec<f64>> {
-        votes.iter()
-            .map(|vote| vote.ranked_choices.clone())
-            .collect()
+    /// This method implements the voting model logic:
+    /// - OneMemberOneVote: Uses all votes as-is
+    /// - OneCoopOneVote: Only keeps one vote per cooperative (the latest one)
+    pub fn prepare_ranked_ballots(&self, votes: &[FederatedVote], 
+                                 proposal: &FederatedProposal,
+                                 voter_identities: &HashMap<String, Identity>)
+                                 -> Vec<Vec<f64>> {
+        match proposal.voting_model {
+            VotingModel::OneMemberOneVote => {
+                // Use all votes directly
+                votes.iter()
+                    .map(|vote| vote.ranked_choices.clone())
+                    .collect()
+            },
+            VotingModel::OneCoopOneVote => {
+                // We need to group votes by cooperative and only use the latest vote from each coop
+                let mut coop_votes: HashMap<String, (FederatedVote, usize)> = HashMap::new();
+                
+                // Process votes in order (assuming later votes in the array are more recent)
+                for (idx, vote) in votes.iter().enumerate() {
+                    // If we have identity info for this voter, use it to determine their coop
+                    if let Some(identity) = voter_identities.get(&vote.voter) {
+                        if let Some(coop_id) = identity.get_metadata("coop_id") {
+                            // Either insert this vote or replace an existing one for this coop
+                            if let Some((_, existing_idx)) = coop_votes.get(coop_id) {
+                                if idx > *existing_idx {
+                                    // This vote is more recent, replace the existing one
+                                    coop_votes.insert(coop_id.clone(), (vote.clone(), idx));
+                                }
+                            } else {
+                                // First vote from this coop
+                                coop_votes.insert(coop_id.clone(), (vote.clone(), idx));
+                            }
+                        } else {
+                            // If we can't determine the coop, still include the vote
+                            // but use the voter ID as the key to avoid duplicates
+                            coop_votes.insert(vote.voter.clone(), (vote.clone(), idx));
+                        }
+                    } else {
+                        // No identity info, use the voter ID as the key
+                        coop_votes.insert(vote.voter.clone(), (vote.clone(), idx));
+                    }
+                }
+                
+                // Extract just the votes from the resulting map
+                coop_votes.values()
+                    .map(|(vote, _)| vote.ranked_choices.clone())
+                    .collect()
+            }
+        }
     }
 } 
