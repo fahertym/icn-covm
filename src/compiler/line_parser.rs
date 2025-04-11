@@ -1,4 +1,4 @@
-use super::{common, CompilerError, SourcePosition, macros::ProposalLifecycleMacro};
+use super::{common, CompilerError, SourcePosition, macros::ProposalLifecycleMacro, proposal_block};
 use crate::vm::Op;
 use chrono;
 
@@ -559,8 +559,8 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
                 }
             }
 
-            // Create macro instance
-            let macro_block = ProposalLifecycleMacro::new(
+            // Create macro instance with empty blocks
+            let mut macro_block = ProposalLifecycleMacro::new(
                 proposal_id,
                 quorum,
                 threshold,
@@ -568,10 +568,12 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
                 title,
                 created_by,
                 created_at,
+                Vec::new(), // Passed block will be populated by parse_proposal_block
+                None, // Failed block will be populated by parse_proposal_block
             );
 
             // Return a special op that will be expanded later
-            Ok(Op::Macro(Box::new(macro_block)))
+            Ok(Op::Macro("proposal_lifecycle".to_string()))
         },
         _ => Err(CompilerError::UnknownCommand(
             command.to_string(),
@@ -620,6 +622,50 @@ pub fn parse_block(
                 super::match_block::parse_match_block(lines, start_line, current_pos)?
             } else if line.trim().starts_with("loop ") {
                 super::loop_block::parse_loop_block(lines, start_line, current_pos)?
+            } else if line.trim() == "if passed:" {
+                // Handle if passed block
+                let mut if_passed_lines = Vec::new();
+                *start_line += 1;
+                
+                while *start_line < lines.len() {
+                    let if_line = &lines[*start_line];
+                    let if_indent = common::get_indent(if_line);
+                    
+                    if !if_line.trim().is_empty() && if_indent <= base_indent {
+                        break;
+                    } else if if_line.trim().is_empty() {
+                        *start_line += 1;
+                        continue;
+                    }
+                    
+                    if_passed_lines.push(if_line.clone());
+                    *start_line += 1;
+                }
+                
+                // Create a special op for if passed block
+                Op::IfPassed(parse_block(&if_passed_lines, &mut 0, base_indent + 1, current_pos)?)
+            } else if line.trim() == "else:" {
+                // Handle else block
+                let mut else_lines = Vec::new();
+                *start_line += 1;
+                
+                while *start_line < lines.len() {
+                    let else_line = &lines[*start_line];
+                    let else_indent = common::get_indent(else_line);
+                    
+                    if !else_line.trim().is_empty() && else_indent <= base_indent {
+                        break;
+                    } else if else_line.trim().is_empty() {
+                        *start_line += 1;
+                        continue;
+                    }
+                    
+                    else_lines.push(else_line.clone());
+                    *start_line += 1;
+                }
+                
+                // Create a special op for else block
+                Op::Else(parse_block(&else_lines, &mut 0, base_indent + 1, current_pos)?)
             } else {
                 return Err(CompilerError::UnknownBlockType(
                     line.trim().to_string(),

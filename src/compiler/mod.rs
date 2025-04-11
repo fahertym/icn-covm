@@ -9,9 +9,10 @@ pub mod function_block;
 pub mod if_block;
 pub mod line_parser;
 pub mod loop_block;
-pub mod match_block;
-pub mod while_block;
 pub mod macros;
+pub mod match_block;
+pub mod proposal_block;
+pub mod while_block;
 
 // Re-export the parser functions
 pub use function_block::parse_function_block;
@@ -158,6 +159,18 @@ pub enum CompilerError {
     /// Invalid threshold value for proposal_lifecycle macro
     #[error("Invalid threshold value for proposal_lifecycle at line {0}, column {1}")]
     InvalidThresholdValue(usize, usize),
+
+    /// Duplicate if passed block in proposal_lifecycle macro
+    #[error("Duplicate if passed block in proposal_lifecycle at line {0}, column {1}")]
+    DuplicateIfPassedBlock(usize, usize),
+    
+    /// Duplicate else block in proposal_lifecycle macro
+    #[error("Duplicate else block in proposal_lifecycle at line {0}, column {1}")]
+    DuplicateElseBlock(usize, usize),
+    
+    /// Else block without if passed block in proposal_lifecycle macro
+    #[error("Else block without if passed block in proposal_lifecycle at line {0}, column {1}")]
+    ElseWithoutIfPassed(usize, usize),
 }
 
 /// Source position information for error reporting

@@ -491,6 +491,25 @@ pub enum Op {
         /// The signature to verify (base64 encoded)
         signature: String,
     },
+
+    /// Execute a block of operations if a proposal passes
+    ///
+    /// This operation checks if a proposal has passed (met quorum and threshold)
+    /// and executes the provided block of operations if it has.
+    IfPassed(Vec<Op>),
+    
+    /// Execute a block of operations if a proposal fails
+    ///
+    /// This operation executes the provided block of operations if a proposal
+    /// has failed (did not meet quorum or threshold).
+    Else(Vec<Op>),
+
+    /// Execute a macro
+    ///
+    /// This operation executes a macro, which is a special operation that
+    /// expands into a sequence of other operations.
+    #[serde(skip)]
+    Macro(String),
 }
 
 #[derive(Debug)]
@@ -1196,6 +1215,24 @@ impl VM {
                         self.stack.push(0.0); // false
                         self.emit_event("identity_error", &format!("{}", err));
                     }
+                },
+                Op::IfPassed(block) => {
+                    let condition = self.pop_one("IfPassed condition")?;
+                    if condition == 0.0 {
+                        self.execute_inner(block)?;
+                    }
+                },
+                Op::Else(block) => {
+                    let condition = self.pop_one("Else condition")?;
+                    if condition == 0.0 {
+                        self.execute_inner(block)?;
+                    }
+                },
+                Op::Macro(macro_impl) => {
+                    // Implement macro execution logic
+                    // This is a placeholder and should be replaced with actual implementation
+                    println!("Macro execution not implemented");
+                    Ok(())
                 },
             }
 

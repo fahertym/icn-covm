@@ -18,4 +18,14 @@ proposal_lifecycle "prop-003" quorum=0.8 threshold=0.7 title="Community Grant Pr
     emit "Executing proposal prop-003..."
     transfer "treasury" "community_grants" 2000.0 "Funding community projects"
     emit "Grant program initialized"
+}
+
+# Proposal with conditional execution
+proposal_lifecycle "prop-004" quorum=0.6 threshold=0.75 title="Repair Budget" author="matt" {
+    emit "Executing proposal prop-004..."
+    if passed:
+        emit "Proposal passed — allocating repair funds"
+        transfer "treasury" "repair_fund" 1000.0 "Allocated for repairs"
+    else:
+        emit "Proposal failed — no funds allocated"
 } 
