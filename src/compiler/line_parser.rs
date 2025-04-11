@@ -1,5 +1,6 @@
 use super::{common, CompilerError, SourcePosition, macros::ProposalLifecycleMacro};
 use crate::vm::Op;
+use chrono;
 
 /// Parse a single line of DSL code
 pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> {
@@ -525,7 +526,7 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
             Ok(Op::Balance { resource: resource.to_string(), account: account.to_string() })
         },
         "proposal_lifecycle" => {
-            // Format: proposal_lifecycle "id" quorum=X threshold=Y { ... }
+            // Format: proposal_lifecycle "id" quorum=X threshold=Y title="Title" author="Author" { ... }
             let proposal_id = parts.next()
                 .ok_or(CompilerError::MissingProposalId(pos.line, pos.column))?
                 .trim_matches('"')
@@ -533,6 +534,9 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
 
             let mut quorum = 0.6; // Default value
             let mut threshold = 0.5; // Default value
+            let mut title = "Untitled Proposal".to_string(); // Default value
+            let mut created_by = "anonymous".to_string(); // Default value
+            let created_at = chrono::Utc::now().timestamp() as f64; // Current timestamp
 
             // Parse optional parameters
             while let Some(param) = parts.next() {
@@ -544,6 +548,14 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
                     threshold = param.trim_start_matches("threshold=")
                         .parse::<f64>()
                         .map_err(|_| CompilerError::InvalidThresholdValue(pos.line, pos.column))?;
+                } else if param.starts_with("title=") {
+                    title = param.trim_start_matches("title=")
+                        .trim_matches('"')
+                        .to_string();
+                } else if param.starts_with("author=") {
+                    created_by = param.trim_start_matches("author=")
+                        .trim_matches('"')
+                        .to_string();
                 }
             }
 
@@ -553,6 +565,9 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
                 quorum,
                 threshold,
                 Vec::new(), // Execution block will be populated by parse_block
+                title,
+                created_by,
+                created_at,
             );
 
             // Return a special op that will be expanded later
