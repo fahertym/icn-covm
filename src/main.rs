@@ -11,6 +11,7 @@ use icn_covm::storage::implementations::file_storage::FileStorage;
 use icn_covm::storage::utils::now;
 use icn_covm::federation::{NetworkNode, NodeConfig};
 use icn_covm::federation::messages::{ProposalScope, VotingModel};
+use icn_covm::cli::proposal::{proposal_command, handle_proposal_command};
 
 use clap::{Arg, Command, ArgAction};
 use std::collections::{HashMap, HashSet};
@@ -215,6 +216,7 @@ async fn main() -> Result<(), AppError> {
                         )
                 )
         )
+        .subcommand(proposal_command())
         .subcommand(
             Command::new("storage")
                 .about("Storage inspection commands")
@@ -465,6 +467,21 @@ async fn main() -> Result<(), AppError> {
             }
             _ => Err("Unknown identity subcommand".into()),
         },
+        Some(("proposal", proposal_matches)) => {
+            // Create VM and auth context for proposal commands
+            let mut vm = VM::new();
+            let auth_context = create_demo_auth_context();
+            vm.set_auth_context(auth_context.clone());
+            vm.set_namespace("demo");
+            
+            // Set up storage
+            let storage_backend = proposal_matches.get_one::<String>("storage-backend").unwrap_or(&"memory".to_string());
+            let storage_path = proposal_matches.get_one::<String>("storage-path").unwrap_or(&"./storage".to_string());
+            let storage = create_storage_backend(storage_backend, storage_path)?;
+            vm.set_storage_backend(storage);
+            
+            handle_proposal_command(proposal_matches, &mut vm, &auth_context)
+        }
         Some(("storage", storage_matches)) => {
             let storage_backend = storage_matches.get_one::<String>("storage-backend").unwrap();
             let storage_path = storage_matches.get_one::<String>("storage-path").unwrap();
