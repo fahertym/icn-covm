@@ -1,4 +1,4 @@
-use super::{common, CompilerError, SourcePosition};
+use super::{common, CompilerError, SourcePosition, macros::ProposalLifecycleMacro};
 use crate::vm::Op;
 
 /// Parse a single line of DSL code
@@ -523,6 +523,40 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
             ))?;
             
             Ok(Op::Balance { resource: resource.to_string(), account: account.to_string() })
+        },
+        "proposal_lifecycle" => {
+            // Format: proposal_lifecycle "id" quorum=X threshold=Y { ... }
+            let proposal_id = parts.next()
+                .ok_or(CompilerError::MissingProposalId(pos.line, pos.column))?
+                .trim_matches('"')
+                .to_string();
+
+            let mut quorum = 0.6; // Default value
+            let mut threshold = 0.5; // Default value
+
+            // Parse optional parameters
+            while let Some(param) = parts.next() {
+                if param.starts_with("quorum=") {
+                    quorum = param.trim_start_matches("quorum=")
+                        .parse::<f64>()
+                        .map_err(|_| CompilerError::InvalidQuorumValue(pos.line, pos.column))?;
+                } else if param.starts_with("threshold=") {
+                    threshold = param.trim_start_matches("threshold=")
+                        .parse::<f64>()
+                        .map_err(|_| CompilerError::InvalidThresholdValue(pos.line, pos.column))?;
+                }
+            }
+
+            // Create macro instance
+            let macro_block = ProposalLifecycleMacro::new(
+                proposal_id,
+                quorum,
+                threshold,
+                Vec::new(), // Execution block will be populated by parse_block
+            );
+
+            // Return a special op that will be expanded later
+            Ok(Op::Macro(Box::new(macro_block)))
         },
         _ => Err(CompilerError::UnknownCommand(
             command.to_string(),

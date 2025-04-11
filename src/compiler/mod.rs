@@ -11,6 +11,7 @@ pub mod line_parser;
 pub mod loop_block;
 pub mod match_block;
 pub mod while_block;
+pub mod macros;
 
 // Re-export the parser functions
 pub use function_block::parse_function_block;
@@ -145,6 +146,18 @@ pub enum CompilerError {
     /// Syntax error in parsing
     #[error("Syntax error: {details}")]
     SyntaxError { details: String },
+
+    /// Missing proposal ID for proposal_lifecycle macro
+    #[error("Missing proposal ID for proposal_lifecycle at line {0}, column {1}")]
+    MissingProposalId(usize, usize),
+
+    /// Invalid quorum value for proposal_lifecycle macro
+    #[error("Invalid quorum value for proposal_lifecycle at line {0}, column {1}")]
+    InvalidQuorumValue(usize, usize),
+
+    /// Invalid threshold value for proposal_lifecycle macro
+    #[error("Invalid threshold value for proposal_lifecycle at line {0}, column {1}")]
+    InvalidThresholdValue(usize, usize),
 }
 
 /// Source position information for error reporting
