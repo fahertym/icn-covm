@@ -5,6 +5,7 @@ pub mod storage;
 pub mod vm;
 pub mod identity;
 pub mod federation;
+pub mod governance;
 
 #[cfg(feature = "typed-values")]
 pub mod typed;
