@@ -1,12 +1,13 @@
 use chrono::{DateTime, Utc, Duration};
 use serde::{Serialize, Deserialize};
-use crate::storage::traits::Storage;
+use crate::storage::traits::{StorageBackend, StorageExtensions};
 use crate::storage::errors::StorageError;
 use crate::storage::auth::AuthContext;
 use std::collections::HashMap;
 use crate::vm::VM;
 use crate::compiler::parse_dsl;
 use crate::vm::Op;
+use serde_json; // Import serde_json for serialization
 // Placeholder for identity type, replace with actual type later
 type Identity = String;
 // Placeholder for attachment metadata, replace with actual type later
@@ -293,7 +294,11 @@ impl ProposalLifecycle {
                  let auth_context = vm.auth_context.as_ref();
                  let namespace = "governance";
                  let key = format!("proposals/{}/lifecycle", self.id);
-                 storage.set_json(auth_context, namespace, &key, self)?;
+                 // Serialize self to JSON bytes
+                 let proposal_bytes = serde_json::to_vec(self)
+                    .map_err(|e| format!("Failed to serialize proposal state: {}", e))?;
+                 // Use the object-safe `set` method from StorageBackend
+                 storage.set(auth_context, namespace, &key, proposal_bytes)?;
                  println!("Proposal {} final state (Executed, Status: {:?}) saved.", self.id, self.execution_status);
 
              } else {
@@ -321,7 +326,11 @@ impl ProposalLifecycle {
                  let auth_context = vm.auth_context.as_ref();
                  let namespace = "governance";
                  let key = format!("proposals/{}/lifecycle", self.id);
-                 storage.set_json(auth_context, namespace, &key, self)?;
+                 // Serialize self to JSON bytes
+                 let proposal_bytes = serde_json::to_vec(self)
+                    .map_err(|e| format!("Failed to serialize proposal state: {}", e))?;
+                 // Use the object-safe `set` method from StorageBackend
+                 storage.set(auth_context, namespace, &key, proposal_bytes)?;
                  println!("Proposal {} state transitioned to Rejected.", self.id);
                  // Emit rejection event?
                  let event_op = Op::EmitEvent {
@@ -358,7 +367,11 @@ impl ProposalLifecycle {
             let auth_context = vm.auth_context.as_ref();
             let namespace = "governance";
             let key = format!("proposals/{}/lifecycle", self.id);
-            storage.set_json(auth_context, namespace, &key, self)?;
+            // Serialize self to JSON bytes
+            let proposal_bytes = serde_json::to_vec(self)
+                .map_err(|e| format!("Failed to serialize proposal state: {}", e))?;
+            // Use the object-safe `set` method from StorageBackend
+            storage.set(auth_context, namespace, &key, proposal_bytes)?;
             println!("Proposal {} state transitioned to Expired.", self.id);
             // Emit expiration event?
              let event_op = Op::EmitEvent {

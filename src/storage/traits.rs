@@ -102,12 +102,6 @@ impl<S: StorageBackend> StorageExtensions for S {
     }
 }
 
-// Supertrait combining StorageBackend and StorageExtensions
-pub trait Storage: StorageBackend + StorageExtensions {}
-
-// Blanket implementation for the supertrait
-impl<T: StorageBackend + StorageExtensions> Storage for T {}
-
 // Potential trait for federated operations (optional for now)
 // pub trait FederatedStorageBackend: StorageBackend {
 //     fn push(&self, remote_target: &str, namespace: &str) -> StorageResult<()>;

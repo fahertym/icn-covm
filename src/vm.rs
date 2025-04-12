@@ -3,7 +3,7 @@
 use crate::events::Event;
 use crate::storage::auth::AuthContext;
 use crate::storage::errors::{StorageError, StorageResult};
-use crate::storage::traits::{StorageBackend, StorageExtensions, Storage};
+use crate::storage::traits::{StorageBackend, StorageExtensions};
 use crate::storage::implementations::in_memory::InMemoryStorage;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -590,7 +590,7 @@ pub struct VM {
     pub namespace: String,
     
     /// Storage backend for persistent data
-    pub storage_backend: Option<Box<dyn Storage + Send + Sync>>,
+    pub storage_backend: Option<Box<dyn StorageBackend + Send + Sync>>,
 }
 
 impl VM {
@@ -611,7 +611,7 @@ impl VM {
     }
 
     /// Create a new VM with a specific storage backend
-    pub fn with_storage_backend<S: Storage + Send + Sync + 'static>(backend: S) -> Self {
+    pub fn with_storage_backend<S: StorageBackend + Send + Sync + 'static>(backend: S) -> Self {
         Self {
             stack: Vec::new(),
             memory: HashMap::new(),
@@ -1268,7 +1268,7 @@ impl VM {
     }
     
     /// Set the storage backend for this VM
-    pub fn set_storage_backend<T: Storage + Send + Sync + 'static>(&mut self, backend: T) {
+    pub fn set_storage_backend<T: StorageBackend + Send + Sync + 'static>(&mut self, backend: T) {
         self.storage_backend = Some(Box::new(backend));
     }
     
@@ -1597,7 +1597,7 @@ impl VM {
     /// Helper method to perform a storage operation with proper error handling and borrow management
     fn storage_operation<F, T>(&mut self, _operation: &str, mut f: F) -> Result<T, VMError>
     where
-        F: FnMut(&mut Box<dyn Storage + Send + Sync>, Option<&AuthContext>, &str) -> StorageResult<(T, Option<VMEvent>)>,
+        F: FnMut(&mut Box<dyn StorageBackend + Send + Sync>, Option<&AuthContext>, &str) -> StorageResult<(T, Option<VMEvent>)>,
     {
         // Check if we have a storage backend set
         let storage = match &mut self.storage_backend {
