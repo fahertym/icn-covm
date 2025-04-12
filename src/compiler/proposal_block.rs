@@ -1,5 +1,4 @@
-use super::{common, line_parser, CompilerError, SourcePosition};
-use crate::vm::Op;
+use super::{common, CompilerError, SourcePosition};
 
 /// Parse a proposal block with if passed and else blocks
 pub fn parse_proposal_block(

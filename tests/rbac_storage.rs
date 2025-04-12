@@ -1,4 +1,4 @@
-use icn_covm::storage::{AuthContext, InMemoryStorage, StorageBackend};
+use icn_covm::storage::StorageBackend;
 use icn_covm::storage::errors::{StorageError, StorageResult};
 use icn_covm::storage::traits::StorageExtensions;
 use serde::{Serialize, Deserialize};

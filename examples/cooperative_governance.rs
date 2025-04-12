@@ -6,60 +6,103 @@ use icn_covm::storage::{
     AuthContext, InMemoryStorage, ResourceAccount, StorageBackend, StorageEvent, StorageResult
 };
 
-// Simple proposal structure
+// Define a simple data structure for testing
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct ProposalData {
+    id: String,
     title: String,
     description: String,
     creator: String,
-    options: Vec<String>,
-    created_at: u64,
     status: String,
+    votes_for: u32,
+    votes_against: u32,
 }
 
-// Simple vote structure
+// Define Vote structure
 #[derive(Serialize, Deserialize, Debug, Clone)]
-struct VoteData {
-    proposal_id: String,
+struct Vote {
     voter: String,
-    choice: String,
-    weight: f64,
+    choice: String, // "for", "against", "abstain"
+    reason: Option<String>,
     timestamp: u64,
 }
 
-// Helper trait to support JSON ops with resource accounting
-trait JsonWithResources: StorageBackend {
+// Helper trait for JSON storage with resource accounting (adapt as needed)
+trait JsonStorageHelper: StorageBackend {
     fn set_json_with_resources<T: Serialize>(
         &mut self,
-        auth: &AuthContext,
+        auth: Option<&AuthContext>,
+        namespace: &str,
         key: &str,
         value: &T,
-        account: &mut ResourceAccount,
     ) -> StorageResult<()> {
-        // Serialize to JSON string
-        let json = serde_json::to_string_pretty(value)
-            .map_err(|e| icn_covm::storage::StorageError::SerializationError(e.to_string()))?;
-        
-        // Store with resource accounting
-        self.set_with_resources(auth, key, &json, account)
+        let json = serde_json::to_vec(value)
+            .map_err(|e| icn_covm::storage::StorageError::SerializationError { details: e.to_string() })?;
+        self.set(auth, namespace, key, json)
     }
     
-    fn get_json<T: for<'de> Deserialize<'de>>(&self, key: &str) -> StorageResult<T> {
-        let json = self.get(key)?;
-        serde_json::from_str(&json)
-            .map_err(|e| icn_covm::storage::StorageError::SerializationError(e.to_string()))
+    fn get_json<T: for<'de> Deserialize<'de>>(
+        &self,
+        auth: Option<&AuthContext>,
+        namespace: &str,
+        key: &str,
+    ) -> StorageResult<T> {
+        let bytes = self.get(auth, namespace, key)?;
+        serde_json::from_slice(&bytes)
+            .map_err(|e| icn_covm::storage::StorageError::SerializationError { details: e.to_string() })
     }
 }
 
-// Implement for InMemoryStorage
-impl JsonWithResources for InMemoryStorage {}
+impl<S: StorageBackend> JsonStorageHelper for S {}
 
 fn main() -> Result<(), Box<dyn Error>> {
-    // Initialize storage
+    println!("--- Cooperative Governance Example ---");
+    
+    // 1. Initialize Storage Backend
     let mut storage = InMemoryStorage::new();
+    let namespace = "governance"; // Define a namespace
     
-    println!("=== Cooperative Governance Demo ===\n");
+    // 2. Create Auth Contexts & Identities
+    let admin_id = "admin_user";
+    let member1_id = "member_1";
+    let member2_id = "member_2";
     
+    let admin_auth = AuthContext::new(admin_id).with_roles(vec!["admin".to_string()]); // Roles applied to "default" namespace by default
+    let member1_auth = AuthContext::new(member1_id).with_roles(vec!["member".to_string()]);
+    let member2_auth = AuthContext::new(member2_id).with_roles(vec!["member".to_string()]);
+    
+    // Initialize storage accounts/namespaces
+    storage.create_account(Some(&admin_auth), admin_id, 1024 * 1024)?; 
+    storage.create_account(Some(&admin_auth), member1_id, 1024 * 1024)?; 
+    storage.create_account(Some(&admin_auth), member2_id, 1024 * 1024)?;
+    storage.create_namespace(Some(&admin_auth), namespace, 1024 * 1024, None)?; 
+    
+    // 3. Store Member Profiles (using admin privileges)
+    let admin_profile = MemberProfile::new(Identity::new(admin_id, "admin"), icn_covm::storage::now());
+    storage.set_json_with_resources(Some(&admin_auth), namespace, &format!("members/{}", admin_id), &admin_profile)?;
+    let member1_profile = MemberProfile::new(Identity::new(member1_id, "member"), icn_covm::storage::now());
+    storage.set_json_with_resources(Some(&admin_auth), namespace, &format!("members/{}", member1_id), &member1_profile)?;
+    let member2_profile = MemberProfile::new(Identity::new(member2_id, "member"), icn_covm::storage::now());
+    storage.set_json_with_resources(Some(&admin_auth), namespace, &format!("members/{}", member2_id), &member2_profile)?;
+    
+    // 4. Create a Proposal (by a member)
+    let proposal = ProposalData {
+        id: "prop-001".to_string(),
+        title: "Increase Budget for Snacks".to_string(),
+        description: "Allocate an additional $50 monthly for snacks.".to_string(),
+        creator: member1_id.to_string(),
+        status: "open".to_string(),
+        votes_for: 0,
+        votes_against: 0,
+    };
+    storage.set_json_with_resources(Some(&member1_auth), namespace, "proposals/prop-001", &proposal)?;
+    println!("Proposal '{}' created by {}", proposal.title, proposal.creator);
+    
+    // 5. Submit Votes
+    // Member 1 votes FOR
+    let vote1 = Vote { voter: member1_id.to_string(), choice: "for".to_string(), reason: None, timestamp: icn_covm::storage::now() };
+    storage.set_json_with_resources(Some(&member1_auth), namespace, "votes/prop-001/member_1", &vote1)?;
+    println!("Vote cast by {}", member1_id);
     // Create auth contexts for different roles
     let admin = AuthContext::with_roles("admin_user", vec!["admin".to_string()]);
     let member1 = AuthContext::with_roles("member_1", vec!["member".to_string()]);

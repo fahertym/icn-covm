@@ -11,7 +11,12 @@ use icn_covm::storage::implementations::file_storage::FileStorage;
 use icn_covm::storage::utils::now;
 use icn_covm::federation::{NetworkNode, NodeConfig};
 use icn_covm::federation::messages::{ProposalScope, VotingModel};
-use icn_covm::cli::proposal::{proposal_command, handle_proposal_command};
+
+// Declare the cli module locally
+mod cli;
+
+// Use the local cli module path instead of the library path
+use cli::proposal::{proposal_command, handle_proposal_command};
 
 use clap::{Arg, Command, ArgAction};
 use std::collections::{HashMap, HashSet};
@@ -395,8 +400,17 @@ async fn main() -> Result<(), AppError> {
             let program_path = run_matches.get_one::<String>("program").unwrap();
             let use_stdlib = run_matches.get_flag("stdlib");
             let use_bytecode = run_matches.get_flag("bytecode");
-            let storage_backend = run_matches.get_one::<String>("storage-backend").unwrap();
-            let storage_path = run_matches.get_one::<String>("storage-path").unwrap();
+
+            // Use let bindings for default values to ensure they live long enough
+            let default_storage_backend = "memory".to_string();
+            let default_storage_path = "./storage".to_string();
+
+            let storage_backend = run_matches
+                .get_one::<String>("storage-backend")
+                .unwrap_or(&default_storage_backend);
+            let storage_path = run_matches
+                .get_one::<String>("storage-path")
+                .unwrap_or(&default_storage_path);
             
             // Get federation configuration
             let enable_federation = run_matches.get_flag("enable-federation");
@@ -475,12 +489,21 @@ async fn main() -> Result<(), AppError> {
             vm.set_namespace("demo");
             
             // Set up storage
-            let storage_backend = proposal_matches.get_one::<String>("storage-backend").unwrap_or(&"memory".to_string());
-            let storage_path = proposal_matches.get_one::<String>("storage-path").unwrap_or(&"./storage".to_string());
+            // Use let bindings for default values to ensure they live long enough
+            let default_storage_backend = "memory".to_string();
+            let default_storage_path = "./storage".to_string();
+
+            let storage_backend = proposal_matches
+                .get_one::<String>("storage-backend")
+                .unwrap_or(&default_storage_backend);
+            let storage_path = proposal_matches
+                .get_one::<String>("storage-path")
+                .unwrap_or(&default_storage_path);
             let storage = create_storage_backend(storage_backend, storage_path)?;
             vm.set_storage_backend(storage);
             
             handle_proposal_command(proposal_matches, &mut vm, &auth_context)
+                .map_err(|e| AppError::Other(e.to_string()))
         }
         Some(("storage", storage_matches)) => {
             let storage_backend = storage_matches.get_one::<String>("storage-backend").unwrap();

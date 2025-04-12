@@ -504,6 +504,22 @@ pub enum Op {
     /// has failed (did not meet quorum or threshold).
     Else(Vec<Op>),
 
+    /// Increment reputation for an identity
+    ///
+    /// This operation increments the reputation score for the specified identity.
+    /// The reputation is stored in persistent storage and can be used for
+    /// governance weighting and other reputation-based features.
+    IncrementReputation {
+        /// The identity ID to increment reputation for
+        identity_id: String,
+        
+        /// The amount to increment by (default 1.0)
+        amount: Option<f64>,
+        
+        /// The reason for the reputation increment
+        reason: Option<String>,
+    },
+
     /// Execute a macro
     ///
     /// This operation executes a macro, which is a special operation that
@@ -1228,15 +1244,19 @@ impl VM {
                         self.execute_inner(block)?;
                     }
                 },
+                Op::IncrementReputation { identity_id, amount, reason } => {
+                    self.execute_increment_reputation(&identity_id, *amount, &reason)?;
+                    // pc += 1 is handled outside the match
+                },
                 Op::Macro(macro_impl) => {
                     // Implement macro execution logic
                     // This is a placeholder and should be replaced with actual implementation
                     println!("Macro execution not implemented");
-                    Ok(())
+                    // pc += 1 is handled outside the match
                 },
             }
 
-            pc += 1;
+            pc += 1; // Increment program counter after processing the operation
         }
 
         Ok(())
@@ -1282,6 +1302,61 @@ impl VM {
             timestamp: crate::storage::utils::now(),
         };
         self.events.push(event);
+    }
+
+    /// Increment reputation for an identity
+    pub fn execute_increment_reputation(&mut self, identity_id: &str, amount: Option<f64>, reason: &Option<String>) -> Result<(), VMError> {
+        // Check if we have an auth context and storage backend
+        let auth = self.auth_context.as_ref().ok_or(VMError::IdentityContextUnavailable)?;
+        
+        // Check if the identity exists
+        if auth.get_identity(identity_id).is_none() {
+            return Err(VMError::IdentityNotFound(identity_id.to_string()));
+        }
+        
+        // Get the current reputation from storage
+        let reputation_key = format!("reputation/{}", identity_id);
+        let current_reputation = match self.storage_operation("GetReputation", |storage, auth, namespace| {
+            match storage.get(auth, namespace, &reputation_key) {
+                Ok(bytes) => {
+                    let value_str = String::from_utf8(bytes)
+                        .map_err(|e| StorageError::InvalidStorageData(format!("Invalid UTF-8 in reputation data: {}", e)))?;
+                    let value = value_str.parse::<f64>()
+                        .map_err(|e| StorageError::InvalidStorageData(format!("Invalid reputation value: {}", e)))?;
+                    Ok((value, None))
+                },
+                Err(StorageError::NotFound { .. }) => Ok((0.0, None)),
+                Err(e) => Err(e),
+            }
+        }) {
+            Ok(value) => value, // Correctly match against Ok(value)
+            Err(e) => return Err(VMError::StorageError(format!("Failed to get reputation: {}", e))),
+        };
+        
+        // Calculate new reputation
+        let increment = amount.unwrap_or(1.0);
+        let new_reputation = current_reputation + increment;
+        
+        // Store the updated reputation
+        self.storage_operation("UpdateReputation", |storage, auth, namespace| {
+            storage.set(auth, namespace, &reputation_key, new_reputation.to_string().into_bytes())?;
+            
+            // Create event for the reputation update
+            let message = match reason {
+                Some(r) => format!("Incremented reputation for {} by {} to {} with reason: {}", 
+                    identity_id, increment, new_reputation, r),
+                None => format!("Incremented reputation for {} by {} to {}", 
+                    identity_id, increment, new_reputation),
+            };
+            
+            Ok(((), Some(VMEvent {
+                category: "reputation".to_string(),
+                message,
+                timestamp: crate::storage::utils::now(),
+            })))
+        })?;
+        
+        Ok(())
     }
 
     /// Create a new economic resource

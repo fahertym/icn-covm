@@ -456,7 +456,7 @@ fn test_edge_cases() {
 fn test_identity_operations() {
     // Create admin identity
     let admin_id = Identity::new("admin", "admin");
-    let mut admin_auth = AuthContext::new("admin");
+    let admin_auth = AuthContext::new("admin");
     
     // Create user identity with public key
     let mut user_id = Identity::new("user1", "member");

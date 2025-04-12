@@ -171,6 +171,14 @@ pub enum CompilerError {
     /// Else block without if passed block in proposal_lifecycle macro
     #[error("Else block without if passed block in proposal_lifecycle at line {0}, column {1}")]
     ElseWithoutIfPassed(usize, usize),
+
+    /// Missing parameter for a command
+    #[error("Missing parameter for {0} at line {1}, column {2}")]
+    MissingParameter(String, usize, usize),
+
+    /// Invalid parameter value for a command
+    #[error("Invalid parameter value for {0} at line {1}, column {2}")]
+    InvalidParameterValue(String, usize, usize),
 }
 
 /// Source position information for error reporting

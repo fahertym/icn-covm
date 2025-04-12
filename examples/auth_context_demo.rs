@@ -1,7 +1,7 @@
 use std::error::Error;
 use icn_covm::bytecode::{BytecodeCompiler, BytecodeExecutor};
 use icn_covm::compiler::parse_dsl;
-use icn_covm::vm::{VM, VMError};
+use icn_covm::vm::VM;
 use icn_covm::storage::auth::AuthContext;
 use icn_covm::storage::implementations::in_memory::InMemoryStorage;
 
@@ -18,7 +18,7 @@ fn main() {
     let observer_ctx = AuthContext::new("observer_user");
     
     // Create storage
-    let mut storage = InMemoryStorage::default();
+    let storage = InMemoryStorage::default();
     
     println!("1. Setting up governance proposals as admin");
     
@@ -101,7 +101,7 @@ fn main() {
     println!("\n=== Demo completed ===");
 }
 
-fn execute_dsl(source: &str, mut vm: VM) -> Result<(), Box<dyn Error>> {
+fn execute_dsl(source: &str, vm: VM) -> Result<(), Box<dyn Error>> {
     // Parse DSL
     let ops = parse_dsl(source)?;
     

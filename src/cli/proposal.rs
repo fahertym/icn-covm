@@ -1,9 +1,9 @@
 use clap::{arg, Command};
 use std::error::Error;
-use crate::vm::VM;
-use crate::compiler::parse_dsl;
-use crate::storage::StorageBackend;
-use crate::identity::AuthContext;
+use icn_covm::vm::VM;
+use icn_covm::compiler::parse_dsl;
+use icn_covm::storage::traits::StorageBackend;
+use icn_covm::storage::auth::AuthContext;
 
 pub fn proposal_command() -> Command {
     Command::new("proposal")
@@ -95,7 +95,12 @@ pub fn handle_proposal_command(
                 id, quorum, threshold, title, author
             );
 
-            let ops = parse_dsl(&dsl)?;
+            let mut ops = parse_dsl(&dsl)?;
+
+            let identity_id = auth_context.user_id.clone();
+            let rep_dsl = format!(r#"increment_reputation "{}" reason="Created proposal""#, identity_id);
+            ops.extend(parse_dsl(&rep_dsl)?);
+
             vm.execute(&ops)?;
         }
 
@@ -109,7 +114,12 @@ pub fn handle_proposal_command(
                 id, section, text
             );
 
-            let ops = parse_dsl(&dsl)?;
+            let mut ops = parse_dsl(&dsl)?;
+
+            let identity_id = auth_context.user_id.clone();
+            let rep_dsl = format!(r#"increment_reputation "{}" reason="Attached document""#, identity_id);
+            ops.extend(parse_dsl(&rep_dsl)?);
+
             vm.execute(&ops)?;
         }
 
@@ -129,7 +139,12 @@ pub fn handle_proposal_command(
 
             let dsl = format!(r#"rankedvote "{}" {}"#, id, ranks_str);
 
-            let ops = parse_dsl(&dsl)?;
+            let mut ops = parse_dsl(&dsl)?;
+
+            let identity_id = auth_context.user_id.clone();
+            let rep_dsl = format!(r#"increment_reputation "{}" reason="Voted on proposal""#, identity_id);
+            ops.extend(parse_dsl(&rep_dsl)?);
+
             vm.execute(&ops)?;
         }
 

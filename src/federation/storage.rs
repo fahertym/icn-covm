@@ -4,7 +4,7 @@ use crate::storage::errors::{StorageResult, StorageError};
 use crate::identity::Identity;
 use crate::storage::auth::AuthContext;
 use serde::{Serialize, Deserialize};
-use log::{debug, info, warn, error};
+use log::{debug, info, warn};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};

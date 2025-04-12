@@ -1,4 +1,4 @@
-use icn_covm::storage::{AuthContext, InMemoryStorage, StorageBackend, StorageError};
+use icn_covm::storage::{AuthContext, InMemoryStorage, StorageBackend};
 
 #[test]
 fn test_auth_context() {

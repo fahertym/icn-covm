@@ -6,7 +6,6 @@ use icn_covm::vm::Op;
 use icn_covm::storage::auth::AuthContext;
 use icn_covm::identity::{Identity, Credential, DelegationLink, MemberProfile};
 use icn_covm::storage::utils;
-use icn_covm::storage::implementations::in_memory::InMemoryStorage;
 
 fn create_test_identity(id: &str, identity_type: &str) -> Identity {
     let mut identity = Identity::new(id, identity_type);

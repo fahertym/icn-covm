@@ -1,6 +1,5 @@
 use icn_covm::storage::traits::StorageBackend;
 use icn_covm::storage::implementations::in_memory::InMemoryStorage;
-use icn_covm::vm::{VM, Op};
 use icn_covm::storage::errors::StorageResult;
 
 mod test_helpers;

@@ -92,6 +92,29 @@ All proposal commands use the configured storage backend (memory or file) to per
 
 Commands that require authentication (like voting) will use the current CLI identity context. You can specify an identity using the `--identity` flag where applicable.
 
+## Reputation Tracking
+
+Each proposal-related action automatically increments the member's reputation by 1.0:
+
+- Creating a proposal: +1.0
+- Attaching a document: +1.0
+- Voting on a proposal: +1.0
+
+Reputation scores are stored at:
+```
+reputation/<identity_id>
+```
+
+You can query a member's reputation via:
+```bash
+icn-covm storage get-value --namespace demo --key reputation/alice
+```
+
+The reputation score can be used for:
+- Weighting votes in governance decisions
+- Determining eligibility for certain roles
+- Tracking member participation and engagement
+
 ## Examples
 
 ### Complete Proposal Workflow
@@ -111,4 +134,10 @@ icn-covm proposal attach prop-001 rationale "The roof is leaking and needs immed
 ```bash
 icn-covm proposal vote prop-001 --ranked 1 2 3 --identity "member-001"
 icn-covm proposal vote prop-001 --ranked 2 1 3 --identity "member-002"
+```
+
+4. Check reputation:
+```bash
+icn-covm storage get-value --namespace demo --key reputation/alice
+# Expected output: 3.0 (1.0 for each action)
 ``` 

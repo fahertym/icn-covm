@@ -1,5 +1,4 @@
 use crate::vm::Op;
-use std::collections::HashMap;
 
 #[derive(Debug)]
 pub struct ProposalLifecycleMacro {

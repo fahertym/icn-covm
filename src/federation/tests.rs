@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use super::*;
+    
     use crate::federation::messages::{NetworkMessage, NodeAnnouncement, Ping, Pong};
     use serde_json;
     use std::time::Duration;
@@ -114,7 +114,7 @@ mod tests {
 
 #[cfg(test)]
 mod vote_tests {
-    use super::*;
+    
     use crate::federation::{
         FederatedProposal,
         FederatedVote,
@@ -183,7 +183,7 @@ mod vote_tests {
         let federation_storage = FederationStorage::new();
         
         // Create an admin identity with correct permissions
-        let mut admin_identity = Identity::new("admin", "admin");
+        let admin_identity = Identity::new("admin", "admin");
         
         // Create auth context with admin identity
         let mut auth = AuthContext::new("admin");

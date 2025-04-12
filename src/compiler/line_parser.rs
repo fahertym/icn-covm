@@ -1,4 +1,4 @@
-use super::{common, CompilerError, SourcePosition, macros::ProposalLifecycleMacro, proposal_block};
+use super::{common, CompilerError, SourcePosition, macros::ProposalLifecycleMacro};
 use crate::vm::Op;
 use chrono;
 
@@ -103,6 +103,38 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
         "over" => Ok(Op::Over),
         "pop" => Ok(Op::Pop),
         "return" => Ok(Op::Return),
+        "increment_reputation" => {
+            let identity_id = parts.next().ok_or(CompilerError::MissingParameter(
+                "increment_reputation".to_string(), 
+                pos.line,
+                pos.column
+            ))?;
+
+            // Parse optional parameters
+            let mut amount = None;
+            let mut reason = None;
+
+            while let Some(param) = parts.next() {
+                if param.starts_with("amount=") {
+                    let value_str = param.trim_start_matches("amount=");
+                    amount = Some(value_str.parse::<f64>().map_err(|_| {
+                        CompilerError::InvalidParameterValue(
+                            "amount".to_string(),
+                            pos.line,
+                            common::adjusted_position(pos, line, value_str).column
+                        )
+                    })?);
+                } else if param.starts_with("reason=") {
+                    reason = Some(param.trim_start_matches("reason=").to_string());
+                }
+            }
+
+            Ok(Op::IncrementReputation {
+                identity_id: identity_id.to_string(),
+                amount,
+                reason,
+            })
+        },
         "call" => {
             let fn_name = parts
                 .next()
@@ -560,7 +592,7 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
             }
 
             // Create macro instance with empty blocks
-            let mut macro_block = ProposalLifecycleMacro::new(
+            let macro_block = ProposalLifecycleMacro::new(
                 proposal_id,
                 quorum,
                 threshold,

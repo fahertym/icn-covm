@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use super::*;
+    
     use crate::identity::{Identity, MemberProfile, Credential, DelegationLink};
     use crate::storage::utils::now;
     

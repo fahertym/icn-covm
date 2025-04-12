@@ -384,7 +384,7 @@ impl InMemoryStorage {
         });
         
         // Add a version
-        let mut versions = self.versioned_data.entry(key.to_string()).or_default();
+        let versions = self.versioned_data.entry(key.to_string()).or_default();
         let version = versions.len() + 1;
         
         let version_info = VersionInfo {

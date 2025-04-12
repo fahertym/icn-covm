@@ -1,7 +1,6 @@
 use icn_covm::bytecode::{BytecodeCompiler, BytecodeExecutor};
 use icn_covm::storage::auth::AuthContext;
 use icn_covm::vm::VM;
-use icn_covm::vm::Op;
 use icn_covm::compiler::parse_dsl;
 
 #[test]
