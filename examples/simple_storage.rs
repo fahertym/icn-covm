@@ -1,8 +1,6 @@
-use icn_covm::storage::{
-    AuthContext, InMemoryStorage, ResourceAccount, StorageBackend, StorageEvent,
-    StorageResult, GovernanceNamespace, JsonStorageHelper
-};
-use serde::{Serialize, Deserialize};
+use icn_covm::storage::{AuthContext, InMemoryStorage, StorageBackend, StorageEvent, StorageResult, StorageError, VersionInfo};
+use icn_covm::identity::{Identity, MemberProfile};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Member {
@@ -29,6 +27,26 @@ struct Vote {
     comment: Option<String>,
 }
 
+// Helper trait for JSON storage (similar to other examples)
+trait JsonStorageHelper: StorageBackend {
+    fn set_json<T: Serialize>(&mut self, auth: Option<&AuthContext>, namespace: &str, key: &str, value: &T) -> StorageResult<()>;
+    fn get_json<T: for<'de> Deserialize<'de>>(&self, auth: Option<&AuthContext>, namespace: &str, key: &str) -> StorageResult<T>;
+}
+
+impl<S: StorageBackend> JsonStorageHelper for S {
+    fn set_json<T: Serialize>(&mut self, auth: Option<&AuthContext>, namespace: &str, key: &str, value: &T) -> StorageResult<()> {
+        let json = serde_json::to_vec(value)
+            .map_err(|e| StorageError::SerializationError { details: e.to_string() })?;
+        self.set(auth, namespace, key, json)
+    }
+
+    fn get_json<T: for<'de> Deserialize<'de>>(&self, auth: Option<&AuthContext>, namespace: &str, key: &str) -> StorageResult<T> {
+        let bytes = self.get(auth, namespace, key)?;
+        serde_json::from_slice(&bytes)
+            .map_err(|e| StorageError::SerializationError { details: e.to_string() })
+    }
+}
+
 fn main() -> StorageResult<()> {
     println!("=== ICN-COVM Cooperative Storage Example ===");
     
@@ -41,10 +59,11 @@ fn main() -> StorageResult<()> {
     let member2 = AuthContext::with_roles("member2", vec!["member".to_string()]);
     let observer = AuthContext::with_roles("observer1", vec!["observer".to_string()]);
     
-    // Create resource accounts
-    let admin_account = storage.create_resource_account("admin1", 1000.0);
-    let member1_account = storage.create_resource_account("member1", 500.0);
-    let member2_account = storage.create_resource_account("member2", 500.0);
+    // Initialize storage accounts/namespaces (Resource accounts removed)
+    storage.create_account(Some(&admin), "admin1", 1024 * 1024)?;
+    storage.create_account(Some(&admin), "member1", 1024 * 1024)?; 
+    storage.create_account(Some(&admin), "member2", 1024 * 1024)?;
+    storage.create_namespace(Some(&admin), namespace, 1024 * 1024, None)?; 
     
     println!("Initialized storage with roles and resource accounts");
     
@@ -112,6 +131,7 @@ fn main() -> StorageResult<()> {
         proposed_by: "admin1".to_string(),
         required_votes: 3,
         approve_threshold: 0.66, // 66% approval needed
+        created_at: icn_covm::storage::now(),
     };
     
     // Start a transaction for the proposal
@@ -137,6 +157,7 @@ fn main() -> StorageResult<()> {
         proposed_by: "observer1".to_string(),
         required_votes: 3,
         approve_threshold: 0.5,
+        created_at: icn_covm::storage::now(),
     };
     
     let result = storage.set_with_auth(

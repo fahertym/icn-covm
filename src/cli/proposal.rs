@@ -2,7 +2,6 @@ use clap::{arg, Command};
 use std::error::Error;
 use icn_covm::vm::VM;
 use icn_covm::compiler::parse_dsl;
-use icn_covm::storage::traits::StorageBackend;
 use icn_covm::storage::auth::AuthContext;
 
 pub fn proposal_command() -> Command {

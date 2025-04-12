@@ -26,10 +26,7 @@ use std::process;
 use std::time::Instant;
 use thiserror::Error;
 use std::io::{Write};
-use log::{info, warn, error, debug};
-use std::io::BufReader;
-use std::str::FromStr;
-use std::path::PathBuf;
+use log::{info, error, debug};
 
 #[derive(Debug, Error)]
 enum AppError {
@@ -1603,7 +1600,7 @@ async fn execute_proposal(
     }
     
     // Get a storage backend
-    let mut storage = create_storage_backend(storage_backend, storage_path)?;
+    let storage = create_storage_backend(storage_backend, storage_path)?;
     
     // Get the proposal
     let federation_storage = network_node.federation_storage();
