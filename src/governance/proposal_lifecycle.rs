@@ -4,6 +4,8 @@ use crate::storage::traits::Storage;
 use crate::storage::errors::StorageError;
 use crate::storage::auth::AuthContext;
 use std::collections::HashMap;
+use crate::vm::VM;
+use crate::compiler::parse_dsl;
 // Placeholder for identity type, replace with actual type later
 type Identity = String;
 // Placeholder for attachment metadata, replace with actual type later
@@ -125,15 +127,15 @@ impl ProposalLifecycle {
      }
 
     // Tally votes from storage
-    pub fn tally_votes<S: Storage>(
+    pub fn tally_votes(
         &self,
-        storage: &S,
-        auth_context: Option<&AuthContext>, // Needed for storage access
+        vm: &VM,
     ) -> Result<(u64, u64, u64), Box<dyn std::error::Error>> { // (yes, no, abstain)
         if self.state != ProposalState::Voting {
             return Err(format!("Proposal {} is not in Voting state", self.id).into());
         }
-
+        let storage = vm.storage_backend.as_ref().ok_or("Storage backend not configured")?;
+        let auth_context = vm.auth_context.as_ref();
         let namespace = "governance";
         let prefix = format!("proposals/{}/votes/", self.id);
         let vote_keys = storage.list_keys(auth_context, namespace, Some(&prefix))?;
@@ -143,7 +145,6 @@ impl ProposalLifecycle {
         let mut abstain_votes = 0;
 
         for key in vote_keys {
-            // Ensure the key matches the expected pattern (prefix + voter_id)
             if !key.starts_with(&prefix) || key.split('/').count() != 4 {
                 eprintln!("Skipping unexpected key in votes directory: {}", key);
                 continue;
@@ -159,7 +160,6 @@ impl ProposalLifecycle {
                     }
                 }
                 Err(e) => {
-                    // Log error but continue tallying other votes
                     eprintln!("Error reading vote key {}: {}", key, e);
                 }
             }
@@ -188,48 +188,72 @@ impl ProposalLifecycle {
         true
     }
 
-    // Placeholder - Actual execution logic needs more context
-    fn execute_proposal_logic<S: Storage>(
+    // Execute the proposal's logic attachment within the given VM context
+    fn execute_proposal_logic(
         &self,
-        _storage: &S,
-        _auth_context: Option<&AuthContext>,
+        vm: &mut VM,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        println!("Placeholder: Executing logic for proposal {}", self.id);
-        // Here you would:
-        // 1. Load the execution logic attachment (e.g., logic.ccl/dsl)
-        // 2. Parse and execute the logic using the VM
-        //    - This might require spawning a new VM instance or using a dedicated execution context
-        //    - Pass necessary context (proposal ID, etc.) to the script
+        println!("[EXEC] Attempting to execute logic for proposal {}", self.id);
+
+        let storage = vm.storage_backend.as_ref().ok_or("Storage backend unavailable for execution")?;
+        let auth_context = vm.auth_context.as_ref(); // Use VM's auth context
+        let namespace = "governance";
+        let logic_key = format!("proposals/{}/attachments/logic", self.id);
+
+        // 1. Load Logic Attachment Bytes
+        println!("[EXEC] Loading logic from {}/{}...", namespace, logic_key);
+        let logic_bytes = storage.get(auth_context, namespace, &logic_key)
+            .map_err(|e| format!("Failed to load logic attachment: {}", e))?;
+
+        // 2. Convert Bytes to String
+        let logic_dsl = String::from_utf8(logic_bytes)
+            .map_err(|e| format!("Logic attachment is not valid UTF-8: {}", e))?;
+        println!("[EXEC] Logic DSL loaded ({} bytes).", logic_dsl.len());
+
+        // 3. Parse DSL to Ops
+        println!("[EXEC] Parsing logic DSL...");
+        let ops = parse_dsl(&logic_dsl)
+            .map_err(|e| format!("Failed to parse logic DSL: {}", e))?;
+        println!("[EXEC] Logic parsed into {} Ops.", ops.len());
+
+        // 4. Execute Ops in the provided VM
+        // Note: This executes in the *same* VM context that called the vote handler.
+        // Consider if sandboxing or a separate VM instance is truly needed.
+        println!("[EXEC] Executing parsed Ops...");
+        vm.execute(&ops)
+            .map_err(|e| format!("Runtime error executing proposal logic: {}", e))?;
+
+        println!("[EXEC] Proposal logic execution finished successfully.");
         Ok(())
     }
 
-     // Updated state transition for execution
-     pub fn transition_to_executed<S: Storage>(
+     // Updated state transition for execution - takes &mut VM
+     pub fn transition_to_executed(
          &mut self,
-         storage: &mut S,
-         auth_context: Option<&AuthContext>,
+         vm: &mut VM,
      ) -> Result<(), Box<dyn std::error::Error>> {
         if self.state == ProposalState::Voting {
-            // Optionally re-tally here or assume tally was done before calling
-            let (yes_votes, no_votes, abstain_votes) = self.tally_votes(storage, auth_context)?;
+            // Tally votes using the VM's storage/auth context
+            let (yes_votes, no_votes, abstain_votes) = self.tally_votes(vm)?;
             if self.check_passed(yes_votes, no_votes, abstain_votes) {
                  self.state = ProposalState::Executed;
                  self.history.push((Utc::now(), self.state.clone()));
-                 // Save the updated state
+
+                 // Save the updated state using the VM's storage
+                 let storage = vm.storage_backend.as_mut().ok_or("Storage backend unavailable")?;
+                 let auth_context = vm.auth_context.as_ref();
                  let namespace = "governance";
                  let key = format!("proposals/{}/lifecycle", self.id);
                  storage.set_json(auth_context, namespace, &key, self)?;
                  println!("Proposal {} state transitioned to Executed.", self.id);
 
-                 // Attempt to execute associated logic
-                 if let Err(e) = self.execute_proposal_logic(storage, auth_context) {
+                 // Attempt to execute associated logic within the same VM
+                 if let Err(e) = self.execute_proposal_logic(vm) {
                     eprintln!("Error executing proposal {} logic: {}", self.id, e);
-                    // Should the state revert? Or stay Executed but log the error?
+                    // Persist the execution error? Revert state? For now, just log.
                  }
-                 // TODO: Emit execution event?
              } else {
                  println!("Proposal {} did not pass, cannot transition to Executed.", self.id);
-                 // Optionally transition to Rejected here? Or handle in a separate check.
              }
         } else {
              println!("Proposal {} not in Voting state, cannot transition to Executed.", self.id);
@@ -237,23 +261,22 @@ impl ProposalLifecycle {
         Ok(())
      }
 
-     // Updated state transition for rejection
-     pub fn transition_to_rejected<S: Storage>(
+     // Updated state transition for rejection - takes &mut VM
+     pub fn transition_to_rejected(
          &mut self,
-         storage: &mut S,
-         auth_context: Option<&AuthContext>,
+         vm: &mut VM,
      ) -> Result<(), Box<dyn std::error::Error>> {
         if self.state == ProposalState::Voting {
-            let (yes_votes, no_votes, abstain_votes) = self.tally_votes(storage, auth_context)?;
+            let (yes_votes, no_votes, abstain_votes) = self.tally_votes(vm)?;
             if !self.check_passed(yes_votes, no_votes, abstain_votes) {
                  self.state = ProposalState::Rejected;
                  self.history.push((Utc::now(), self.state.clone()));
-                 // Save the updated state
+                 let storage = vm.storage_backend.as_mut().ok_or("Storage backend unavailable")?;
+                 let auth_context = vm.auth_context.as_ref();
                  let namespace = "governance";
                  let key = format!("proposals/{}/lifecycle", self.id);
                  storage.set_json(auth_context, namespace, &key, self)?;
                  println!("Proposal {} state transitioned to Rejected.", self.id);
-                 // TODO: Emit rejection event?
              } else {
                  println!("Proposal {} passed, cannot transition to Rejected.", self.id);
              }
@@ -263,31 +286,25 @@ impl ProposalLifecycle {
         Ok(())
      }
 
-      // Updated state transition for expiration
-     pub fn transition_to_expired<S: Storage>(
+      // Updated state transition for expiration - takes &mut VM
+     pub fn transition_to_expired(
          &mut self,
-         storage: &mut S,
-         auth_context: Option<&AuthContext>,
+         vm: &mut VM,
      ) -> Result<(), Box<dyn std::error::Error>> {
          if self.state == ProposalState::Voting && self.expires_at.map_or(false, |exp| Utc::now() > exp) {
-            let (yes_votes, no_votes, abstain_votes) = self.tally_votes(storage, auth_context)?;
-            // Check if it passed *before* expiring
+            let (yes_votes, no_votes, abstain_votes) = self.tally_votes(vm)?;
             if self.check_passed(yes_votes, no_votes, abstain_votes) {
-                // If it passed but wasn't explicitly executed, maybe move to Executed?
-                // Or have a separate 'PassedNotExecuted' state?
-                // For now, let Expired take precedence if time is up.
                 println!("Proposal {} passed but expired before execution.", self.id);
             }
             self.state = ProposalState::Expired;
             self.history.push((Utc::now(), self.state.clone()));
-            // Save the updated state
+            let storage = vm.storage_backend.as_mut().ok_or("Storage backend unavailable")?;
+            let auth_context = vm.auth_context.as_ref();
             let namespace = "governance";
             let key = format!("proposals/{}/lifecycle", self.id);
             storage.set_json(auth_context, namespace, &key, self)?;
             println!("Proposal {} state transitioned to Expired.", self.id);
-            // TODO: Emit expiration event?
          } else if self.state == ProposalState::Voting {
-             // Still voting time left
              println!("Proposal {} voting period has not expired yet.", self.id);
          } else {
              println!("Proposal {} not in Voting state, cannot transition to Expired.", self.id);

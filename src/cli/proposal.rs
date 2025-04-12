@@ -489,16 +489,10 @@ pub fn handle_proposal_command(
             let proposal_id = *vote_matches.get_one::<ProposalId>("id").unwrap();
             let choice = vote_matches.get_one::<String>("choice").unwrap();
 
-             // 1. Load Proposal - Use mutable VM to get mutable storage later
-             // We need mutable storage access for tallying and state transitions within ProposalLifecycle methods.
-             let mut proposal = load_proposal(vm, proposal_id)?;
-             if proposal.state != ProposalState::Voting {
-                 return Err(format!("Proposal {} is not in Voting state (current: {:?})", proposal_id, proposal.state).into());
-             }
-             // Check expiration
-             if proposal.expires_at.map_or(false, |exp| Utc::now() > exp) {
-                 return Err(format!("Voting period for proposal {} has expired.", proposal_id).into());
-             }
+             // 1. Load Proposal
+             // Load mutable proposal by first getting proposal ID, then loading with mut VM ref
+             // Note: We don't need the loaded proposal object here initially, only its ID for vote key
+             // Checking state/expiration happens inside transition_to_executed/rejected/expired called later.
 
              // 2. Record vote
              let storage_ref_mut = vm.storage_backend.as_mut()
@@ -508,33 +502,25 @@ pub fn handle_proposal_command(
              storage_ref_mut.set(Some(auth_context), namespace, &key, choice.clone().into_bytes())?;
              println!("Vote '{}' recorded for proposal {} by {}.", choice, proposal_id, auth_context.user_id);
 
-             // 3. Tally votes and check outcome
-             println!("Tallying votes for proposal {}...", proposal_id);
-             // We pass the mutable storage reference into the tally/transition methods
-             // This feels a bit awkward, maybe refactor later so CLI calls tally, then passes result to proposal.check_and_transition?
-             match proposal.tally_votes(&**storage_ref_mut, Some(auth_context)) {
-                 Ok((yes, no, abstain)) => {
-                     println!("Votes - Yes: {}, No: {}, Abstain: {}", yes, no, abstain);
-                     if proposal.check_passed(yes, no, abstain) {
-                        println!("Proposal {} passed! Attempting execution transition...", proposal_id);
-                        // Transition to Executed (this saves the state change inside)
-                        if let Err(e) = proposal.transition_to_executed(&mut **storage_ref_mut, Some(auth_context)) {
-                            eprintln!("Error during execution transition for proposal {}: {}", proposal_id, e);
-                        }
-                     } else {
-                         println!("Proposal {} has not passed yet (Quorum: {}, Threshold: {}).", proposal_id, proposal.quorum, proposal.threshold);
-                         // Optionally, check if it definitively failed (e.g., impossible to reach quorum/threshold)
-                         // And call transition_to_rejected here?
-                     }
-                 }
-                 Err(e) => {
-                     eprintln!("Error tallying votes for proposal {}: {}", proposal_id, e);
-                 }
+             // 3. Attempt Execution Transition
+             println!("Checking if proposal {} passed after vote...", proposal_id);
+             // Load the proposal mutably *here* before trying to transition its state.
+             let mut proposal = load_proposal(vm, proposal_id)?;
+
+             // The transition method now handles tallying, checking, state change, saving, and logic execution.
+             // It needs a mutable reference to the VM.
+             if let Err(e) = proposal.transition_to_executed(vm) { // Pass &mut VM
+                  eprintln!("Error during execution check/transition for proposal {}: {}", proposal_id, e);
+                  // Handle potential errors from tallying, saving state, or execution
              }
+             // Note: We might also want to explicitly check for rejection or expiration here
+             // e.g., proposal.transition_to_rejected(vm)?;
+             // e.g., proposal.transition_to_expired(vm)?;
 
              // 4. Emit reputation hook
              let rep_dsl = format!("increment_reputation \"{}\" reason=\"Voted on proposal {}\"", auth_context.user_id, proposal_id);
              let ops = parse_dsl(&rep_dsl)?;
+             // Execute reputation op in the original VM context
              vm.execute(&ops)?;
         }
         _ => unreachable!("Subcommand should be required"),
