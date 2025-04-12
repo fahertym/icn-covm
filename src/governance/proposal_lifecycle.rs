@@ -6,6 +6,7 @@ use crate::storage::auth::AuthContext;
 use std::collections::HashMap;
 use crate::vm::VM;
 use crate::compiler::parse_dsl;
+use crate::vm::Op;
 // Placeholder for identity type, replace with actual type later
 type Identity = String;
 // Placeholder for attachment metadata, replace with actual type later
@@ -25,6 +26,12 @@ pub enum ProposalState {
     Expired,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub enum ExecutionStatus {
+    Success,
+    Failure(String),
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ProposalLifecycle {
     pub id: ProposalId,
@@ -42,6 +49,7 @@ pub struct ProposalLifecycle {
     // attachments: Vec<Attachment>, // Store attachment metadata or links? Store in storage layer.
     // comments: Vec<CommentId>, // Store comment IDs? Store in storage layer.
     pub history: Vec<(DateTime<Utc>, ProposalState)>, // Track state transitions
+    pub execution_status: Option<ExecutionStatus>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -78,6 +86,7 @@ impl ProposalLifecycle {
             required_participants,
             current_version: 1,
             history: vec![(now, ProposalState::Draft)],
+            execution_status: None,
         }
     }
 
@@ -124,6 +133,7 @@ impl ProposalLifecycle {
         // Logic for handling updates, potentially resetting state or requiring new votes?
         self.current_version += 1;
         // Maybe move back to Draft or OpenForFeedback? Depends on governance rules.
+        self.history.push((Utc::now(), self.state.clone()));
      }
 
     // Tally votes from storage
@@ -189,71 +199,106 @@ impl ProposalLifecycle {
     }
 
     // Execute the proposal's logic attachment within the given VM context
+    // Returns Ok(ExecutionStatus) on completion (success or failure)
+    // Returns Err only if loading/parsing fails before execution starts
     fn execute_proposal_logic(
         &self,
         vm: &mut VM,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<ExecutionStatus, Box<dyn std::error::Error>> {
         println!("[EXEC] Attempting to execute logic for proposal {}", self.id);
 
         let storage = vm.storage_backend.as_ref().ok_or("Storage backend unavailable for execution")?;
-        let auth_context = vm.auth_context.as_ref(); // Use VM's auth context
+        let auth_context = vm.auth_context.as_ref();
         let namespace = "governance";
         let logic_key = format!("proposals/{}/attachments/logic", self.id);
 
-        // 1. Load Logic Attachment Bytes
         println!("[EXEC] Loading logic from {}/{}...", namespace, logic_key);
-        let logic_bytes = storage.get(auth_context, namespace, &logic_key)
-            .map_err(|e| format!("Failed to load logic attachment: {}", e))?;
+        let logic_bytes = match storage.get(auth_context, namespace, &logic_key) {
+            Ok(bytes) => bytes,
+            Err(StorageError::NotFound { .. }) => {
+                println!("[EXEC] No logic attachment found at {}. Skipping execution.", logic_key);
+                return Ok(ExecutionStatus::Success); // No logic is considered success
+            }
+            Err(e) => return Err(format!("Failed to load logic attachment: {}", e).into()),
+        };
 
-        // 2. Convert Bytes to String
         let logic_dsl = String::from_utf8(logic_bytes)
             .map_err(|e| format!("Logic attachment is not valid UTF-8: {}", e))?;
         println!("[EXEC] Logic DSL loaded ({} bytes).", logic_dsl.len());
+        if logic_dsl.trim().is_empty() {
+             println!("[EXEC] Logic attachment is empty. Skipping execution.");
+             return Ok(ExecutionStatus::Success); // Empty logic is success
+        }
 
-        // 3. Parse DSL to Ops
         println!("[EXEC] Parsing logic DSL...");
         let ops = parse_dsl(&logic_dsl)
             .map_err(|e| format!("Failed to parse logic DSL: {}", e))?;
         println!("[EXEC] Logic parsed into {} Ops.", ops.len());
 
-        // 4. Execute Ops in the provided VM
-        // Note: This executes in the *same* VM context that called the vote handler.
-        // Consider if sandboxing or a separate VM instance is truly needed.
+        // Execute Ops in the provided VM
         println!("[EXEC] Executing parsed Ops...");
-        vm.execute(&ops)
-            .map_err(|e| format!("Runtime error executing proposal logic: {}", e))?;
-
-        println!("[EXEC] Proposal logic execution finished successfully.");
-        Ok(())
+        match vm.execute(&ops) {
+            Ok(_) => {
+                println!("[EXEC] Proposal logic execution finished successfully.");
+                Ok(ExecutionStatus::Success)
+            }
+            Err(e) => {
+                let error_message = format!("Runtime error executing proposal logic: {}", e);
+                eprintln!("[EXEC] {}", error_message);
+                Ok(ExecutionStatus::Failure(error_message))
+            }
+        }
     }
 
-     // Updated state transition for execution - takes &mut VM
+     // Updated state transition for execution
      pub fn transition_to_executed(
          &mut self,
          vm: &mut VM,
      ) -> Result<(), Box<dyn std::error::Error>> {
         if self.state == ProposalState::Voting {
-            // Tally votes using the VM's storage/auth context
             let (yes_votes, no_votes, abstain_votes) = self.tally_votes(vm)?;
             if self.check_passed(yes_votes, no_votes, abstain_votes) {
                  self.state = ProposalState::Executed;
                  self.history.push((Utc::now(), self.state.clone()));
+                 println!("Proposal {} state transitioning to Executed.", self.id);
 
-                 // Save the updated state using the VM's storage
+                 // Attempt to execute associated logic
+                 let exec_result = self.execute_proposal_logic(vm);
+
+                 // Update status based on execution result
+                 let final_status = match exec_result {
+                     Ok(status) => status,
+                     Err(e) => {
+                         // Error during loading/parsing before execution attempt
+                         let err_msg = format!("Pre-execution error: {}", e);
+                         eprintln!("{}", err_msg);
+                         ExecutionStatus::Failure(err_msg)
+                     }
+                 };
+                 self.execution_status = Some(final_status.clone());
+
+                 // Emit Event for execution status
+                 let event_message = match &final_status {
+                     ExecutionStatus::Success => format!("Proposal {} executed successfully.", self.id),
+                     ExecutionStatus::Failure(reason) => format!("Proposal {} execution failed: {}", self.id, reason),
+                 };
+                 // Execute EmitEvent Op directly
+                 let event_op = Op::EmitEvent { category: "governance".to_string(), message: event_message };
+                 if let Err(e) = vm.execute(&[event_op]) {
+                     eprintln!("Failed to emit execution status event: {}", e);
+                 }
+
+                 // Save the final state including execution status
                  let storage = vm.storage_backend.as_mut().ok_or("Storage backend unavailable")?;
                  let auth_context = vm.auth_context.as_ref();
                  let namespace = "governance";
                  let key = format!("proposals/{}/lifecycle", self.id);
                  storage.set_json(auth_context, namespace, &key, self)?;
-                 println!("Proposal {} state transitioned to Executed.", self.id);
+                 println!("Proposal {} final state (Executed, Status: {:?}) saved.", self.id, self.execution_status);
 
-                 // Attempt to execute associated logic within the same VM
-                 if let Err(e) = self.execute_proposal_logic(vm) {
-                    eprintln!("Error executing proposal {} logic: {}", self.id, e);
-                    // Persist the execution error? Revert state? For now, just log.
-                 }
              } else {
                  println!("Proposal {} did not pass, cannot transition to Executed.", self.id);
+                 // Optionally attempt transition_to_rejected(vm)? here
              }
         } else {
              println!("Proposal {} not in Voting state, cannot transition to Executed.", self.id);
@@ -261,7 +306,7 @@ impl ProposalLifecycle {
         Ok(())
      }
 
-     // Updated state transition for rejection - takes &mut VM
+     // Updated state transition for rejection
      pub fn transition_to_rejected(
          &mut self,
          vm: &mut VM,
@@ -271,12 +316,21 @@ impl ProposalLifecycle {
             if !self.check_passed(yes_votes, no_votes, abstain_votes) {
                  self.state = ProposalState::Rejected;
                  self.history.push((Utc::now(), self.state.clone()));
+                 self.execution_status = None; // Reset execution status on rejection
                  let storage = vm.storage_backend.as_mut().ok_or("Storage backend unavailable")?;
                  let auth_context = vm.auth_context.as_ref();
                  let namespace = "governance";
                  let key = format!("proposals/{}/lifecycle", self.id);
                  storage.set_json(auth_context, namespace, &key, self)?;
                  println!("Proposal {} state transitioned to Rejected.", self.id);
+                 // Emit rejection event?
+                 let event_op = Op::EmitEvent {
+                    category: "governance".to_string(),
+                    message: format!("Proposal {} rejected.", self.id)
+                 };
+                 if let Err(e) = vm.execute(&[event_op]) {
+                     eprintln!("Failed to emit rejection event: {}", e);
+                 }
              } else {
                  println!("Proposal {} passed, cannot transition to Rejected.", self.id);
              }
@@ -286,7 +340,7 @@ impl ProposalLifecycle {
         Ok(())
      }
 
-      // Updated state transition for expiration - takes &mut VM
+      // Updated state transition for expiration
      pub fn transition_to_expired(
          &mut self,
          vm: &mut VM,
@@ -295,15 +349,25 @@ impl ProposalLifecycle {
             let (yes_votes, no_votes, abstain_votes) = self.tally_votes(vm)?;
             if self.check_passed(yes_votes, no_votes, abstain_votes) {
                 println!("Proposal {} passed but expired before execution.", self.id);
+                // Leave execution_status as None or set to Failure("Expired")?
             }
             self.state = ProposalState::Expired;
             self.history.push((Utc::now(), self.state.clone()));
+            self.execution_status = None; // Reset execution status on expiration
             let storage = vm.storage_backend.as_mut().ok_or("Storage backend unavailable")?;
             let auth_context = vm.auth_context.as_ref();
             let namespace = "governance";
             let key = format!("proposals/{}/lifecycle", self.id);
             storage.set_json(auth_context, namespace, &key, self)?;
             println!("Proposal {} state transitioned to Expired.", self.id);
+            // Emit expiration event?
+             let event_op = Op::EmitEvent {
+                category: "governance".to_string(),
+                message: format!("Proposal {} expired.", self.id)
+             };
+             if let Err(e) = vm.execute(&[event_op]) {
+                 eprintln!("Failed to emit expiration event: {}", e);
+             }
          } else if self.state == ProposalState::Voting {
              println!("Proposal {} voting period has not expired yet.", self.id);
          } else {

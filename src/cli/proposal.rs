@@ -12,6 +12,7 @@ use std::path::Path;
 use icn_covm::governance::proposal_lifecycle::ProposalLifecycle;
 use icn_covm::storage::traits::StorageExtensions; // Import the extension trait
 use icn_covm::governance::proposal_lifecycle::ProposalState; // Import ProposalState
+use icn_covm::governance::proposal_lifecycle::ExecutionStatus; // Add ExecutionStatus
 
 // Placeholder types - replace with actual types from governance module
 type ProposalId = u64;
@@ -337,6 +338,14 @@ pub fn handle_proposal_command(
             println!("Current Version: {}", proposal.current_version);
             if let Some(expires) = proposal.expires_at {
                 println!("Voting Expires: {}", expires);
+            }
+
+            // Display Execution Status
+            if let Some(status) = &proposal.execution_status {
+                match status {
+                    ExecutionStatus::Success => println!("Execution Status: Success"),
+                    ExecutionStatus::Failure(reason) => println!("Execution Status: Failure ({})", reason),
+                }
             }
 
             if show_history {
