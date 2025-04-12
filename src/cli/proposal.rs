@@ -489,28 +489,53 @@ pub fn handle_proposal_command(
             let proposal_id = *vote_matches.get_one::<ProposalId>("id").unwrap();
             let choice = vote_matches.get_one::<String>("choice").unwrap();
 
-             // 1. Load Proposal to check state
-             let proposal = load_proposal(vm, proposal_id)?;
-             if proposal.state != icn_covm::governance::proposal_lifecycle::ProposalState::Voting {
+             // 1. Load Proposal - Use mutable VM to get mutable storage later
+             // We need mutable storage access for tallying and state transitions within ProposalLifecycle methods.
+             let mut proposal = load_proposal(vm, proposal_id)?;
+             if proposal.state != ProposalState::Voting {
                  return Err(format!("Proposal {} is not in Voting state (current: {:?})", proposal_id, proposal.state).into());
              }
+             // Check expiration
+             if proposal.expires_at.map_or(false, |exp| Utc::now() > exp) {
+                 return Err(format!("Voting period for proposal {} has expired.", proposal_id).into());
+             }
 
-             // 2. Record vote (Store in storage, e.g., governance/proposals/{id}/votes/{voter_id})
-             let storage = vm.storage_backend.as_mut()
+             // 2. Record vote
+             let storage_ref_mut = vm.storage_backend.as_mut()
                  .ok_or_else(|| "Storage backend not configured for proposal vote")?;
              let namespace = "governance";
              let key = format!("proposals/{}/votes/{}", proposal_id, auth_context.user_id);
-
-             // Simple storage of the choice string for now
-             storage.set(vm.auth_context.as_ref(), namespace, &key, choice.clone().into_bytes())?;
+             storage_ref_mut.set(Some(auth_context), namespace, &key, choice.clone().into_bytes())?;
              println!("Vote '{}' recorded for proposal {} by {}.", choice, proposal_id, auth_context.user_id);
 
-             // 3. Emit reputation hook (placeholder via DSL)
+             // 3. Tally votes and check outcome
+             println!("Tallying votes for proposal {}...", proposal_id);
+             // We pass the mutable storage reference into the tally/transition methods
+             // This feels a bit awkward, maybe refactor later so CLI calls tally, then passes result to proposal.check_and_transition?
+             match proposal.tally_votes(&**storage_ref_mut, Some(auth_context)) {
+                 Ok((yes, no, abstain)) => {
+                     println!("Votes - Yes: {}, No: {}, Abstain: {}", yes, no, abstain);
+                     if proposal.check_passed(yes, no, abstain) {
+                        println!("Proposal {} passed! Attempting execution transition...", proposal_id);
+                        // Transition to Executed (this saves the state change inside)
+                        if let Err(e) = proposal.transition_to_executed(&mut **storage_ref_mut, Some(auth_context)) {
+                            eprintln!("Error during execution transition for proposal {}: {}", proposal_id, e);
+                        }
+                     } else {
+                         println!("Proposal {} has not passed yet (Quorum: {}, Threshold: {}).", proposal_id, proposal.quorum, proposal.threshold);
+                         // Optionally, check if it definitively failed (e.g., impossible to reach quorum/threshold)
+                         // And call transition_to_rejected here?
+                     }
+                 }
+                 Err(e) => {
+                     eprintln!("Error tallying votes for proposal {}: {}", proposal_id, e);
+                 }
+             }
+
+             // 4. Emit reputation hook
              let rep_dsl = format!("increment_reputation \"{}\" reason=\"Voted on proposal {}\"", auth_context.user_id, proposal_id);
              let ops = parse_dsl(&rep_dsl)?;
              vm.execute(&ops)?;
-
-             // TODO: Add logic to check if vote changes proposal outcome (check quorum/threshold, transition state)
         }
         _ => unreachable!("Subcommand should be required"),
     }

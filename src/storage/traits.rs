@@ -78,7 +78,7 @@ pub trait StorageExtensions: StorageBackend {
     fn get_identity(&self, identity_id: &str) -> StorageResult<crate::identity::Identity>;
 }
 
-// Default implementation for the extension trait
+// Blanket implementation for the extension trait
 impl<S: StorageBackend> StorageExtensions for S {
     fn get_json<T: DeserializeOwned>(&self, auth: Option<&AuthContext>, namespace: &str, key: &str) -> StorageResult<T> {
         let bytes = self.get(auth, namespace, key)?;
@@ -101,6 +101,12 @@ impl<S: StorageBackend> StorageExtensions for S {
             })
     }
 }
+
+// Supertrait combining StorageBackend and StorageExtensions
+pub trait Storage: StorageBackend + StorageExtensions {}
+
+// Blanket implementation for the supertrait
+impl<T: StorageBackend + StorageExtensions> Storage for T {}
 
 // Potential trait for federated operations (optional for now)
 // pub trait FederatedStorageBackend: StorageBackend {
