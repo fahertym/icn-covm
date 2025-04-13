@@ -609,7 +609,7 @@ impl BytecodeCompiler {
                     })
                 }
                 Op::VerifySignature => self.program.instructions.push(BytecodeOp::VerifySignature),
-                Op::GetIdentity(identity_id) => {
+                Op::GetIdentity(_identity_id) => {
                     // Return NotImplemented error for now
                     self.program.instructions.push(BytecodeOp::Return);
                 }
@@ -1500,7 +1500,7 @@ where
                     name
                 )));
             }
-            BytecodeOp::GetIdentity(identity_id) => {
+            BytecodeOp::GetIdentity(_identity_id) => {
                 // Return NotImplemented error for now
                 Err(VMError::NotImplemented(
                     "GetIdentity operation not implemented yet".to_string(),
@@ -2089,7 +2089,7 @@ where
                     name
                 )));
             }
-            BytecodeOp::GetIdentity(identity_id) => {
+            BytecodeOp::GetIdentity(_identity_id) => {
                 // Return NotImplemented error for now
                 Err(VMError::NotImplemented(
                     "GetIdentity operation not implemented yet".to_string(),

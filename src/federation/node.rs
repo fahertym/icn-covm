@@ -533,7 +533,7 @@ impl NetworkNode {
         info!("Broadcasting proposal: {}", proposal.proposal_id);
 
         // Create the proposal broadcast message
-        let message = NetworkMessage::ProposalBroadcast(proposal);
+        let _message = NetworkMessage::ProposalBroadcast(proposal);
 
         // Get all connected peers
         let peer_ids = {
@@ -561,7 +561,7 @@ impl NetworkNode {
         info!("Submitting vote from {}", vote.voter);
 
         // Create the vote submission message
-        let message = NetworkMessage::VoteSubmission(vote);
+        let _message = NetworkMessage::VoteSubmission(vote);
 
         // In a real implementation, we would send this to peers who have the proposal
         // For now, we just emit an event

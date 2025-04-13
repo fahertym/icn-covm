@@ -648,7 +648,7 @@ impl std::fmt::Display for Op {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 struct CallFrame {
     // Local memory for function scope
     memory: HashMap<String, f64>,
@@ -1716,14 +1716,16 @@ mod tests {
     use did_key::generate;
     use rand::rngs::OsRng;
 
-    // Implement Debug for InMemoryStorage
+    // Comment out the conflicting Debug implementation
+    // This is already implemented elsewhere
+    /*
     impl std::fmt::Debug for InMemoryStorage {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             f.debug_struct("InMemoryStorage").finish()
         }
     }
-
-    // Implement Default for InMemoryStorage
+    */
+    
     impl Default for InMemoryStorage {
         fn default() -> Self {
             Self::new()

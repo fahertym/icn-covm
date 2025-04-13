@@ -5,6 +5,7 @@ use icn_covm::cli::federation::{federation_command, handle_federation_command};
 use icn_covm::cli::proposal::{handle_proposal_command, proposal_command};
 use icn_covm::cli::proposal_demo::run_proposal_demo;
 use icn_covm::compiler::{parse_dsl, parse_dsl_with_stdlib, CompilerError};
+use icn_covm::events::LogFormat;
 use icn_covm::federation::messages::{ProposalScope, ProposalStatus, VotingModel};
 use icn_covm::federation::{NetworkNode, NodeConfig};
 use icn_covm::identity::Identity;
@@ -14,31 +15,17 @@ use icn_covm::storage::implementations::in_memory::InMemoryStorage;
 use icn_covm::storage::traits::StorageBackend;
 use icn_covm::storage::utils::now;
 use icn_covm::vm::{VMError, VM};
+use icn_covm::api;
 
-use anyhow::{anyhow, Context, Result};
 use clap::{Arg, ArgAction, Command};
 use log::{debug, error, info, warn};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fs;
-use std::io::Write;
 use std::path::Path;
-use std::path::PathBuf;
 use std::process;
 use std::time::Instant;
 use thiserror::Error;
-
-// Code imports
-use icn_covm::api;
-use icn_covm::bytecode;
-use icn_covm::cli;
-use icn_covm::events::{set_log_file, set_log_format, Event, LogFormat};
-use icn_covm::identity::{Identity, IdentityError};
-use icn_covm::storage::auth::AuthContext;
-use icn_covm::storage::implementations::file_storage::FileStorage;
-use icn_covm::storage::implementations::in_memory::InMemoryStorage;
-use icn_covm::storage::traits::Storage;
-use icn_covm::vm::VM;
 
 #[derive(Debug, Error)]
 enum AppError {
@@ -70,6 +57,12 @@ impl From<&str> for AppError {
 impl From<String> for AppError {
     fn from(s: String) -> Self {
         AppError::Other(s)
+    }
+}
+
+impl From<Box<dyn Error>> for AppError {
+    fn from(e: Box<dyn Error>) -> Self {
+        AppError::Other(e.to_string())
     }
 }
 
@@ -203,16 +196,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     Arg::new("capabilities")
                         .long("capabilities")
                         .value_name("CAPABILITY")
-                        .help("Node capabilities (can be used multiple times)")
-                        .action(ArgAction::Append)
-                        .default_value("storage"),
-                )
-                .arg(
-                    Arg::new("log-level")
-                        .long("log-level")
-                        .value_name("LEVEL")
-                        .help("Log level (error, warn, info, debug, trace)")
-                        .default_value("info"),
+                        .help("Capabilities this node offers to the network (can be used multiple times)")
+                        .action(ArgAction::Append),
                 )
         )
         .subcommand(
@@ -243,7 +228,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                 .long("output")
                                 .value_name("FILE")
                                 .help("Output file to save the registered identity to"),
-                        )
+                        ),
                 )
         )
         .subcommand(proposal_command())
@@ -303,7 +288,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         )
                 )
         )
-        .subcommand(api_cmd);
+        .subcommand(api_cmd)
+        .get_matches();
 
     // Handle subcommands
     let result: Result<(), AppError> = match matches.subcommand() {
@@ -456,7 +442,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let mut vm = VM::with_storage_backend(storage);
 
             // Start the API server
-            crate::api::start_api_server(vm, port)
+            api::start_api_server(vm, port)
                 .await
                 .map_err(|e| AppError::Other(format!("API server error: {}", e)))
         }
