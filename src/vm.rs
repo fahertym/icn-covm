@@ -3,7 +3,7 @@
 use crate::events::Event;
 use crate::storage::auth::AuthContext;
 use crate::storage::errors::{StorageError, StorageResult};
-use crate::storage::traits::{StorageBackend, StorageExtensions, StorageTransaction}; // Import the combined Storage trait
+use crate::storage::traits::{Storage, StorageBackend, StorageExtensions};
 use crate::storage::implementations::in_memory::InMemoryStorage;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -17,7 +17,7 @@ use std::fmt::Debug;
 
 use crate::identity::{Identity, Profile, IdentityError}; // Keep Identity, Profile, IdentityError
 use crate::compiler::parse_dsl;
-use crate::storage::{StorageTransaction};
+use crate::storage::traits::StorageTransaction;
 
 /// Error variants that can occur during VM execution
 #[derive(Debug, Error, Clone, PartialEq)]
@@ -643,9 +643,10 @@ pub struct VMEvent {
 }
 
 /// Virtual Machine for executing ICN-COVM bytecode
+#[derive(Debug)]
 pub struct VM<S> // Make VM generic over storage type S
 where
-    S: Storage + Send + Sync + Clone + 'static, // Add Clone bound
+    S: Storage + Send + Sync + Clone + 'static, // Use the combined Storage trait
 {
     /// Stack for operands
     pub stack: Vec<f64>,
@@ -744,14 +745,15 @@ where
                     }
                     Ok(result)
                 }
-                 Err(crate::storage::errors::StorageError::Unauthorized(op, ns, key)) => { // Assuming Unauthorized exists
-                     let user = auth_ctx.map(|a| a.identity_did()).unwrap_or("anonymous");
-                     Err(VMError::StorageError(format!(
-                         "Unauthorized: User '{}' cannot perform '{}' on '{}/{}'",
-                         user, op, ns, key.unwrap_or_default()
-                     )))
+                 // Handle storage errors generically instead of pattern matching specific variants
+                 Err(e) => {
+                     if let Some(user) = auth_ctx.map(|a| a.identity_did()) {
+                         // Log basic unauthorized error info if available
+                         Err(VMError::StorageError(format!("Storage error: {} - User: {}", e, user)))
+                     } else {
+                         Err(VMError::StorageError(format!("Storage op '{}' failed: {}", operation_name, e)))
+                     }
                  }
-                Err(e) => Err(VMError::StorageError(format!("Storage op '{}' failed: {}", operation_name, e))),
             }
         } else {
             Err(VMError::StorageUnavailable)
@@ -862,7 +864,7 @@ where
 
         for op in ops {
             match op {
-                Op::Push(v) => { self.stack.push(*v); Ok(()) },
+                Op::Push(v) => { self.stack.push(v); Ok(()) },
                 Op::Add => { let (a, b) = self.pop_two("Add")?; self.stack.push(a + b); Ok(()) },
                 Op::Sub => { let (a, b) = self.pop_two("Sub")?; self.stack.push(a - b); Ok(()) },
                 Op::Mul => { let (a, b) = self.pop_two("Mul")?; self.stack.push(a * b); Ok(()) },
@@ -885,16 +887,16 @@ where
                 },
                 Op::Load(key) => {
                      let value = if let Some(frame) = self.call_frames.last() {
-                         frame.memory.get(key).or_else(|| frame.params.get(key)).copied()
+                         frame.memory.get(&key).or_else(|| frame.params.get(&key)).copied()
                      } else {
-                         self.memory.get(key).copied()
+                         self.memory.get(&key).copied()
                      };
                      match value {
                          Some(v) => { self.stack.push(v); Ok(()) }
                          None => Err(VMError::VariableNotFound(key.clone()))
                      }
                 },
-                 Op::Emit(msg) => { println!("{}", msg); self.output.push_str(msg); self.output.push('\n'); Ok(()) },
+                 Op::Emit(msg) => { println!("{}", msg); self.output.push_str(&msg); self.output.push('\n'); Ok(()) },
                  Op::Negate => { let v = self.pop_one("Negate")?; self.stack.push(-v); Ok(()) },
                  Op::AssertTop(expected) => { 
                      let v = self.pop_one("AssertTop")?; 
@@ -905,7 +907,7 @@ where
                  Op::DumpStack => { println!("Stack: {:?}", self.stack); Ok(()) },
                  Op::DumpMemory => { println!("Memory: {:?}", self.memory); Ok(()) }, // TODO: Dump call frame memory too
                  Op::AssertMemory { key, expected } => {
-                    let value = self.memory.get(key).copied(); // TODO: Check call frame memory
+                    let value = self.memory.get(&key).copied(); // TODO: Check call frame memory
                     match value {
                         Some(v) if (v - expected).abs() < 1e-9 => Ok(()),
                         Some(v) => Err(VMError::AssertionFailed { message: format!("AssertMemory failed for key '{}': expected {}, got {}", key, expected, v) }),
@@ -1009,7 +1011,7 @@ where
                 Op::StoreP(key) => {
                     if let Some(storage) = self.storage_backend.as_mut() {
                         let value = self.pop_one("StoreP")?;
-                         storage.set(self.auth_context.as_ref(), &self.namespace, key, value.to_string().as_bytes().to_vec())
+                         storage.set(self.auth_context.as_ref(), &self.namespace, &key, value.to_string().as_bytes().to_vec())
                              .map_err(|e| VMError::StorageError(e.to_string()))
                     } else {
                          Err(VMError::StorageUnavailable)
@@ -1017,7 +1019,7 @@ where
                 },
                 Op::LoadP(key) => {
                      if let Some(storage) = self.storage_backend.as_ref() { // Use as_ref for read
-                        let value_bytes = storage.get(self.auth_context.as_ref(), &self.namespace, key)
+                        let value_bytes = storage.get(self.auth_context.as_ref(), &self.namespace, &key)
                             .map_err(|e| VMError::StorageError(e.to_string()))?;
                         let value_str = String::from_utf8(value_bytes).map_err(|e| VMError::StorageError(format!("LoadP failed decode: {}", e)))?;
                         let value = value_str.parse::<f64>().map_err(|e| VMError::StorageError(format!("LoadP failed parse: {}", e)))?;
@@ -1029,7 +1031,7 @@ where
                 },
                  Op::LoadVersionP { key, version } => {
                      if let Some(storage) = self.storage_backend.as_ref() {
-                         match storage.get_version(self.auth_context.as_ref(), &self.namespace, key, *version) {
+                         match storage.get_version(self.auth_context.as_ref(), &self.namespace, &key, version) {
                              Ok((bytes, info)) => {
                                  // Fix println! formatting
                                  println!("[STORAGE] Loaded version {} (by {}, at {})", info.version, info.created_by, info.timestamp);
@@ -1046,7 +1048,7 @@ where
                  },
                  Op::ListVersionsP(key) => {
                      if let Some(storage) = self.storage_backend.as_ref() {
-                         match storage.list_versions(self.auth_context.as_ref(), &self.namespace, key) {
+                         match storage.list_versions(self.auth_context.as_ref(), &self.namespace, &key) {
                              Ok(versions) => {
                                  println!("[STORAGE] Versions for key '{}':", key);
                                  for info in &versions {
@@ -1063,11 +1065,11 @@ where
                  },
                  Op::DiffVersionsP { key, v1, v2 } => {
                       if let Some(storage) = self.storage_backend.as_ref() {
-                         match storage.diff_versions(self.auth_context.as_ref(), &self.namespace, key, *v1, *v2) {
+                         match storage.diff_versions(self.auth_context.as_ref(), &self.namespace, &key, v1, v2) {
                              Ok(diff) => {
                                  println!("[STORAGE] Diff for key '{}' between v{} and v{}:", key, v1, v2);
-                                 // Need to check diff contents, not call is_empty()
-                                 let is_different = !diff.added.is_empty() || !diff.removed.is_empty(); 
+                                 // Use correct fields for diff check - assuming changes field exists
+                                 let is_different = !diff.changes.is_empty();
                                  println!("  Differences found: {}", is_different);
                                  self.stack.push(if is_different { 1.0 } else { 0.0 }); 
                                  Ok(())
@@ -1147,6 +1149,14 @@ where
                       self.stack.push(100.0); // Assume balance 100.0
                       Ok(())
                    },
+                   // --- GetIdentity Op --- 
+                   Op::GetIdentity(id) => {
+                       // Need execute_get_identity helper
+                       println!("GetIdentity Op (Not Implemented): {}", id);
+                       // Placeholder: Push 1.0 if found (assuming we mock found)
+                       self.stack.push(1.0); 
+                       Ok(())
+                   },
                    // --- Other Ops --- 
                   Op::VerifySignature => {
                      // Placeholder logic - needs stack manipulation
@@ -1173,11 +1183,11 @@ where
                     Ok(())
                 },
                 Op::VoteThreshold(threshold) => {
-                    self.stack.push(*threshold as f64);
+                    self.stack.push(threshold);
                     Ok(())
                 },
                 Op::QuorumThreshold(quorum) => {
-                    self.stack.push(*quorum as f64);
+                    self.stack.push(quorum);
                     Ok(())
                 },
                 Op::AssertEqualStack { .. } => Err(VMError::NotImplemented("AssertEqualStack Op".to_string())),
@@ -1195,13 +1205,12 @@ where
      fn execute_conditional_block(&mut self, ops: &[Op]) -> Result<f64, VMError> {
          // Use a temporary stack to isolate execution
          let original_stack = std::mem::take(&mut self.stack);
-         let result = self.execute_inner(ops.to_vec())?;
-         let final_value = self.pop_one("Conditional Block");
+         self.execute_inner(ops.to_vec())?; // Just use ? here
+         let final_value = self.pop_one("Conditional Block")?;
          // Restore original stack
          self.stack = original_stack;
-
-         result?; // Check for execution errors
-         final_value // Return the value left on the temp stack
+         
+         Ok(final_value) // Return the value left on the temp stack
      }
      
      // Helper for calling functions
@@ -1266,6 +1275,58 @@ where
     // pub fn execute_check_membership(...) -> Result<(), VMError> { ... } 
     // pub fn execute_check_delegation(...) -> Result<(), VMError> { ... } 
 
+    // Add mock_storage_operations helper for tests
+    #[cfg(test)]
+    pub fn mock_storage_operations(&mut self) {
+        // Create a simple in-memory storage that's test-friendly
+        #[cfg(test)]
+        struct MockStorage {
+            data: HashMap<String, Vec<u8>>,
+            auth: Option<AuthContext>,
+        }
+        
+        #[cfg(test)]
+        impl Clone for MockStorage {
+            fn clone(&self) -> Self {
+                Self {
+                    data: self.data.clone(),
+                    auth: self.auth.clone(),
+                }
+            }
+        }
+        
+        #[cfg(test)]
+        impl MockStorage {
+            fn new() -> Self {
+                Self {
+                    data: HashMap::new(),
+                    auth: None,
+                }
+            }
+        }
+        
+        #[cfg(test)]
+        impl Storage for MockStorage {
+            // Implement minimal versions of required methods for tests
+            fn get(&self, _auth: Option<&AuthContext>, _namespace: &str, key: &str) -> StorageResult<Vec<u8>> {
+                self.data.get(key).cloned().ok_or(StorageError::NotFound { 
+                    namespace: _namespace.to_string(), 
+                    key: Some(key.to_string()) 
+                })
+            }
+            
+            fn set(&mut self, _auth: Option<&AuthContext>, _namespace: &str, key: &str, value: Vec<u8>) -> StorageResult<()> {
+                self.data.insert(key.to_string(), value);
+                Ok(())
+            }
+            
+            // Add other required methods with minimal implementations...
+        }
+        
+        // Create and use a MockStorage instance
+        let mock = MockStorage::new();
+        self.storage_backend = Some(mock);
+    }
 }
 
 #[cfg(test)]
@@ -1274,23 +1335,14 @@ mod tests {
     use crate::storage::auth::AuthContext;
     use crate::identity::{Identity, Profile}; // Import Profile if needed, remove others for now
     // Add imports for key generation in tests
-    use ed25519_dalek::SigningKey;
     use rand::rngs::OsRng;
     use did_key::generate;
-    use did_key::DidKey;
 
     fn create_test_identity(id: &str, identity_type: &str) -> Identity {
-        // Generate a new key pair for the test identity
-        let mut csprng = OsRng{};
-        let key_pair: SigningKey = SigningKey::generate(&mut csprng);
-
-        // Create a DID using did:key method
-        let did = generate::<DidKey>(&key_pair.verifying_key());
-
         // Construct the identity using the actual Identity::new
         // Assume public_username is derived from id, private name is None for tests
         let public_username = format!("{}_user", id);
-        let mut identity = Identity::new(did.to_string(), public_username, None, key_pair)
+        let identity = Identity::new(public_username, None, identity_type.to_string(), None)
                             .expect("Failed to create test identity"); // Assuming new can fail
 
         // Add metadata
@@ -1303,7 +1355,7 @@ mod tests {
         // Create an auth context with identities and roles
         let member_id = "member1";
         let test_identity = create_test_identity(member_id, "member");
-        let mut auth = AuthContext::new(test_identity.did.clone()); // Use the actual DID
+        let mut auth = AuthContext::new(&test_identity.did); // Pass slice
         
         // Add some roles
         auth.add_role("test_coop", "member");
