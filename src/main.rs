@@ -1,9 +1,9 @@
 // pub mod storage;
 
 use icn_covm::bytecode::{BytecodeCompiler, BytecodeExecution};
+use icn_covm::cli::federation::{federation_command, handle_federation_command};
 use icn_covm::cli::proposal::{handle_proposal_command, proposal_command};
 use icn_covm::cli::proposal_demo::run_proposal_demo;
-use icn_covm::cli::federation::{federation_command, handle_federation_command};
 use icn_covm::compiler::{parse_dsl, parse_dsl_with_stdlib, CompilerError};
 use icn_covm::federation::messages::{ProposalScope, ProposalStatus, VotingModel};
 use icn_covm::federation::{NetworkNode, NodeConfig};
@@ -15,24 +15,24 @@ use icn_covm::storage::traits::StorageBackend;
 use icn_covm::storage::utils::now;
 use icn_covm::vm::{VMError, VM};
 
+use anyhow::{anyhow, Context, Result};
 use clap::{Arg, ArgAction, Command};
 use log::{debug, error, info, warn};
 use std::collections::{HashMap, HashSet};
+use std::error::Error;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
+use std::path::PathBuf;
 use std::process;
 use std::time::Instant;
 use thiserror::Error;
-use anyhow::{anyhow, Context, Result};
-use std::error::Error;
-use std::path::PathBuf;
 
 // Code imports
 use icn_covm::api;
 use icn_covm::bytecode;
 use icn_covm::cli;
-use icn_covm::events::{Event, LogFormat, set_log_file, set_log_format};
+use icn_covm::events::{set_log_file, set_log_format, Event, LogFormat};
 use icn_covm::identity::{Identity, IdentityError};
 use icn_covm::storage::auth::AuthContext;
 use icn_covm::storage::implementations::file_storage::FileStorage;
@@ -411,14 +411,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
             _ => Err("Unknown identity subcommand".into()),
         },
         Some(("proposal", sub_matches)) => {
-            let auth_context = get_or_create_auth_context(default_storage_backend, default_storage_path)?;
+            let auth_context =
+                get_or_create_auth_context(default_storage_backend, default_storage_path)?;
             let storage = setup_storage(default_storage_backend, default_storage_path)?;
             let mut vm = VM::with_storage_backend(storage);
             handle_proposal_command(&mut vm, sub_matches, &auth_context).map_err(|e| e.into())
         }
-        Some(("proposal-demo", _)) => {
-            run_proposal_demo().map_err(|e| e.to_string().into())
-        }
+        Some(("proposal-demo", _)) => run_proposal_demo().map_err(|e| e.to_string().into()),
         Some(("storage", storage_matches)) => {
             let storage_backend = storage_matches
                 .get_one::<String>("storage-backend")
@@ -440,7 +439,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
         }
         Some(("federation", sub_matches)) => {
-            let auth_context = get_or_create_auth_context(default_storage_backend, default_storage_path)?;
+            let auth_context =
+                get_or_create_auth_context(default_storage_backend, default_storage_path)?;
             let storage = setup_storage(default_storage_backend, default_storage_path)?;
             let mut vm = VM::with_storage_backend(storage);
             handle_federation_command(&mut vm, sub_matches, &auth_context)
@@ -450,13 +450,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Some(("api", api_matches)) => {
             let port = *api_matches.get_one::<u16>("port").unwrap_or(&3030);
             println!("Starting API server on port {}...", port);
-            
+
             // Initialize VM with storage
             let storage = setup_storage(default_storage_backend, default_storage_path)?;
             let mut vm = VM::with_storage_backend(storage);
-            
+
             // Start the API server
-            crate::api::start_api_server(vm, port).await
+            crate::api::start_api_server(vm, port)
+                .await
                 .map_err(|e| AppError::Other(format!("API server error: {}", e)))
         }
         _ => Err("Unknown command".into()),
@@ -618,7 +619,8 @@ fn run_program(
         vm.set_namespace("demo");
         vm.set_storage_backend(storage);
 
-        let mut interpreter = BytecodeExecution::new(VM::<InMemoryStorage>::new(), program.instructions);
+        let mut interpreter =
+            BytecodeExecution::new(VM::<InMemoryStorage>::new(), program.instructions);
 
         // Set parameters
         interpreter.vm.set_parameters(parameters)?;
@@ -698,7 +700,8 @@ fn initialize_storage<T: StorageBackend>(
     verbose: bool,
 ) -> Result<(), AppError> {
     // Create user account
-    if let Err(e) = storage.create_account(Some(auth_context), &auth_context.user_id(), 1024 * 1024) {
+    if let Err(e) = storage.create_account(Some(auth_context), &auth_context.user_id(), 1024 * 1024)
+    {
         if verbose {
             println!("Warning: Failed to create account: {:?}", e);
         }
@@ -721,12 +724,10 @@ fn create_demo_auth_context() -> AuthContext {
     let mut auth = AuthContext::new(user_id);
 
     // Register the identity
-    auth.register_identity(Identity::new(
-        user_id.to_string(), 
-        None, 
-        "user".to_string(),
-        None
-    ).expect("Failed to create identity"));
+    auth.register_identity(
+        Identity::new(user_id.to_string(), None, "user".to_string(), None)
+            .expect("Failed to create identity"),
+    );
 
     // Add user roles directly to the auth context
     auth.add_role("global", "user");
@@ -830,7 +831,8 @@ fn run_benchmark(
     vm.set_auth_context(auth_context);
     vm.set_namespace("demo");
 
-    let mut interpreter = BytecodeExecution::new(VM::<InMemoryStorage>::new(), program.instructions);
+    let mut interpreter =
+        BytecodeExecution::new(VM::<InMemoryStorage>::new(), program.instructions);
     interpreter.vm.set_parameters(parameters)?;
 
     let bytecode_start = Instant::now();
@@ -1032,8 +1034,10 @@ fn run_interactive(
                                 println!("{}", program.dump());
                             }
 
-                            let mut interpreter =
-                                BytecodeExecution::new(VM::<InMemoryStorage>::new(), program.instructions);
+                            let mut interpreter = BytecodeExecution::new(
+                                VM::<InMemoryStorage>::new(),
+                                program.instructions,
+                            );
 
                             // Copy VM state to interpreter
                             for (key, value) in vm.memory.iter() {
@@ -1096,20 +1100,24 @@ fn register_identity(
 
     // Create the identity
     let identity = Identity::new(
-        id.to_string(), 
-        None, 
+        id.to_string(),
+        None,
         id_type.to_string(),
-        Some(identity_data.get("metadata")
-            .and_then(|v| v.as_object())
-            .map(|map| {
-                let mut hashmap = HashMap::new();
-                for (k, v) in map {
-                    hashmap.insert(k.clone(), v.clone());
-                }
-                hashmap
-            })
-            .unwrap_or_default())
-    ).expect("Failed to create identity");
+        Some(
+            identity_data
+                .get("metadata")
+                .and_then(|v| v.as_object())
+                .map(|map| {
+                    let mut hashmap = HashMap::new();
+                    for (k, v) in map {
+                        hashmap.insert(k.clone(), v.clone());
+                    }
+                    hashmap
+                })
+                .unwrap_or_default(),
+        ),
+    )
+    .expect("Failed to create identity");
 
     // Create a basic auth context to simulate registration
     let mut auth = AuthContext::new("system");
@@ -1269,13 +1277,12 @@ fn create_admin_auth_context() -> AuthContext {
     auth.add_role("global", "admin");
 
     // Set up admin identity
-    let mut identity = Identity::new(
-        "admin".to_string(), 
-        None, 
-        "admin".to_string(),
-        None
-    ).expect("Failed to create admin identity");
-    identity.profile.other_fields.insert("description".to_string(), serde_json::Value::String("Storage CLI Admin".to_string()));
+    let mut identity = Identity::new("admin".to_string(), None, "admin".to_string(), None)
+        .expect("Failed to create admin identity");
+    identity.profile.other_fields.insert(
+        "description".to_string(),
+        serde_json::Value::String("Storage CLI Admin".to_string()),
+    );
 
     // Register the identity
     auth.register_identity(identity);
@@ -1589,10 +1596,7 @@ async fn execute_proposal(
     let proposal = match federation_storage.get_proposal(&storage, proposal_id) {
         Ok(proposal) => proposal,
         Err(e) => {
-            error!(
-                "Failed to retrieve proposal for {}: {}",
-                proposal_id, e
-            );
+            error!("Failed to retrieve proposal for {}: {}", proposal_id, e);
             return Ok(());
         }
     };
@@ -1646,10 +1650,10 @@ async fn execute_proposal(
         // Create a mock identity with coop information based on the voter name
         // In a real implementation, these would be retrieved from the identity system
         let identity = match icn_covm::identity::Identity::new(
-            vote.voter.clone(), 
-            None, 
+            vote.voter.clone(),
+            None,
             "member".to_string(),
-            None
+            None,
         ) {
             Ok(mut id) => {
                 // For our test, we'll use the first part of the voter name as the cooperative ID
@@ -1658,10 +1662,12 @@ async fn execute_proposal(
                     let coop_id = vote.voter[0..idx].to_string();
                     // Add metadata to set coop_id
                     let coop_id_value = serde_json::Value::String(coop_id);
-                    id.profile.other_fields.insert("coop_id".to_string(), coop_id_value);
+                    id.profile
+                        .other_fields
+                        .insert("coop_id".to_string(), coop_id_value);
                 }
                 id
-            },
+            }
             Err(e) => {
                 warn!("Error creating identity for {}: {}", vote.voter, e);
                 continue;
@@ -1687,14 +1693,17 @@ async fn execute_proposal(
             let unique_coops: HashSet<&str> = voter_identities
                 .values()
                 .filter_map(|identity| {
-                    identity.profile.other_fields.get("coop_id")
-                    .and_then(|value| {
-                        if let serde_json::Value::String(s) = value {
-                            Some(s.as_str())
-                        } else {
-                            None
-                        }
-                    })
+                    identity
+                        .profile
+                        .other_fields
+                        .get("coop_id")
+                        .and_then(|value| {
+                            if let serde_json::Value::String(s) = value {
+                                Some(s.as_str())
+                            } else {
+                                None
+                            }
+                        })
                 })
                 .collect();
 
@@ -1768,7 +1777,10 @@ async fn execute_proposal(
     Ok(())
 }
 
-fn get_or_create_auth_context(storage_backend: &str, storage_path: &str) -> Result<AuthContext, AppError> {
+fn get_or_create_auth_context(
+    storage_backend: &str,
+    storage_path: &str,
+) -> Result<AuthContext, AppError> {
     // For now, just create a simple auth context for demo purposes
     Ok(AuthContext::new("demo_user"))
 }

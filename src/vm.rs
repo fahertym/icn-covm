@@ -648,7 +648,7 @@ impl std::fmt::Display for Op {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone)]
 struct CallFrame {
     // Local memory for function scope
     memory: HashMap<String, f64>,
@@ -713,7 +713,7 @@ where
 
     /// Storage namespace for current execution
     pub namespace: String,
-    
+
     /// Runtime parameters
     pub parameters: HashMap<String, String>,
 
@@ -825,7 +825,7 @@ where
     // Create a fork of this VM for isolated execution
     pub fn fork(&mut self) -> Result<Self, VMError> {
         println!("Creating fork of VM...");
-        
+
         // Create a new VM with same auth context
         let mut new_vm = Self {
             stack: Vec::new(),
@@ -846,12 +846,13 @@ where
         if self.storage_backend.is_some() {
             // Clone the storage backend first
             let storage_clone = self.storage_backend.as_ref().unwrap().clone();
-            
+
             // Start transaction in the cloned storage
             let mut transactional_storage = storage_clone.clone();
-            transactional_storage.begin_transaction()
-                .map_err(|e| VMError::StorageError(format!("Failed to begin transaction: {}", e)))?;
-                
+            transactional_storage.begin_transaction().map_err(|e| {
+                VMError::StorageError(format!("Failed to begin transaction: {}", e))
+            })?;
+
             // Set the storage backend with transaction started
             new_vm.storage_backend = Some(transactional_storage);
             new_vm.transaction_active = true;
@@ -926,15 +927,42 @@ where
         self.parameters = parameters;
         Ok(())
     }
-    
+
     /// Get a copy of the stack
     pub fn get_stack(&self) -> Vec<f64> {
         self.stack.clone()
     }
-    
+
     /// Get a copy of the memory map
     pub fn get_memory_map(&self) -> HashMap<String, f64> {
         self.memory.clone()
+    }
+
+    /// Try to clone this VM
+    ///
+    /// This method attempts to clone the VM, including its storage backend.
+    /// It returns None if the storage backend can't be cloned.
+    pub fn try_clone(&self) -> Option<Self>
+    where
+        S: Clone,
+    {
+        // Try to clone the storage backend
+        let storage_backend = self.storage_backend.as_ref().map(|s| s.clone());
+
+        Some(Self {
+            stack: self.stack.clone(),
+            memory: self.memory.clone(),
+            functions: self.functions.clone(),
+            call_stack: self.call_stack.clone(),
+            call_frames: self.call_frames.clone(),
+            output: self.output.clone(),
+            events: self.events.clone(),
+            auth_context: self.auth_context.clone(),
+            namespace: self.namespace.clone(),
+            parameters: self.parameters.clone(),
+            storage_backend,
+            transaction_active: self.transaction_active,
+        })
     }
 
     // Execute method needs adapting

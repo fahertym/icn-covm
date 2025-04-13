@@ -6,8 +6,8 @@ use crate::governance::proposal::{Proposal, ProposalStatus as LocalProposalStatu
 use crate::governance::proposal_lifecycle::VoteChoice;
 use crate::identity::Identity;
 use crate::storage::auth::AuthContext;
-use crate::storage::traits::{Storage, StorageExtensions};
 use crate::storage::errors::StorageError;
+use crate::storage::traits::{Storage, StorageExtensions};
 use crate::vm::VM;
 
 use clap::{arg, Arg, ArgAction, ArgMatches, Command};
@@ -187,33 +187,42 @@ where
             let proposal_id = sub_matches.get_one::<String>("id").unwrap();
             let node_address = sub_matches.get_one::<String>("to").unwrap();
             let scope_str = sub_matches.get_one::<String>("scope").unwrap();
-            let coops = sub_matches
-                .get_one::<String>("coops")
-                .map(|s| s.split(',').map(|c| c.trim().to_string()).collect::<Vec<_>>());
+            let coops = sub_matches.get_one::<String>("coops").map(|s| {
+                s.split(',')
+                    .map(|c| c.trim().to_string())
+                    .collect::<Vec<_>>()
+            });
             let model_str = sub_matches.get_one::<String>("model").unwrap();
             let expires_in = sub_matches.get_one::<u64>("expires-in").copied();
 
             // Parse the multiaddress
-            let target_addr = node_address.parse::<Multiaddr>()
+            let target_addr = node_address
+                .parse::<Multiaddr>()
                 .map_err(|e| format!("Invalid multiaddress: {}", e))?;
 
             // Parse scope
             let scope = match scope_str.as_str() {
                 "single-coop" => {
                     // Use the current user's coop ID if available
-                    let coop_id = auth_context.memberships.first()
+                    let coop_id = auth_context
+                        .memberships
+                        .first()
                         .ok_or_else(|| "No cooperative membership found for the user")?
-                        .namespace.clone();
+                        .namespace
+                        .clone();
                     ProposalScope::SingleCoop(coop_id)
-                },
+                }
                 "multi-coop" => {
                     let coop_list = coops.ok_or_else(|| 
                         "For multi-coop scope, --coops must be provided with a comma-separated list of cooperative IDs")?;
                     if coop_list.is_empty() {
-                        return Err("At least one cooperative ID must be provided for multi-coop scope".into());
+                        return Err(
+                            "At least one cooperative ID must be provided for multi-coop scope"
+                                .into(),
+                        );
                     }
                     ProposalScope::MultiCoop(coop_list)
-                },
+                }
                 "global" => ProposalScope::GlobalFederation,
                 _ => return Err(format!("Invalid scope: {}", scope_str).into()),
             };
@@ -233,11 +242,14 @@ where
                 voting_model,
                 expires_in,
                 auth_context,
-            ).await
+            )
+            .await
         }
         Some(("receive-proposal", sub_matches)) => {
             let file_path = sub_matches.get_one::<String>("file").unwrap();
-            let source_node = sub_matches.get_one::<String>("source").map(|s| s.to_string());
+            let source_node = sub_matches
+                .get_one::<String>("source")
+                .map(|s| s.to_string());
 
             receive_proposal(vm, file_path, source_node, auth_context).await
         }
@@ -251,11 +263,18 @@ where
                 "yes" => VoteChoice::Yes,
                 "no" => VoteChoice::No,
                 "abstain" => VoteChoice::Abstain,
-                _ => return Err(format!("Invalid vote choice: {}. Must be 'yes', 'no', or 'abstain'", vote_str).into()),
+                _ => {
+                    return Err(format!(
+                        "Invalid vote choice: {}. Must be 'yes', 'no', or 'abstain'",
+                        vote_str
+                    )
+                    .into())
+                }
             };
 
             // Parse the multiaddress
-            let target_addr = node_address.parse::<Multiaddr>()
+            let target_addr = node_address
+                .parse::<Multiaddr>()
                 .map_err(|e| format!("Invalid multiaddress: {}", e))?;
 
             submit_remote_vote(vm, proposal_id, vote_choice, &target_addr, auth_context).await
@@ -266,13 +285,16 @@ where
             let force = sub_matches.get_flag("force");
 
             // Parse the multiaddress
-            let source_addr = node_address.parse::<Multiaddr>()
+            let source_addr = node_address
+                .parse::<Multiaddr>()
                 .map_err(|e| format!("Invalid multiaddress: {}", e))?;
 
             sync_proposal(vm, proposal_id, &source_addr, force, auth_context).await
         }
         Some(("list", sub_matches)) => {
-            let status_filter = sub_matches.get_one::<String>("status").map(|s| s.to_string());
+            let status_filter = sub_matches
+                .get_one::<String>("status")
+                .map(|s| s.to_string());
             list_federated_proposals(vm, status_filter, auth_context)
         }
         _ => Err("Unknown federation subcommand".into()),
@@ -288,15 +310,15 @@ fn local_to_federated_proposal(
 ) -> FederatedProposal {
     let proposal_id = local_proposal.id.clone();
     let namespace = "governance".to_string();
-    
+
     // Use yes/no options for now - could be extended based on proposal type
     let options = vec!["Yes".to_string(), "No".to_string()];
-    
+
     let creator = local_proposal.creator.clone();
-    
+
     // Convert created_at DateTime to Unix timestamp
     let created_at = local_proposal.created_at.timestamp();
-    
+
     let mut federated_proposal = FederatedProposal {
         proposal_id,
         namespace,
@@ -316,7 +338,7 @@ fn local_to_federated_proposal(
             LocalProposalStatus::Expired => ProposalStatus::Expired,
         },
     };
-    
+
     // Add expiration if provided
     if let Some(seconds) = expires_in {
         let now = SystemTime::now()
@@ -325,38 +347,38 @@ fn local_to_federated_proposal(
             .unwrap_or_else(|_| 0);
         federated_proposal.expires_at = Some(now + seconds as i64);
     }
-    
+
     federated_proposal
 }
 
 /// Convert a vote choice to ranked choices
 fn vote_choice_to_ranked_choices(choice: &VoteChoice) -> Vec<f64> {
     match choice {
-        VoteChoice::Yes => vec![1.0, 0.0], // Yes first preference
-        VoteChoice::No => vec![0.0, 1.0],  // No first preference
+        VoteChoice::Yes => vec![1.0, 0.0],     // Yes first preference
+        VoteChoice::No => vec![0.0, 1.0],      // No first preference
         VoteChoice::Abstain => vec![0.0, 0.0], // Abstain (equally weighted)
     }
 }
 
 /// Load a local proposal by ID
-async fn load_local_proposal<S>(
-    vm: &VM<S>,
-    proposal_id: &str,
-) -> Result<Proposal, Box<dyn Error>>
+async fn load_local_proposal<S>(vm: &VM<S>, proposal_id: &str) -> Result<Proposal, Box<dyn Error>>
 where
     S: Storage + StorageExtensions + Send + Sync + Clone + Debug + 'static,
 {
-    let storage = vm.storage_backend.as_ref()
+    let storage = vm
+        .storage_backend
+        .as_ref()
         .ok_or_else(|| "Storage backend not available")?;
-    
+
     let proposal_key = format!("governance/proposals/{}", proposal_id);
-    
-    let proposal_data = storage.get(None, "proposals", &proposal_key)
+
+    let proposal_data = storage
+        .get(None, "proposals", &proposal_key)
         .map_err(|e| format!("Failed to read proposal: {}", e))?;
-    
+
     let proposal: Proposal = serde_json::from_slice(&proposal_data)
         .map_err(|e| format!("Failed to parse proposal data: {}", e))?;
-    
+
     Ok(proposal)
 }
 
@@ -375,15 +397,11 @@ where
 {
     // Load the local proposal
     let local_proposal = load_local_proposal(vm, proposal_id).await?;
-    
+
     // Convert to federated proposal
-    let federated_proposal = local_to_federated_proposal(
-        &local_proposal,
-        scope,
-        voting_model,
-        expires_in,
-    );
-    
+    let federated_proposal =
+        local_to_federated_proposal(&local_proposal, scope, voting_model, expires_in);
+
     // Configure the federation node
     let node_config = NodeConfig {
         port: Some(0), // Use any available port
@@ -392,27 +410,37 @@ where
         capabilities: vec!["proposal-sharing".to_string()],
         protocol_version: "1.0.0".to_string(),
     };
-    
+
     // Create and start the network node
-    let mut node = NetworkNode::new(node_config).await
+    let mut node = NetworkNode::new(node_config)
+        .await
         .map_err(|e| format!("Failed to create network node: {}", e))?;
-    
+
     // Broadcast the proposal
     println!("Sharing proposal {} with node {}", proposal_id, target_addr);
-    node.broadcast_proposal(federated_proposal.clone()).await
+    node.broadcast_proposal(federated_proposal.clone())
+        .await
         .map_err(|e| format!("Failed to broadcast proposal: {}", e))?;
-    
+
     // Store locally as a federated proposal
-    let storage = vm.storage_backend.as_mut()
+    let storage = vm
+        .storage_backend
+        .as_mut()
         .ok_or_else(|| "Storage backend not available")?;
-    
+
     let storage_key = format!("{}/{}", FEDERATION_PROPOSALS_PATH, proposal_id);
     let proposal_data = serde_json::to_vec(&federated_proposal)
         .map_err(|e| format!("Failed to serialize federated proposal: {}", e))?;
-    
-    storage.set(Some(auth_context), "federation", &storage_key, proposal_data)
+
+    storage
+        .set(
+            Some(auth_context),
+            "federation",
+            &storage_key,
+            proposal_data,
+        )
         .map_err(|e| format!("Failed to store federated proposal: {}", e))?;
-    
+
     // Store sync metadata
     let sync_metadata = FederationSyncMetadata {
         proposal_id: proposal_id.to_string(),
@@ -424,19 +452,20 @@ where
         comment_count: 0,
         vote_count: 0,
     };
-    
+
     let sync_key = format!("{}/{}/last_seen", FEDERATION_SYNC_PATH, proposal_id);
     let sync_data = serde_json::to_vec(&sync_metadata)
         .map_err(|e| format!("Failed to serialize sync metadata: {}", e))?;
-    
-    storage.set(Some(auth_context), "federation", &sync_key, sync_data)
+
+    storage
+        .set(Some(auth_context), "federation", &sync_key, sync_data)
         .map_err(|e| format!("Failed to store sync metadata: {}", e))?;
-    
+
     println!("✅ Successfully shared proposal with node and stored federated copy locally");
-    
+
     // Clean up
     node.stop().await;
-    
+
     Ok(())
 }
 
@@ -453,24 +482,32 @@ where
     // Read the proposal file
     let proposal_json = std::fs::read_to_string(file_path)
         .map_err(|e| format!("Failed to read proposal file: {}", e))?;
-    
+
     // Parse the proposal
     let federated_proposal: FederatedProposal = serde_json::from_str(&proposal_json)
         .map_err(|e| format!("Failed to parse proposal JSON: {}", e))?;
-    
+
     let proposal_id = federated_proposal.proposal_id.clone();
-    
+
     // Store the proposal
-    let storage = vm.storage_backend.as_mut()
+    let storage = vm
+        .storage_backend
+        .as_mut()
         .ok_or_else(|| "Storage backend not available")?;
-    
+
     let storage_key = format!("{}/{}", FEDERATION_PROPOSALS_PATH, proposal_id);
     let proposal_data = serde_json::to_vec(&federated_proposal)
         .map_err(|e| format!("Failed to serialize federated proposal: {}", e))?;
-    
-    storage.set(Some(auth_context), "federation", &storage_key, proposal_data)
+
+    storage
+        .set(
+            Some(auth_context),
+            "federation",
+            &storage_key,
+            proposal_data,
+        )
         .map_err(|e| format!("Failed to store federated proposal: {}", e))?;
-    
+
     // Store sync metadata
     let sync_metadata = FederationSyncMetadata {
         proposal_id: proposal_id.clone(),
@@ -482,16 +519,20 @@ where
         comment_count: 0,
         vote_count: 0,
     };
-    
+
     let sync_key = format!("{}/{}/last_seen", FEDERATION_SYNC_PATH, proposal_id);
     let sync_data = serde_json::to_vec(&sync_metadata)
         .map_err(|e| format!("Failed to serialize sync metadata: {}", e))?;
-    
-    storage.set(Some(auth_context), "federation", &sync_key, sync_data)
+
+    storage
+        .set(Some(auth_context), "federation", &sync_key, sync_data)
         .map_err(|e| format!("Failed to store sync metadata: {}", e))?;
-    
-    println!("✅ Successfully received and stored federated proposal {}", proposal_id);
-    
+
+    println!(
+        "✅ Successfully received and stored federated proposal {}",
+        proposal_id
+    );
+
     Ok(())
 }
 
@@ -507,42 +548,48 @@ where
     S: Storage + StorageExtensions + Send + Sync + Clone + Debug + 'static,
 {
     // Load the federated proposal if it exists locally
-    let storage = vm.storage_backend.as_ref()
+    let storage = vm
+        .storage_backend
+        .as_ref()
         .ok_or_else(|| "Storage backend not available")?;
-    
+
     let storage_key = format!("{}/{}", FEDERATION_PROPOSALS_PATH, proposal_id);
-    
+
     let federated_proposal = match storage.get(Some(auth_context), "federation", &storage_key) {
-        Ok(data) => {
-            serde_json::from_slice::<FederatedProposal>(&data)
-                .map_err(|e| format!("Failed to parse federated proposal: {}", e))?
-        },
+        Ok(data) => serde_json::from_slice::<FederatedProposal>(&data)
+            .map_err(|e| format!("Failed to parse federated proposal: {}", e))?,
         Err(_) => {
             // Proposal not found locally, need to fetch it first
-            println!("Proposal not found locally. Please sync it first with 'federation sync' command.");
+            println!(
+                "Proposal not found locally. Please sync it first with 'federation sync' command."
+            );
             return Err("Proposal not found locally. Please sync it first.".into());
         }
     };
-    
+
     // Check if the proposal is still open for voting
     if federated_proposal.status != ProposalStatus::Open {
-        return Err(format!("Proposal is not open for voting. Current status: {:?}", federated_proposal.status).into());
+        return Err(format!(
+            "Proposal is not open for voting. Current status: {:?}",
+            federated_proposal.status
+        )
+        .into());
     }
-    
+
     // Create a vote object
     let voter_id = auth_context.current_identity_did.clone();
     let ranked_choices = vote_choice_to_ranked_choices(&vote_choice);
-    
+
     // Create a message to sign
     let message = format!(
         "Vote for proposal {} by {} with choices {:?}",
         proposal_id, voter_id, ranked_choices
     );
-    
+
     // We'd normally sign this with the identity's private key
     // For now, we'll use a placeholder signature
     let signature = format!("placeholder_signature_for_{}", voter_id);
-    
+
     let federated_vote = FederatedVote {
         proposal_id: proposal_id.to_string(),
         voter: voter_id.clone(),
@@ -550,7 +597,7 @@ where
         message: message.clone(),
         signature,
     };
-    
+
     // Configure the federation node
     let node_config = NodeConfig {
         port: Some(0), // Use any available port
@@ -559,34 +606,45 @@ where
         capabilities: vec!["vote-submission".to_string()],
         protocol_version: "1.0.0".to_string(),
     };
-    
+
     // Create and start the network node
-    let mut node = NetworkNode::new(node_config).await
+    let mut node = NetworkNode::new(node_config)
+        .await
         .map_err(|e| format!("Failed to create network node: {}", e))?;
-    
+
     // Submit the vote
-    println!("Submitting vote for proposal {} to node {}", proposal_id, target_addr);
-    node.submit_vote(federated_vote.clone()).await
+    println!(
+        "Submitting vote for proposal {} to node {}",
+        proposal_id, target_addr
+    );
+    node.submit_vote(federated_vote.clone())
+        .await
         .map_err(|e| format!("Failed to submit vote: {}", e))?;
-    
+
     // Store the vote locally
-    let storage = vm.storage_backend.as_mut()
+    let storage = vm
+        .storage_backend
+        .as_mut()
         .ok_or_else(|| "Storage backend not available")?;
-    
+
     let vote_key = format!("{}/{}/{}", FEDERATION_VOTES_PATH, proposal_id, voter_id);
-    
+
     // Store the raw vote choice for compatibility with local votes
     let vote_data = serde_json::to_vec(&vote_choice)
         .map_err(|e| format!("Failed to serialize vote choice: {}", e))?;
-    
-    storage.set(Some(auth_context), "votes", &vote_key, vote_data)
+
+    storage
+        .set(Some(auth_context), "votes", &vote_key, vote_data)
         .map_err(|e| format!("Failed to store vote: {}", e))?;
-    
-    println!("✅ Successfully submitted vote on proposal {} and stored locally", proposal_id);
-    
+
+    println!(
+        "✅ Successfully submitted vote on proposal {} and stored locally",
+        proposal_id
+    );
+
     // Clean up
     node.stop().await;
-    
+
     Ok(())
 }
 
@@ -603,36 +661,42 @@ where
 {
     // This would normally be implemented with direct federation communication
     // For now, we'll simulate the sync with local operations
-    
+
     println!("Syncing proposal {} from node {}", proposal_id, source_addr);
-    
+
     // Check if we have the proposal locally
-    let storage = vm.storage_backend.as_ref()
+    let storage = vm
+        .storage_backend
+        .as_ref()
         .ok_or_else(|| "Storage backend not available")?;
-    
+
     let local_key = format!("{}/{}", FEDERATION_PROPOSALS_PATH, proposal_id);
-    let local_exists = storage.contains(Some(auth_context), "federation", &local_key).unwrap_or(false);
-    
+    let local_exists = storage
+        .contains(Some(auth_context), "federation", &local_key)
+        .unwrap_or(false);
+
     // In a real implementation, we would:
     // 1. Query the remote node for the proposal data
     // 2. Query for comments and votes
     // 3. Compare timestamps and merge data
-    
+
     println!("Simulating sync of proposal, comments, and votes");
     println!("Local copy exists: {}", local_exists);
     println!("Force mode: {}", force);
-    
+
     if local_exists && !force {
         println!("Proposal already exists locally. Use --force to override.");
     } else {
         println!("Proposal would be synced from the remote node.");
         println!("Comments and votes would be merged with local data if any.");
     }
-    
+
     // Update sync metadata
-    let storage = vm.storage_backend.as_mut()
+    let storage = vm
+        .storage_backend
+        .as_mut()
         .ok_or_else(|| "Storage backend not available")?;
-    
+
     let sync_metadata = FederationSyncMetadata {
         proposal_id: proposal_id.to_string(),
         last_synced: SystemTime::now()
@@ -643,16 +707,20 @@ where
         comment_count: 0, // In a real implementation, this would be the actual count
         vote_count: 0,    // In a real implementation, this would be the actual count
     };
-    
+
     let sync_key = format!("{}/{}/last_seen", FEDERATION_SYNC_PATH, proposal_id);
     let sync_data = serde_json::to_vec(&sync_metadata)
         .map_err(|e| format!("Failed to serialize sync metadata: {}", e))?;
-    
-    storage.set(Some(auth_context), "federation", &sync_key, sync_data)
+
+    storage
+        .set(Some(auth_context), "federation", &sync_key, sync_data)
         .map_err(|e| format!("Failed to store sync metadata: {}", e))?;
-    
-    println!("✅ Successfully updated sync metadata for proposal {}", proposal_id);
-    
+
+    println!(
+        "✅ Successfully updated sync metadata for proposal {}",
+        proposal_id
+    );
+
     Ok(())
 }
 
@@ -665,32 +733,35 @@ fn list_federated_proposals<S>(
 where
     S: Storage + StorageExtensions + Send + Sync + Clone + Debug + 'static,
 {
-    let storage = vm.storage_backend.as_ref()
+    let storage = vm
+        .storage_backend
+        .as_ref()
         .ok_or_else(|| "Storage backend not available")?;
-    
+
     // Get all proposals in the federation namespace
     let proposals_path = FEDERATION_PROPOSALS_PATH;
-    
-    let proposal_keys = match storage.list_keys(Some(auth_context), "federation", Some(proposals_path)) {
-        Ok(keys) => keys,
-        Err(e) => {
-            println!("No federated proposals found: {}", e);
-            return Ok(());
-        }
-    };
-    
+
+    let proposal_keys =
+        match storage.list_keys(Some(auth_context), "federation", Some(proposals_path)) {
+            Ok(keys) => keys,
+            Err(e) => {
+                println!("No federated proposals found: {}", e);
+                return Ok(());
+            }
+        };
+
     if proposal_keys.is_empty() {
         println!("No federated proposals found");
         return Ok(());
     }
-    
+
     println!("=== Federated Proposals ===");
-    
+
     let mut found_any = false;
-    
+
     for key in proposal_keys {
         let proposal_id = key.split('/').last().unwrap_or("unknown");
-        
+
         // Read the proposal
         let full_key = format!("{}/{}", FEDERATION_PROPOSALS_PATH, proposal_id);
         match storage.get(Some(auth_context), "federation", &full_key) {
@@ -706,58 +777,64 @@ where
                             "expired" => proposal.status == ProposalStatus::Expired,
                             _ => true, // Invalid status filter, show all
                         };
-                        
+
                         if !status_matches {
                             continue;
                         }
                     }
-                    
+
                     found_any = true;
-                    
+
                     // Get sync metadata if available
                     let sync_key = format!("{}/{}/last_seen", FEDERATION_SYNC_PATH, proposal_id);
                     let sync_info = match storage.get(Some(auth_context), "federation", &sync_key) {
                         Ok(data) => {
-                            if let Ok(metadata) = serde_json::from_slice::<FederationSyncMetadata>(&data) {
+                            if let Ok(metadata) =
+                                serde_json::from_slice::<FederationSyncMetadata>(&data)
+                            {
                                 Some(metadata)
                             } else {
                                 None
                             }
-                        },
+                        }
                         Err(_) => None,
                     };
-                    
+
                     // Calculate vote counts
                     let votes_path = format!("{}/{}", FEDERATION_VOTES_PATH, proposal_id);
-                    let vote_count = match storage.list_keys(Some(auth_context), "votes", Some(&votes_path)) {
-                        Ok(keys) => keys.len(),
-                        Err(_) => 0,
-                    };
-                    
+                    let vote_count =
+                        match storage.list_keys(Some(auth_context), "votes", Some(&votes_path)) {
+                            Ok(keys) => keys.len(),
+                            Err(_) => 0,
+                        };
+
                     // Display proposal info
                     println!("\nID:        {}", proposal_id);
                     println!("Creator:   {}", proposal.creator);
                     println!("Status:    {:?}", proposal.status);
-                    println!("Created:   {}", 
+                    println!(
+                        "Created:   {}",
                         chrono::DateTime::from_timestamp(proposal.created_at, 0)
                             .map(|dt| dt.to_rfc3339())
                             .unwrap_or_else(|| proposal.created_at.to_string())
                     );
-                    
+
                     if let Some(expires) = proposal.expires_at {
-                        println!("Expires:   {}", 
+                        println!(
+                            "Expires:   {}",
                             chrono::DateTime::from_timestamp(expires, 0)
                                 .map(|dt| dt.to_rfc3339())
                                 .unwrap_or_else(|| expires.to_string())
                         );
                     }
-                    
+
                     println!("Scope:     {:?}", proposal.scope);
                     println!("Model:     {:?}", proposal.voting_model);
                     println!("Votes:     {}", vote_count);
-                    
+
                     if let Some(metadata) = sync_info {
-                        println!("Last Sync: {} from {}", 
+                        println!(
+                            "Last Sync: {} from {}",
                             chrono::DateTime::from_timestamp(metadata.last_synced as i64, 0)
                                 .map(|dt| dt.to_rfc3339())
                                 .unwrap_or_else(|| metadata.last_synced.to_string()),
@@ -765,18 +842,21 @@ where
                         );
                     }
                 }
-            },
+            }
             Err(_) => continue,
         }
     }
-    
+
     if !found_any {
         if status_filter.is_some() {
-            println!("No proposals found matching status filter: {:?}", status_filter);
+            println!(
+                "No proposals found matching status filter: {:?}",
+                status_filter
+            );
         } else {
             println!("No proposals found");
         }
     }
-    
+
     Ok(())
-} 
+}

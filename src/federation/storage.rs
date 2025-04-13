@@ -1,4 +1,6 @@
-use crate::federation::messages::{FederatedProposal, FederatedVote, ProposalScope, ProposalStatus, VotingModel};
+use crate::federation::messages::{
+    FederatedProposal, FederatedVote, ProposalScope, ProposalStatus, VotingModel,
+};
 use crate::identity::Identity;
 use crate::storage::auth::AuthContext;
 use crate::storage::errors::{StorageError, StorageResult};
@@ -101,7 +103,7 @@ impl FederationStorage {
     fn load_identity_from_storage<S: StorageExtensions>(
         &self,
         storage: &S,
-        identity_id: &str
+        identity_id: &str,
     ) -> StorageResult<Identity> {
         storage.get_identity(identity_id)
     }

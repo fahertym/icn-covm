@@ -120,22 +120,23 @@ pub fn expand_proposal_lifecycle(lines: &[&str]) -> Result<Vec<Op>, String> {
     let discussion_duration = properties
         .get("discussion_duration")
         .and_then(|s| parse_duration(s));
-    
+
     // Create a basic Identity for the creator
     let creator_name = properties
         .get("author")
         .cloned()
         .unwrap_or_else(|| "macro_creator".to_string());
-    
+
     // We need to create an actual Identity struct for the creator
     // Using a simple approach to create a basic Identity with just the name and type
     let creator = crate::identity::Identity::new(
         creator_name,
-        None, // no full name
+        None,                 // no full name
         "member".to_string(), // default type
-        None, // no extra profile fields
-    ).map_err(|e| format!("Failed to create identity: {}", e))?;
-    
+        None,                 // no extra profile fields
+    )
+    .map_err(|e| format!("Failed to create identity: {}", e))?;
+
     let proposal = ProposalLifecycle::new(
         proposal_id.clone(),
         creator,
@@ -260,28 +261,28 @@ pub fn macro_expand(macro_name: &str, lines: &[&str]) -> Result<Vec<Op>, String>
 pub struct ProposalLifecycleMacro {
     /// Unique identifier for the proposal
     pub proposal_id: String,
-    
+
     /// Required quorum percentage (0.0-1.0) for the proposal to be valid
     pub quorum: f64,
-    
+
     /// Required threshold percentage (0.0-1.0) for the proposal to pass
     pub threshold: f64,
-    
+
     /// Block of code to execute when the proposal is processed
     pub execution_block: Vec<String>,
-    
+
     /// Title of the proposal
     pub title: String,
-    
+
     /// Creator of the proposal
     pub created_by: String,
-    
+
     /// Timestamp when the proposal was created
     pub created_at: f64,
-    
+
     /// Block of code to execute if the proposal passes
     pub passed_block: Vec<String>,
-    
+
     /// Optional block of code to execute if the proposal fails
     pub failed_block: Option<Vec<String>>,
 }
@@ -311,24 +312,24 @@ impl ProposalLifecycleMacro {
             failed_block,
         }
     }
-    
+
     /// Process this macro and generate the operations for VM execution
     pub fn process(&self) -> Result<Vec<Op>, String> {
         // Call the existing expand_proposal_lifecycle function
         // We'll use the blocks from self to construct the input
         let mut lines = Vec::new();
-        
+
         // Add metadata properties
         lines.push(format!("title {}", self.title));
         lines.push(format!("quorum {}", self.quorum));
         lines.push(format!("threshold {}", self.threshold));
         lines.push(format!("author {}", self.created_by));
-        
+
         // Add the execution block lines
         for line in &self.execution_block {
             lines.push(line.clone());
         }
-        
+
         // Add if passed block if present
         if !self.passed_block.is_empty() {
             lines.push("if passed:".to_string());
@@ -336,7 +337,7 @@ impl ProposalLifecycleMacro {
                 lines.push(format!("    {}", line)); // Add indentation
             }
         }
-        
+
         // Add else block if present
         if let Some(failed_lines) = &self.failed_block {
             if !failed_lines.is_empty() {
@@ -346,10 +347,10 @@ impl ProposalLifecycleMacro {
                 }
             }
         }
-        
+
         // Convert string lines to string slices for expand_proposal_lifecycle
         let lines_refs: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
-        
+
         // Use the existing function to process the macro
         expand_proposal_lifecycle(&lines_refs)
     }

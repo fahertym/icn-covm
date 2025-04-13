@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Proposal {
@@ -57,7 +57,7 @@ impl Proposal {
     pub fn storage_key(&self) -> String {
         format!("governance/proposals/{}", self.id)
     }
-    
+
     pub fn mark_active(&mut self) {
         self.status = ProposalStatus::Active;
     }
@@ -83,4 +83,4 @@ impl Proposal {
     pub fn mark_expired(&mut self) {
         self.status = ProposalStatus::Expired;
     }
-} 
+}

@@ -54,7 +54,7 @@ impl FileResourceAccount {
     fn user_id(&self) -> &str {
         &self.user_id
     }
-    
+
     /// Return a cloned copy of the user ID
     fn user_id_cloneable(&self) -> String {
         self.user_id.clone()
@@ -271,7 +271,8 @@ impl FileStorage {
                     })?;
 
                 // Add to cache
-                self.account_cache.insert(account.user_id_cloneable(), account);
+                self.account_cache
+                    .insert(account.user_id_cloneable(), account);
             }
         }
 

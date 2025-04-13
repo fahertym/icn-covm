@@ -36,7 +36,7 @@ fn to_bytes(s: &str) -> Vec<u8> {
 }
 
 /// An in-memory implementation of the `StorageBackend` trait.
-/// 
+///
 /// This storage backend maintains all data in memory, making it suitable for:
 /// - Unit and integration testing
 /// - Demonstration applications
@@ -431,7 +431,7 @@ impl StorageBackend for InMemoryStorage {
                     user_id: auth.user_id_cloneable(),
                     action: format!("unknown action: {}", action),
                     key: namespace.to_string(),
-                })
+                });
             }
         };
 

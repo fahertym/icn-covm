@@ -87,16 +87,16 @@ pub enum VotingModel {
 pub enum ProposalStatus {
     /// Proposal is open for voting
     Open,
-    
+
     /// Proposal voting has concluded
     Closed,
-    
+
     /// Proposal has been executed/implemented
     Executed,
-    
+
     /// Proposal has been rejected
     Rejected,
-    
+
     /// Proposal has expired without reaching conclusion
     Expired,
 }
@@ -127,7 +127,7 @@ pub struct FederatedProposal {
 
     /// Optional expiration timestamp (Unix seconds)
     pub expires_at: Option<i64>,
-    
+
     /// Current status of the proposal
     pub status: ProposalStatus,
 }
@@ -146,7 +146,7 @@ impl FederatedProposal {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs() as i64;
-            
+
         Self {
             proposal_id,
             namespace,
@@ -159,14 +159,14 @@ impl FederatedProposal {
             status: ProposalStatus::Open,
         }
     }
-    
+
     /// Set an expiration time for this proposal
     pub fn with_expiration(mut self, expires_in_seconds: i64) -> Self {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs() as i64;
-            
+
         self.expires_at = Some(now + expires_in_seconds);
         self
     }
