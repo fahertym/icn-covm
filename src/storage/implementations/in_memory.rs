@@ -17,7 +17,6 @@ fn to_bytes(s: &str) -> Vec<u8> {
 
 /// An in-memory implementation of the `StorageBackend` trait.
 /// Suitable for testing and demos.
-#[derive(Default, Debug)]
 pub struct InMemoryStorage {
     // Namespace -> Key -> Value
     data: HashMap<String, HashMap<String, Vec<u8>>>,
@@ -35,7 +34,13 @@ pub struct InMemoryStorage {
 
 impl InMemoryStorage {
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            data: HashMap::new(),
+            versions: HashMap::new(),
+            accounts: HashMap::new(),
+            audit_log: Vec::new(),
+            transaction_stack: Vec::new(),
+        }
     }
 
     // Helper to create a combined key for internal maps

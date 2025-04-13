@@ -19,7 +19,7 @@ mod cli;
 use cli::proposal::{handle_proposal_command, proposal_command};
 
 use clap::{Arg, ArgAction, Command};
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Write;
@@ -1486,6 +1486,7 @@ async fn broadcast_proposal(
         scope,
         voting_model,
         expires_at: expires_in.map(|seconds| (now() as i64) + (seconds as i64)),
+        status: icn_covm::federation::ProposalStatus::Open,
     };
 
     // Configure federation
@@ -1723,10 +1724,11 @@ async fn execute_proposal(
     let proposal = match federation_storage.get_proposal(&storage, proposal_id) {
         Ok(proposal) => proposal,
         Err(e) => {
-            return Err(AppError::Federation(format!(
-                "Failed to get proposal: {}",
-                e
-            )))
+            error!(
+                "Failed to retrieve proposal for {}: {}",
+                proposal_id, e
+            );
+            return Ok(());
         }
     };
 
@@ -1778,14 +1780,28 @@ async fn execute_proposal(
     for vote in &votes {
         // Create a mock identity with coop information based on the voter name
         // In a real implementation, these would be retrieved from the identity system
-        let mut identity = Identity::new(&vote.voter, "member");
-
-        // For our test, we'll use the first part of the voter name as the cooperative ID
-        // In a real implementation, this would be properly associated with the voter's identity
-        if let Some(idx) = vote.voter.find('_') {
-            let coop_id = vote.voter[0..idx].to_string();
-            identity.add_metadata("coop_id", &coop_id);
-        }
+        let identity = match icn_covm::identity::Identity::new(
+            vote.voter.clone(), 
+            None, 
+            "member".to_string(),
+            None
+        ) {
+            Ok(mut id) => {
+                // For our test, we'll use the first part of the voter name as the cooperative ID
+                // In a real implementation, this would be properly associated with the voter's identity
+                if let Some(idx) = vote.voter.find('_') {
+                    let coop_id = vote.voter[0..idx].to_string();
+                    // Add metadata to set coop_id
+                    let coop_id_value = serde_json::Value::String(coop_id);
+                    id.profile.other_fields.insert("coop_id".to_string(), coop_id_value);
+                }
+                id
+            },
+            Err(e) => {
+                warn!("Error creating identity for {}: {}", vote.voter, e);
+                continue;
+            }
+        };
 
         voter_identities.insert(vote.voter.clone(), identity);
     }
@@ -1803,9 +1819,18 @@ async fn execute_proposal(
         }
         VotingModel::OneCoopOneVote => {
             // Count unique cooperatives
-            let unique_coops: HashSet<&String> = voter_identities
+            let unique_coops: HashSet<&str> = voter_identities
                 .values()
-                .filter_map(|identity| identity.get_metadata("coop_id"))
+                .filter_map(|identity| {
+                    identity.profile.other_fields.get("coop_id")
+                    .and_then(|value| {
+                        if let serde_json::Value::String(s) = value {
+                            Some(s.as_str())
+                        } else {
+                            None
+                        }
+                    })
+                })
                 .collect();
 
             println!(
