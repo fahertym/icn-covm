@@ -13,6 +13,8 @@ pub struct Proposal {
     pub votes_path: Option<String>,
     pub attachments: Vec<String>,
     pub execution_result: Option<String>,
+    pub deliberation_started_at: Option<DateTime<Utc>>,
+    pub min_deliberation_hours: Option<i64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -46,6 +48,8 @@ impl Proposal {
             votes_path: None,
             attachments,
             execution_result: None,
+            deliberation_started_at: None,
+            min_deliberation_hours: None,
         }
     }
 
@@ -60,6 +64,7 @@ impl Proposal {
 
     pub fn mark_deliberation(&mut self) {
         self.status = ProposalStatus::Deliberation;
+        self.deliberation_started_at = Some(Utc::now());
     }
 
     pub fn mark_voting(&mut self) {

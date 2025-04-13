@@ -31,6 +31,9 @@ use uuid;
 pub type ProposalId = String;
 type CommentId = String;
 
+// Constants for proposal lifecycle
+const MIN_DELIBERATION_HOURS: i64 = 24; // Default minimum deliberation period
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ProposalComment {
     pub id: CommentId,
@@ -84,6 +87,13 @@ pub fn proposal_command() -> Command {
                         .long("attachments")
                         .value_name("ATTACHMENTS")
                         .help("Comma-separated list of attachment references"),
+                )
+                .arg(
+                    Arg::new("min-deliberation")
+                        .long("min-deliberation")
+                        .value_name("HOURS")
+                        .help("Minimum hours required for deliberation phase")
+                        .value_parser(value_parser!(i64)),
                 )
                 // Keep existing arguments for backward compatibility
                 .arg(
@@ -413,7 +423,7 @@ where
                 };
                 
                 // Create the new proposal
-                let proposal = Proposal::new(
+                let mut proposal = Proposal::new(
                     id.clone(),
                     creator,
                     logic_path,
@@ -421,6 +431,11 @@ where
                     discussion_path,
                     attachments,
                 );
+                
+                // Set minimum deliberation hours if provided
+                if let Some(min_hours) = create_matches.get_one::<i64>("min-deliberation") {
+                    proposal.min_deliberation_hours = Some(*min_hours);
+                }
                 
                 // Store the proposal using JSON storage API
                 let storage = vm.storage_backend.as_mut().ok_or_else(||
@@ -1002,8 +1017,20 @@ where
                     proposal.mark_deliberation();
                 },
                 "active" => {
-                    if !matches!(proposal.status, ProposalStatus::Draft) && 
-                       !matches!(proposal.status, ProposalStatus::Deliberation) && !force {
+                    if matches!(proposal.status, ProposalStatus::Deliberation) {
+                        let started_at = proposal.deliberation_started_at.ok_or("Missing deliberation start timestamp")?;
+                        let now = Utc::now();
+                        let elapsed = now.signed_duration_since(started_at);
+                        let min_required = proposal.min_deliberation_hours.unwrap_or(MIN_DELIBERATION_HOURS);
+                        
+                        if elapsed.num_hours() < min_required && !force {
+                            return Err(format!(
+                                "Deliberation phase must last at least {} hours (elapsed: {}). Use --force to override.",
+                                min_required,
+                                elapsed.num_hours()
+                            ).into());
+                        }
+                    } else if !matches!(proposal.status, ProposalStatus::Draft) && !force {
                         return Err(format!(
                             "Cannot transition proposal from {:?} to Active without --force flag",
                             proposal.status

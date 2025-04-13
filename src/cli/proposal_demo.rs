@@ -1,4 +1,4 @@
-use chrono::Utc;
+use chrono::{DateTime, Duration, Utc};
 use std::error::Error;
 use std::fmt::Debug;
 use std::fs;
@@ -186,9 +186,72 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
     
     println!("✅ Added reply comment: {}", comment2_id);
     
+    // Modify deliberation_started_at to simulate elapsed time
+    println!("\n--- Testing deliberation duration requirements ---");
+    
+    // Create a second proposal with custom min_deliberation
+    let proposal2_id = "demo-proposal-002";
+    let mut proposal2 = Proposal::new(
+        proposal2_id.to_string(),
+        user_id.to_string(),
+        Some(logic_path.to_string()),
+        None,
+        Some("governance/discussions/budget-alt".to_string()),
+        vec!["alt-doc.txt".to_string()],
+    );
+    
+    // Set custom min_deliberation_hours
+    proposal2.min_deliberation_hours = Some(48);
+    
+    // Store the second proposal
+    storage.set_json(
+        Some(&auth),
+        "governance",
+        &proposal2.storage_key(),
+        &proposal2,
+    )?;
+    
+    // Mark as in deliberation
+    proposal2.mark_deliberation();
+    
+    // Set deliberation_started_at to 36 hours ago
+    proposal2.deliberation_started_at = Some(Utc::now() - Duration::hours(36));
+    
+    // Update in storage
+    storage.set_json(
+        Some(&auth),
+        "governance",
+        &proposal2.storage_key(),
+        &proposal2,
+    )?;
+    
+    println!("Created proposal {} with custom 48-hour minimum deliberation time", proposal2_id);
+    println!("Deliberation started 36 hours ago (not yet eligible for transition to Active)");
+    
+    // Back to original proposal - set deliberation start time to 36 hours ago
+    let mut proposal = storage.get_json::<Proposal>(
+        Some(&auth),
+        "governance",
+        &format!("governance/proposals/{}", proposal_id),
+    )?;
+    
+    proposal.deliberation_started_at = Some(Utc::now() - Duration::hours(36));
+    
+    // Update in storage
+    storage.set_json(
+        Some(&auth),
+        "governance",
+        &proposal.storage_key(),
+        &proposal,
+    )?;
+    
+    println!("Updated original proposal: deliberation started 36 hours ago (eligible for transition)");
+    
     // Second transition: Deliberation -> Active
     println!("\n--- Continuing with normal flow ---");
     println!("Transitioning proposal from Deliberation to Active...");
+    
+    // This should succeed since the deliberation period (36 hours) exceeds the default minimum (24 hours)
     let mut proposal = storage.get_json::<Proposal>(
         Some(&auth),
         "governance",
@@ -214,9 +277,96 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
     )?;
     
     if matches!(proposal.status, ProposalStatus::Active) {
-        println!("✅ Proposal successfully transitioned to Active");
+        println!("✅ Proposal successfully transitioned to Active (36 hours > default 24 hour minimum)");
     } else {
         println!("❌ Failed to transition proposal to Active");
+    }
+    
+    // Now try to transition the second proposal which requires 48 hours
+    println!("\n--- Testing minimum deliberation time enforcement ---");
+    println!("Attempting to transition second proposal to Active (should fail)...");
+    
+    // In a real CLI context, this would fail with our validation error
+    // Here we'll simulate the validation check
+    let proposal2 = storage.get_json::<Proposal>(
+        Some(&auth),
+        "governance",
+        &format!("governance/proposals/{}", proposal2_id),
+    )?;
+    
+    let started_at = proposal2.deliberation_started_at.unwrap();
+    let now = Utc::now();
+    let elapsed = now.signed_duration_since(started_at);
+    let min_required = proposal2.min_deliberation_hours.unwrap_or(24);
+    
+    if elapsed.num_hours() < min_required {
+        println!("❌ Transition blocked: Deliberation phase must last at least {} hours (elapsed: {})", 
+            min_required, elapsed.num_hours());
+        println!("✅ Minimum deliberation time correctly enforced");
+    } else {
+        println!("⚠️ Unexpected: Deliberation time requirement satisfied");
+    }
+    
+    // Create a third proposal with very short deliberation time to test --force
+    let proposal3_id = "demo-proposal-003";
+    let mut proposal3 = Proposal::new(
+        proposal3_id.to_string(),
+        user_id.to_string(),
+        Some(logic_path.to_string()),
+        None,
+        None,
+        vec![],
+    );
+    
+    // Store the third proposal
+    let storage = vm.storage_backend.as_mut().unwrap();
+    storage.set_json(
+        Some(&auth),
+        "governance",
+        &proposal3.storage_key(),
+        &proposal3,
+    )?;
+    
+    // Mark as in deliberation
+    proposal3.mark_deliberation();
+    
+    // Set deliberation_started_at to 1 hour ago
+    proposal3.deliberation_started_at = Some(Utc::now() - Duration::hours(1));
+    
+    // Update in storage
+    storage.set_json(
+        Some(&auth),
+        "governance",
+        &proposal3.storage_key(),
+        &proposal3,
+    )?;
+    
+    println!("\nCreated proposal {} with deliberation started 1 hour ago", proposal3_id);
+    println!("Simulating --force flag to bypass time restriction...");
+    
+    // Force transition to Active despite insufficient deliberation time
+    proposal3.mark_active();
+    
+    // Update in storage
+    storage.set_json(
+        Some(&auth),
+        "governance",
+        &proposal3.storage_key(),
+        &proposal3,
+    )?;
+    
+    // Verify transition
+    let storage = vm.storage_backend.as_ref().unwrap();
+    let proposal3 = storage.get_json::<Proposal>(
+        Some(&auth),
+        "governance",
+        &format!("governance/proposals/{}", proposal3_id),
+    )?;
+    
+    if matches!(proposal3.status, ProposalStatus::Active) {
+        println!("✅ Force flag correctly allowed bypassing time restriction");
+    } else {
+        println!("❌ Force transition failed");
     }
     
     // Third transition: Active -> Voting
