@@ -1,5 +1,5 @@
 use serde::{Serialize, Deserialize};
-use did_key::{generate, DidKey, Ed25519KeyPair, CONFIG_LD_PUBLIC};
+use did_key::{generate, Ed25519KeyPair, CONFIG_LD_PUBLIC};
 use ed25519_dalek::{SigningKey, Signature, VerifyingKey, Signer, Verifier};
 use rand::rngs::OsRng;
 use std::collections::HashMap;
@@ -11,14 +11,16 @@ pub enum IdentityError {
     KeyGeneration(String),
     #[error("DID generation failed: {0}")]
     DidGeneration(String),
-    #[error("Signing failed: {0}")]
+    #[error("Signing error: {0}")]
     SigningError(String),
-    #[error("Verification failed: {0}")]
+    #[error("Verification error: {0}")]
     VerificationError(String),
     #[error("Invalid key material")]
     InvalidKeyMaterial,
     #[error("Serialization error: {0}")]
     Serialization(String),
+    #[error("DID-Key error: {0}")]
+    DidKeyError(String),
     #[error("Profile field missing: {0}")]
     ProfileFieldMissing(String),
 }
@@ -42,6 +44,9 @@ pub struct Identity {
     pub did: String,
     /// The keypair (keep private key secret!). Required.
     keypair: Ed25519KeyPair, 
+    /// Public key in multibase format
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub public_key_multibase: Option<String>,
     /// Associated profile information. Required.
     pub profile: Profile,
     /// Type of identity (e.g., "member", "cooperative", "service"). Required.
@@ -67,6 +72,7 @@ impl Identity {
 
         let did_key = generate::<Ed25519KeyPair>(&keypair);
         let did = did_key.to_string();
+        let public_key_multibase = Some(multibase::encode(multibase::Base::Base58Btc, &keypair.public_key));
 
         let profile = Profile {
             public_username,
@@ -77,6 +83,7 @@ impl Identity {
         Ok(Self {
             did,
             keypair,
+            public_key_multibase,
             profile,
             identity_type,
         })
@@ -93,24 +100,36 @@ impl Identity {
     }
 
     /// Signs a message using the identity's private key.
-    /// Returns the signature as bytes.
-    pub fn sign(&self, message: &[u8]) -> Result<Signature, IdentityError> {
+    /// Returns the signature as a multibase encoded string.
+    pub fn sign(&self, message: &[u8]) -> Result<String, IdentityError> {
         let private_bytes = self.keypair.private_key.as_ref()
             .ok_or(IdentityError::InvalidKeyMaterial)?;
+        
         let signing_key = SigningKey::from_bytes(
-                private_bytes.as_slice().try_into().map_err(|_| IdentityError::InvalidKeyMaterial)?
-            );
-        Ok(signing_key.sign(message))
+            private_bytes.as_slice().try_into().map_err(|_| IdentityError::InvalidKeyMaterial)?
+        );
+        
+        let signature = signing_key.sign(message);
+        Ok(multibase::encode(multibase::Base::Base58Btc, signature.to_bytes()))
     }
 
-    /// Verifies a signature against the identity's public key.
-    pub fn verify(&self, message: &[u8], signature: &Signature) -> Result<(), IdentityError> {
+    /// Verifies a multibase-encoded signature against the identity's public key.
+    pub fn verify(&self, message: &[u8], signature_multibase: &str) -> Result<(), IdentityError> {
         let verifying_key = VerifyingKey::from_bytes(
             &self.keypair.public_key.as_slice().try_into().map_err(|_| IdentityError::InvalidKeyMaterial)?
         ).map_err(|e| IdentityError::VerificationError(e.to_string()))?;
         
-        verifying_key.verify(message, signature)
-            .map_err(|e| IdentityError::VerificationError(e.to_string()))
+        // Decode the multibase signature
+        let (_, sig_bytes) = multibase::decode(signature_multibase)
+            .map_err(|e| IdentityError::DidKeyError(format!("Invalid signature format: {}", e)))?;
+        
+        // Convert to ed25519 Signature
+        let signature = Signature::from_bytes(
+            &sig_bytes.try_into().map_err(|_| IdentityError::DidKeyError("Invalid signature length".to_string()))?
+        );
+        
+        verifying_key.verify(message, &signature)
+            .map_err(|e| IdentityError::DidKeyError(e.to_string()))
     }
 
     /// Returns the public username.
@@ -118,8 +137,8 @@ impl Identity {
         &self.profile.public_username
     }
 
-     /// Serializes the identity (excluding private key) to JSON.
-     pub fn to_public_json(&self) -> Result<String, IdentityError> {
+    /// Serializes the identity (excluding private key) to JSON.
+    pub fn to_public_json(&self) -> Result<String, IdentityError> {
         #[derive(Serialize)]
         struct PublicIdentity<'a> {
             did: &'a str,
@@ -128,7 +147,8 @@ impl Identity {
             identity_type: &'a str,
         }
 
-        let public_key_multibase = multibase::encode(multibase::Base::Base58Btc, &self.keypair.public_key);
+        let public_key_multibase = self.public_key_multibase.clone()
+            .unwrap_or_else(|| multibase::encode(multibase::Base::Base58Btc, &self.keypair.public_key));
 
         let public_id = PublicIdentity {
             did: &self.did,
@@ -137,7 +157,7 @@ impl Identity {
             identity_type: &self.identity_type,
         };
         serde_json::to_string(&public_id).map_err(|e| IdentityError::Serialization(e.to_string()))
-     }
+    }
 
     // Add methods to load from storage, update profile etc. as needed
 }
@@ -151,8 +171,7 @@ mod tests {
         let identity = Identity::new("test_user".to_string(), None, "member".to_string(), None).unwrap();
         assert_eq!(identity.profile.public_username, "test_user");
         assert!(identity.did.starts_with("did:key:"));
-        assert!(identity.public_key_multibase.starts_with("z")); // z is the prefix for Ed25519 multibase
-        // Private key is not stored directly, so we can't assert on it
+        assert!(identity.public_key_multibase.as_ref().unwrap().starts_with("z")); // z is the prefix for base58btc multibase
     }
 
     #[test]
@@ -180,10 +199,10 @@ mod tests {
         // Verification should fail with the wrong signature
         let verification_result = identity.verify(message, &bad_signature);
         assert!(verification_result.is_err());
-        // Optionally check the error type
+        // Check the error type
         match verification_result.unwrap_err() {
-            IdentityError::DidKeyError(_) => {} // Expected error type
-            _ => panic!("Expected DidKeyError for bad signature verification"),
+            IdentityError::DidKeyError(_) => {}, // Expected error type
+            err => panic!("Expected DidKeyError for bad signature verification, got: {:?}", err),
         }
     }
 
@@ -199,21 +218,21 @@ mod tests {
         let verification_result = identity.verify(message2, &signature);
         assert!(verification_result.is_err());
         match verification_result.unwrap_err() {
-             IdentityError::DidKeyError(_) => {} // Expected error type
-             _ => panic!("Expected DidKeyError for wrong message verification"),
-         }
+            IdentityError::DidKeyError(_) => {}, // Expected error type
+            err => panic!("Expected DidKeyError for wrong message verification, got: {:?}", err),
+        }
     }
 
-    // Optional: Test serialization/deserialization if needed
-    // #[test]
-    // fn test_identity_serde() {
-    //     let identity = Identity::new("serde_user".to_string(), None, "member".to_string(), None).unwrap();
-    //     let json = identity.to_json().unwrap();
-    //     let deserialized_identity = Identity::from_json(&json).unwrap();
-    //     assert_eq!(identity.did, deserialized_identity.did);
-    //     assert_eq!(identity.profile, deserialized_identity.profile);
-    //     assert_eq!(identity.public_key_multibase, deserialized_identity.public_key_multibase);
-    //     assert_eq!(identity.identity_type, deserialized_identity.identity_type);
-    //     assert_eq!(identity.metadata, deserialized_identity.metadata);
-    // }
+    #[test]
+    fn test_to_public_json() {
+        let identity = Identity::new("json_user".to_string(), Some("Full Name".to_string()), "member".to_string(), None).unwrap();
+        let json = identity.to_public_json().unwrap();
+        
+        // Basic validation that the JSON contains expected fields
+        assert!(json.contains(&identity.did));
+        assert!(json.contains("public_key_multibase"));
+        assert!(json.contains("json_user"));
+        assert!(json.contains("Full Name"));
+        assert!(json.contains("member"));
+    }
 } 

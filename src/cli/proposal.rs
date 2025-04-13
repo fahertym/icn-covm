@@ -431,21 +431,48 @@ where
 
             // --- Vote Tally (if Voting) ---
             if proposal.state == ProposalState::Voting {
-                match proposal.tally_votes(vm, Some(auth_context)) {
-                    Ok(votes) => {
-                        println!("--- Current Votes ---");
-                        println!("  Yes:       {}", votes.get("yes").unwrap_or(&0));
-                        println!("  No:        {}", votes.get("no").unwrap_or(&0));
-                        println!("  Abstain:   {}", votes.get("abstain").unwrap_or(&0));
-                        
-                        // Display quorum and threshold status
-                        let total_votes = votes.get("yes").unwrap_or(&0) + votes.get("no").unwrap_or(&0);
-                        println!("  Quorum:    {}/{} votes", total_votes, proposal.quorum);
-                        println!("  Threshold: {}/{} yes votes", votes.get("yes").unwrap_or(&0), proposal.threshold);
-                    },
-                    Err(e) => {
-                        println!("Error tallying votes: {}", e);
+                // Get a clone of the storage reference to avoid borrowing vm
+                let storage = vm.storage_backend.as_ref()
+                    .ok_or_else(|| "Storage backend not configured for tallying votes")?;
+                
+                // Build a list of keys for votes
+                let vote_prefix = format!("proposals/{}/votes/", proposal_id);
+                let mut yes_votes = 0;
+                let mut no_votes = 0;
+                let mut abstain_votes = 0;
+                
+                // Count votes directly
+                if let Ok(vote_keys) = storage.list_keys(vm.auth_context.as_ref(), "governance", Some(&vote_prefix)) {
+                    for key in vote_keys {
+                        if let Ok(vote_bytes) = storage.get(vm.auth_context.as_ref(), "governance", &key) {
+                            if let Ok(vote_str) = String::from_utf8(vote_bytes) {
+                                match vote_str.as_str() {
+                                    "yes" => yes_votes += 1,
+                                    "no" => no_votes += 1,
+                                    "abstain" => abstain_votes += 1,
+                                    _ => { /* Invalid vote */ }
+                                }
+                            }
+                        }
                     }
+                    
+                    // Build a votes map
+                    let mut votes = HashMap::new();
+                    votes.insert("yes".to_string(), yes_votes);
+                    votes.insert("no".to_string(), no_votes);
+                    votes.insert("abstain".to_string(), abstain_votes);
+                    
+                    println!("--- Current Votes ---");
+                    println!("  Yes:       {}", yes_votes);
+                    println!("  No:        {}", no_votes);
+                    println!("  Abstain:   {}", abstain_votes);
+                    
+                    // Display quorum and threshold status
+                    let total_votes = yes_votes + no_votes;
+                    println!("  Quorum:    {}/{} votes", total_votes, proposal.quorum);
+                    println!("  Threshold: {}/{} yes votes", yes_votes, proposal.threshold);
+                } else {
+                    println!("Error reading votes.");
                 }
             }
 
