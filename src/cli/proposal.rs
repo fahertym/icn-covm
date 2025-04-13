@@ -318,6 +318,23 @@ pub fn proposal_command() -> Command {
                         .value_parser(value_parser!(u32))
                 )
         )
+        .subcommand(
+            Command::new("comments")
+                .about("View threaded comments for a proposal")
+                .arg(
+                    Arg::new("id")
+                        .long("id")
+                        .value_name("PROPOSAL_ID")
+                        .required(true)
+                        .help("Proposal ID to view comments for")
+                )
+                .arg(
+                    Arg::new("sort")
+                        .long("sort")
+                        .value_name("SORT_BY")
+                        .help("Sort comments by: time (default), author")
+                )
+        )
 }
 
 // Helper function to load a proposal from storage
@@ -792,18 +809,23 @@ where
                         // Find root comments (those not replying to anything)
                         if let Some(roots) = replies_map.get(&None) {
                             root_comments = roots.clone();
-                            // Sort root comments by timestamp
-                            root_comments
-                                .sort_by_key(|id| all_comments.get(id).map(|c| c.timestamp));
+                            
+                            // Sort root comments by timestamp (default)
+                            root_comments.sort_by_key(|id| all_comments.get(id).map(|c| c.timestamp));
                         }
 
+                        println!("\n--- Threaded Comments ---");
+                        
                         if root_comments.is_empty() {
                             println!("No comments found.");
                         } else {
                             for root_id in root_comments {
                                 print_threaded_comments(&root_id, &all_comments, &replies_map, 0);
+                                println!(); // Add a blank line between top-level comments
                             }
                         }
+                        
+                        println!("Total comments: {}", all_comments.len());
                     }
                     Ok(_) => {
                         println!("No comments found.");
@@ -1258,6 +1280,74 @@ where
                 println!("No proposals found matching the criteria.");
             }
         }
+        Some(("comments", comments_matches)) => {
+            println!("Fetching comments for proposal...");
+            let proposal_id = comments_matches.get_one::<String>("id").unwrap().clone();
+            let sort_by = comments_matches.get_one::<String>("sort").cloned();
+
+            // Verify the proposal exists
+            let proposal = load_proposal(vm, &proposal_id)?;
+            
+            println!("Comments for proposal: {} (State: {:?})", proposal_id, proposal.state);
+            
+            // Use fetch_comments_threaded to get all comments for this proposal
+            let comments = fetch_comments_threaded(vm, &proposal_id, Some(auth_context))?;
+            
+            if comments.is_empty() {
+                println!("No comments found for this proposal.");
+                return Ok(());
+            }
+            
+            // Find root comments (those with no parent)
+            let mut roots: Vec<&ProposalComment> = comments
+                .values()
+                .filter(|c| c.reply_to.is_none())
+                .collect();
+            
+            // Sort root comments based on the sort_by parameter or default to timestamp
+            match sort_by.as_deref() {
+                Some("author") => roots.sort_by(|a, b| a.author.cmp(&b.author)),
+                _ => roots.sort_by_key(|c| c.timestamp), // Default sort by time
+            }
+            
+            println!("\n--- Threaded Comments ---");
+            
+            if roots.is_empty() {
+                println!("No top-level comments found.");
+                return Ok(());
+            }
+            
+            // Print threaded comments recursively
+            fn print_thread(comments: &HashMap<String, ProposalComment>, comment: &ProposalComment, depth: usize) {
+                let indent = "  ".repeat(depth);
+                println!("{}└─ [{}] by {} at {}", 
+                    indent, 
+                    comment.id,
+                    comment.author,
+                    comment.timestamp.format("%Y-%m-%d %H:%M:%S")
+                );
+                println!("{}   {}", indent, comment.content);
+                
+                // Find and sort replies to this comment
+                let mut replies: Vec<&ProposalComment> = comments
+                    .values()
+                    .filter(|c| c.reply_to.as_deref() == Some(&comment.id))
+                    .collect();
+                
+                replies.sort_by_key(|c| c.timestamp);
+                
+                for reply in replies {
+                    print_thread(comments, reply, depth + 1);
+                }
+            }
+            
+            for root in roots {
+                print_thread(&comments, root, 0);
+                println!();
+            }
+            
+            println!("Total comments: {}", comments.len());
+        }
         _ => unreachable!("Subcommand should be required"),
     }
     Ok(())
@@ -1281,8 +1371,62 @@ fn parse_duration_string(duration_str: &str) -> Result<Duration, Box<dyn Error>>
     }
 }
 
+/// Fetch all comments for a proposal and return them as a HashMap keyed by comment ID
+pub fn fetch_comments_threaded<S>(
+    vm: &VM<S>,
+    proposal_id: &str,
+    auth: Option<&AuthContext>,
+) -> Result<HashMap<String, ProposalComment>, Box<dyn Error>> 
+where
+    S: Storage + Send + Sync + Clone + Debug + 'static,
+{
+    let storage = vm
+        .storage_backend
+        .as_ref()
+        .ok_or("Storage backend not available")?;
+
+    let namespace = "governance";
+    let mut comments = HashMap::new();
+    
+    // Check both possible storage paths for comments
+    
+    // Path 1: "comments/{proposal_id}/"
+    let prefix1 = format!("comments/{}/", proposal_id);
+    if let Ok(keys) = storage.list_keys(auth, namespace, Some(&prefix1)) {
+        for key in keys {
+            if let Ok(comment) = storage.get_json::<ProposalComment>(auth, namespace, &key) {
+                comments.insert(comment.id.clone(), comment);
+            }
+        }
+    }
+    
+    // Path 2: "proposals/{proposal_id}/comments/"
+    let prefix2 = format!("proposals/{}/comments/", proposal_id);
+    if let Ok(keys) = storage.list_keys(auth, namespace, Some(&prefix2)) {
+        for key in keys {
+            // Try to parse as ProposalComment first
+            if let Ok(comment) = storage.get_json::<ProposalComment>(auth, namespace, &key) {
+                comments.insert(comment.id.clone(), comment);
+            } 
+            // If that fails, try to convert from Comment
+            else if let Ok(comment) = storage.get_json::<Comment>(auth, namespace, &key) {
+                // Convert to ProposalComment format
+                let proposal_comment = ProposalComment {
+                    id: comment.id,
+                    author: comment.author.did.clone(),
+                    timestamp: comment.timestamp,
+                    content: comment.content,
+                    reply_to: comment.reply_to,
+                };
+                comments.insert(proposal_comment.id.clone(), proposal_comment);
+            }
+        }
+    }
+    
+    Ok(comments)
+}
+
 // Helper function to print comments in a threaded manner
-// (Keep this function as it was previously defined)
 fn print_threaded_comments(
     comment_id: &CommentId,
     comments_map: &HashMap<CommentId, Comment>,

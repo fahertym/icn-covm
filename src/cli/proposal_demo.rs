@@ -3,6 +3,7 @@ use std::error::Error;
 use std::fmt::Debug;
 use std::fs;
 use std::path::Path;
+use std::collections::HashMap;
 
 use crate::compiler::parse_dsl;
 use crate::governance::proposal::{Proposal, ProposalStatus};
@@ -185,6 +186,118 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
     )?;
     
     println!("✅ Added reply comment: {}", comment2_id);
+    
+    // Add more nested comments to demonstrate threading
+    let comment3_id = "comment-demo-003";
+    let comment3 = crate::cli::proposal::ProposalComment {
+        id: comment3_id.to_string(),
+        author: user_id.to_string(),
+        timestamp: Utc::now() + Duration::seconds(30),
+        content: "That's a great point about preventative maintenance. I'll allocate 20% for that purpose.".to_string(),
+        reply_to: Some(comment2_id.to_string()),
+    };
+    
+    storage.set_json(
+        Some(&auth),
+        "governance",
+        &format!("comments/{}/{}", proposal_id, comment3_id),
+        &comment3,
+    )?;
+    
+    println!("✅ Added nested reply: {}", comment3_id);
+    
+    // Add another top-level comment
+    let comment4_id = "comment-demo-004";
+    let comment4 = crate::cli::proposal::ProposalComment {
+        id: comment4_id.to_string(),
+        author: "finance_team".to_string(),
+        timestamp: Utc::now() + Duration::seconds(60),
+        content: "Have we verified this budget against our quarterly allocations?".to_string(),
+        reply_to: None,
+    };
+    
+    storage.set_json(
+        Some(&auth),
+        "governance",
+        &format!("comments/{}/{}", proposal_id, comment4_id),
+        &comment4,
+    )?;
+    
+    println!("✅ Added second top-level comment: {}", comment4_id);
+    
+    // Add reply to the second thread
+    let comment5_id = "comment-demo-005";
+    let comment5 = crate::cli::proposal::ProposalComment {
+        id: comment5_id.to_string(),
+        author: user_id.to_string(),
+        timestamp: Utc::now() + Duration::seconds(90),
+        content: "Yes, I've confirmed with accounting that this fits within our Q3 maintenance budget.".to_string(),
+        reply_to: Some(comment4_id.to_string()),
+    };
+    
+    storage.set_json(
+        Some(&auth),
+        "governance",
+        &format!("comments/{}/{}", proposal_id, comment5_id),
+        &comment5,
+    )?;
+    
+    println!("✅ Added reply to second thread: {}", comment5_id);
+    
+    // Release mutable borrow on VM first
+    drop(storage);
+    
+    // Demonstrate comment display
+    println!("\n--- Demonstrating threaded comment display ---");
+    let comments = crate::cli::proposal::fetch_comments_threaded(&vm, proposal_id, Some(&auth))?;
+    
+    // Find and sort root comments
+    let mut roots: Vec<&crate::cli::proposal::ProposalComment> = comments
+        .values()
+        .filter(|c| c.reply_to.is_none())
+        .collect();
+    
+    roots.sort_by_key(|c| c.timestamp);
+    
+    // Print the threaded comments
+    println!("Comments for proposal: {}", proposal_id);
+    
+    fn print_thread_demo(
+        comments: &HashMap<String, crate::cli::proposal::ProposalComment>,
+        comment: &crate::cli::proposal::ProposalComment,
+        depth: usize
+    ) {
+        let indent = "  ".repeat(depth);
+        println!("{}└─ [{}] by {} at {}", 
+            indent, 
+            comment.id,
+            comment.author,
+            comment.timestamp.format("%Y-%m-%d %H:%M:%S")
+        );
+        println!("{}   {}", indent, comment.content);
+        
+        // Find and sort replies to this comment
+        let mut replies: Vec<&crate::cli::proposal::ProposalComment> = comments
+            .values()
+            .filter(|c| c.reply_to.as_deref() == Some(&comment.id))
+            .collect();
+        
+        replies.sort_by_key(|c| c.timestamp);
+        
+        for reply in replies {
+            print_thread_demo(comments, reply, depth + 1);
+        }
+    }
+    
+    for root in roots {
+        print_thread_demo(&comments, root, 0);
+        println!();
+    }
+    
+    println!("Total comments: {}", comments.len());
+    
+    // Get a new mutable reference for the next section
+    let storage = vm.storage_backend.as_mut().unwrap();
     
     // Modify deliberation_started_at to simulate elapsed time
     println!("\n--- Testing deliberation duration requirements ---");
