@@ -8,7 +8,7 @@ use crate::storage::errors::{StorageError, StorageResult};
 use crate::storage::traits::Storage;
 use crate::storage::traits::StorageExtensions;
 use crate::vm::VM;
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use clap::ArgMatches;
 use clap::{arg, value_parser, Arg, ArgAction, Command};
 use hex;
@@ -20,9 +20,12 @@ use std::fmt::Debug;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
+use std::boxed::Box;
+use std::str::FromStr;
+use crate::governance::proposal::{Proposal, ProposalStatus};
 
 // Use String for IDs
-type ProposalId = String;
+pub type ProposalId = String;
 type CommentId = String;
 
 pub fn proposal_command() -> Command {
@@ -31,50 +34,75 @@ pub fn proposal_command() -> Command {
         .subcommand_required(true)
         .arg_required_else_help(true)
         .subcommand(
-    Command::new("create")
+            Command::new("create")
                 .about("Create a new governance proposal")
-        .arg(
+                .arg(
+                    Arg::new("id")
+                        .long("id")
+                        .value_name("ID")
+                        .help("Unique identifier for the proposal")
+                        .required(true),
+                )
+                .arg(
+                    Arg::new("creator")
+                        .long("creator")
+                        .value_name("ID")
+                        .help("Identity ID of the proposal creator"),
+                )
+                .arg(
+                    Arg::new("logic-path")
+                        .long("logic-path")
+                        .value_name("PATH")
+                        .help("Path to the proposal logic"),
+                )
+                .arg(
+                    Arg::new("expires-in")
+                        .long("expires-in")
+                        .value_name("DURATION")
+                        .help("Duration until proposal expires (e.g., 7d, 24h)"),
+                )
+                .arg(
+                    Arg::new("discussion-path")
+                        .long("discussion-path")
+                        .value_name("PATH")
+                        .help("Path to the proposal discussion thread"),
+                )
+                .arg(
+                    Arg::new("attachments")
+                        .long("attachments")
+                        .value_name("ATTACHMENTS")
+                        .help("Comma-separated list of attachment references"),
+                )
+                // Keep existing arguments for backward compatibility
+                .arg(
                     Arg::new("title")
                         .long("title")
                         .value_name("STRING")
-                        .help("Title of the proposal")
-                        .required(true),
-        )
-        .arg(
+                        .help("Title of the proposal"),
+                )
+                .arg(
                     Arg::new("quorum")
                         .long("quorum")
                         .value_name("NUMBER")
                         .help("Quorum required for the proposal to pass (e.g., number of votes)")
-                        .required(true)
                         .value_parser(value_parser!(u64)),
-        )
-        .arg(
-                     Arg::new("threshold")
+                )
+                .arg(
+                    Arg::new("threshold")
                         .long("threshold")
                         .value_name("NUMBER")
                         .help("Threshold required for the proposal to pass (e.g., percentage or fixed number)")
-                        .required(true)
-                        .value_parser(value_parser!(u64)), // TODO: Adjust parser based on final type (f64 for percentage?)
-        )
-        .arg(
-                     Arg::new("discussion-duration")
+                        .value_parser(value_parser!(u64)),
+                )
+                .arg(
+                    Arg::new("discussion-duration")
                         .long("discussion-duration")
-                        .value_name("DURATION") // e.g., 7d, 24h, 30m
-                        .help("Optional duration for the feedback/discussion phase (e.g., 7d, 48h)")
-                        .required(false) // Optional
-                        // No specific value_parser needed, parse string later
-        )
-        .arg(
-                     Arg::new("required-participants")
-                        .long("required-participants")
-                        .value_name("NUMBER")
-                        .help("Optional minimum number of participants required before voting can start")
-                        .required(false) // Optional
-                        .value_parser(value_parser!(u64))
+                        .value_name("DURATION")
+                        .help("Optional duration for the feedback/discussion phase (e.g., 7d, 48h)"),
                 )
         )
         .subcommand(
-    Command::new("attach")
+            Command::new("attach")
                 .about("Attach a file to a proposal")
                 .arg(
                     Arg::new("id")
@@ -187,6 +215,30 @@ pub fn proposal_command() -> Command {
                 // TODO: Add identity/signing argument if needed
         )
         .subcommand(
+            Command::new("transition")
+                .about("Transition proposal status")
+                .arg(
+                    Arg::new("id")
+                        .long("id")
+                        .value_name("PROPOSAL_ID")
+                        .help("ID of the proposal to transition")
+                        .required(true)
+                )
+                .arg(
+                    Arg::new("status")
+                        .long("status")
+                        .value_name("STATUS")
+                        .help("New status: active, voting, executed, rejected, expired")
+                        .required(true)
+                )
+                .arg(
+                    Arg::new("result")
+                        .long("result")
+                        .value_name("RESULT")
+                        .help("Optional result message for executed proposals")
+                )
+        )
+        .subcommand(
             Command::new("view")
                 .about("View the details and status of a proposal")
                  .arg(
@@ -215,6 +267,29 @@ pub fn proposal_command() -> Command {
                         .long("history")
                         .help("Flag to also view history")
                         .action(ArgAction::SetTrue), // Not required
+                )
+        )
+        .subcommand(
+            Command::new("list")
+                .about("List all proposals")
+                .arg(
+                    Arg::new("status")
+                        .long("status")
+                        .value_name("STATUS")
+                        .help("Filter by status: draft, active, voting, executed, rejected, expired")
+                )
+                .arg(
+                    Arg::new("creator")
+                        .long("creator")
+                        .value_name("CREATOR_ID")
+                        .help("Filter by creator ID")
+                )
+                .arg(
+                    Arg::new("limit")
+                        .long("limit")
+                        .value_name("NUMBER")
+                        .help("Limit number of proposals to display")
+                        .value_parser(value_parser!(u32))
                 )
         )
 }
@@ -259,6 +334,57 @@ where
 
     match matches.subcommand() {
         Some(("create", create_matches)) => {
+            // Check for new command format
+            if let Some(id) = create_matches.get_one::<String>("id") {
+                let creator = create_matches
+                    .get_one::<String>("creator")
+                    .map(|s| s.clone())
+                    .unwrap_or_else(|| user_did.to_string());
+                let logic_path = create_matches.get_one::<String>("logic-path").cloned();
+                let discussion_path = create_matches.get_one::<String>("discussion-path").cloned();
+                
+                // Handle expires-in parameter
+                let expires_at = if let Some(expires_in) = create_matches.get_one::<String>("expires-in") {
+                    // Simple implementation - assume values like "7d", "24h", etc.
+                    let duration = parse_duration_string(expires_in)?;
+                    Some(Utc::now() + duration)
+                } else {
+                    None
+                };
+                
+                // Parse attachments if provided
+                let attachments = if let Some(attachments_str) = create_matches.get_one::<String>("attachments") {
+                    attachments_str.split(',').map(|s| s.trim().to_string()).collect()
+                } else {
+                    Vec::new()
+                };
+                
+                // Create the new proposal
+                let proposal = Proposal::new(
+                    id.clone(),
+                    creator,
+                    logic_path,
+                    expires_at,
+                    discussion_path,
+                    attachments,
+                );
+                
+                // Store the proposal using JSON storage API
+                let storage = vm.storage_backend.as_mut().ok_or_else(||
+                    "Storage backend not configured for proposal creation")?;
+                
+                storage.set_json(
+                    Some(auth_context),
+                    "governance",
+                    &proposal.storage_key(),
+                    &proposal,
+                )?;
+                
+                println!("Proposal {} created successfully.", id);
+                return Ok(());
+            }
+            
+            // Existing code for other format
             println!("Handling proposal create...");
             // 1. Parse args
             let title = create_matches.get_one::<String>("title").unwrap();
@@ -783,34 +909,141 @@ where
             let ops = parse_dsl(&rep_dsl)?;
             vm.execute(&ops)?;
         }
+        Some(("transition", transition_matches)) => {
+            println!("Handling proposal transition...");
+            let proposal_id = transition_matches.get_one::<String>("id").unwrap().clone();
+            let status_str = transition_matches.get_one::<String>("status").unwrap().clone();
+            let result = transition_matches.get_one::<String>("result").cloned();
+            
+            // Get storage backend
+            let storage = vm
+                .storage_backend
+                .as_mut()
+                .ok_or_else(|| "Storage backend not configured for proposal transition")?;
+            
+            // Load the proposal
+            let namespace = "governance";
+            let key = format!("governance/proposals/{}", proposal_id);
+            
+            let mut proposal: Proposal = storage
+                .get_json(Some(auth_context), namespace, &key)?;
+            
+            // Check permissions - only creator or admin can transition
+            if proposal.creator != user_did && !auth_context.has_role("governance", "admin") {
+                return Err(format!(
+                    "User {} does not have permission to transition proposal {}",
+                    user_did, proposal_id
+                ).into());
+            }
+            
+            // Apply transition based on the status string
+            match status_str.to_lowercase().as_str() {
+                "active" => proposal.mark_active(),
+                "voting" => proposal.mark_voting(),
+                "executed" => {
+                    let execution_result = result.unwrap_or_else(|| "Executed successfully".to_string());
+                    proposal.mark_executed(execution_result);
+                },
+                "rejected" => proposal.mark_rejected(),
+                "expired" => proposal.mark_expired(),
+                _ => return Err(format!("Invalid status: {}", status_str).into()),
+            }
+            
+            // Save the updated proposal
+            storage.set_json(
+                Some(auth_context),
+                namespace,
+                &key,
+                &proposal,
+            )?;
+            
+            println!("Proposal {} transitioned to {} status.", proposal_id, status_str);
+            
+            // Emit reputation hook
+            let rep_dsl = format!(
+                "increment_reputation \"{}\" reason=\"Transitioned proposal {}\"",
+                user_did, proposal_id
+            );
+            let ops = parse_dsl(&rep_dsl)?;
+            vm.execute(&ops)?;
+        }
+        Some(("list", list_matches)) => {
+            println!("Listing proposals...");
+            
+            // Get filter parameters
+            let status_filter = list_matches.get_one::<String>("status").map(|s| s.to_lowercase());
+            let creator_filter = list_matches.get_one::<String>("creator").cloned();
+            let limit = list_matches.get_one::<u32>("limit").copied().unwrap_or(100);
+            
+            // Get storage backend
+            let storage = vm
+                .storage_backend
+                .as_ref()
+                .ok_or_else(|| "Storage backend not configured for listing proposals")?;
+            
+            // List all proposal keys
+            let namespace = "governance";
+            let prefix = "governance/proposals/";
+            let keys = storage.list_keys(vm.auth_context.as_ref(), namespace, Some(prefix))?;
+            
+            println!("--- Proposals ---");
+            let mut count = 0;
+            
+            for key in keys {
+                if count >= limit {
+                    break;
+                }
+                
+                // Try to load proposal
+                match storage.get_json::<Proposal>(vm.auth_context.as_ref(), namespace, &key) {
+                    Ok(proposal) => {
+                        // Apply filters
+                        let status_match = status_filter
+                            .as_ref()
+                            .map(|s| match_status(&proposal.status, s))
+                            .unwrap_or(true);
+                        
+                        let creator_match = creator_filter
+                            .as_ref()
+                            .map(|c| proposal.creator == *c)
+                            .unwrap_or(true);
+                        
+                        if status_match && creator_match {
+                            // Display proposal summary
+                            print_proposal_summary(&proposal);
+                            count += 1;
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Error loading proposal from {}: {}", key, e);
+                    }
+                }
+            }
+            
+            if count == 0 {
+                println!("No proposals found matching the criteria.");
+            }
+        }
         _ => unreachable!("Subcommand should be required"),
     }
     Ok(())
 }
 
 // Helper function to parse duration strings (e.g., "7d", "48h", "30m")
-// Consider moving this to a common utility module later
-fn parse_duration_string(duration_str: &str) -> Result<Duration, String> {
-    let duration_str = duration_str.trim();
-    if let Some(days) = duration_str.strip_suffix('d') {
-        days.parse::<i64>()
-            .map(Duration::days)
-            .map_err(|_| "Invalid day value".to_string())
-    } else if let Some(hours) = duration_str.strip_suffix('h') {
-        hours
-            .parse::<i64>()
-            .map(Duration::hours)
-            .map_err(|_| "Invalid hour value".to_string())
-    } else if let Some(minutes) = duration_str.strip_suffix('m') {
-        minutes
-            .parse::<i64>()
-            .map(Duration::minutes)
-            .map_err(|_| "Invalid minute value".to_string())
-    } else {
-        Err(format!(
-            "Invalid duration format: {}. Use d, h, or m suffix.",
-            duration_str
-        ))
+fn parse_duration_string(duration_str: &str) -> Result<Duration, Box<dyn Error>> {
+    // Get the numeric part and unit
+    let (num_str, unit) = duration_str.split_at(duration_str.len() - 1);
+    let num = num_str.parse::<i64>().map_err(|_| {
+        format!("Invalid duration format: {}", duration_str)
+    })?;
+    
+    // Convert to Duration based on unit
+    match unit {
+        "d" => Ok(Duration::days(num)),
+        "h" => Ok(Duration::hours(num)),
+        "m" => Ok(Duration::minutes(num)),
+        "s" => Ok(Duration::seconds(num)),
+        _ => Err(format!("Invalid duration unit: {}. Expected d, h, m, or s", unit).into()),
     }
 }
 
@@ -839,4 +1072,34 @@ fn print_threaded_comments(
     } else {
         println!("Error: Comment {} not found in map.", comment_id);
     }
+}
+
+// Helper to match status string with enum
+fn match_status(status: &ProposalStatus, status_str: &str) -> bool {
+    match (status, status_str) {
+        (ProposalStatus::Draft, "draft") => true,
+        (ProposalStatus::Active, "active") => true,
+        (ProposalStatus::Voting, "voting") => true,
+        (ProposalStatus::Executed, "executed") => true,
+        (ProposalStatus::Rejected, "rejected") => true,
+        (ProposalStatus::Expired, "expired") => true,
+        _ => false,
+    }
+}
+
+// Helper to print proposal summary
+fn print_proposal_summary(proposal: &Proposal) {
+    println!("ID: {} | Status: {:?} | Creator: {}", 
+        proposal.id, 
+        proposal.status,
+        proposal.creator
+    );
+    println!("  Created: {} | Attachments: {}", 
+        proposal.created_at.to_rfc3339(), 
+        proposal.attachments.len()
+    );
+    if let Some(result) = &proposal.execution_result {
+        println!("  Result: {}", result);
+    }
+    println!("---------------------");
 }

@@ -2,6 +2,7 @@
 
 use icn_covm::bytecode::{BytecodeCompiler, BytecodeExecution};
 use icn_covm::cli::proposal::{handle_proposal_command, proposal_command};
+use icn_covm::cli::proposal_demo::run_proposal_demo;
 use icn_covm::compiler::{parse_dsl, parse_dsl_with_stdlib, CompilerError};
 use icn_covm::federation::messages::{ProposalScope, ProposalStatus, VotingModel};
 use icn_covm::federation::{NetworkNode, NodeConfig};
@@ -214,6 +215,10 @@ async fn main() -> Result<(), AppError> {
                 )
         )
         .subcommand(proposal_command())
+        .subcommand(
+            Command::new("proposal-demo")
+                .about("Run a demo of the proposal lifecycle")
+        )
         .subcommand(
             Command::new("storage")
                 .about("Storage inspection commands")
@@ -476,28 +481,20 @@ async fn main() -> Result<(), AppError> {
             _ => Err("Unknown identity subcommand".into()),
         },
         Some(("proposal", proposal_matches)) => {
-            // Create VM and auth context for proposal commands
-            let mut vm: VM<InMemoryStorage> = VM::new();
-            let auth_context = create_demo_auth_context();
+            // Use default storage configuration
+            let storage_backend = "memory";
+            let storage_path = "./storage";
+            
+            // Set up auth context
+            let auth_context = get_or_create_auth_context(storage_backend, storage_path)?;
+            let storage = setup_storage(storage_backend, storage_path)?;
+            let mut vm = VM::with_storage_backend(storage);
             vm.set_auth_context(auth_context.clone());
-            vm.set_namespace("demo");
-
-            // Set up storage
-            // Use let bindings for default values to ensure they live long enough
-            let default_storage_backend = "memory".to_string();
-            let default_storage_path = "./storage".to_string();
-
-            let storage_backend = proposal_matches
-                .get_one::<String>("storage-backend")
-                .unwrap_or(&default_storage_backend);
-            let storage_path = proposal_matches
-                .get_one::<String>("storage-path")
-                .unwrap_or(&default_storage_path);
-            let storage = create_storage_backend(storage_backend, storage_path)?;
-            vm.set_storage_backend(storage);
-
-            handle_proposal_command(&mut vm, proposal_matches, &auth_context)
-                .map_err(|e| AppError::Other(e.to_string()))
+            
+            handle_proposal_command(&mut vm, proposal_matches, &auth_context).map_err(|e| e.to_string().into())
+        }
+        Some(("proposal-demo", _)) => {
+            run_proposal_demo().map_err(|e| e.to_string().into())
         }
         Some(("storage", storage_matches)) => {
             let storage_backend = storage_matches
@@ -1900,4 +1897,14 @@ async fn execute_proposal(
     }
 
     Ok(())
+}
+
+fn get_or_create_auth_context(storage_backend: &str, storage_path: &str) -> Result<AuthContext, AppError> {
+    // For now, just create a simple auth context for demo purposes
+    Ok(AuthContext::new("demo_user"))
+}
+
+fn setup_storage(storage_backend: &str, storage_path: &str) -> Result<InMemoryStorage, AppError> {
+    // For now, just create an in-memory storage
+    Ok(InMemoryStorage::new())
 }
