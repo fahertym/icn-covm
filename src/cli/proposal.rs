@@ -8,6 +8,7 @@ use crate::storage::errors::{StorageError, StorageResult};
 use crate::storage::traits::Storage;
 use crate::storage::traits::StorageExtensions;
 use crate::vm::VM;
+use crate::vm::Op;
 use chrono::{DateTime, Duration, Utc};
 use clap::ArgMatches;
 use clap::{arg, value_parser, Arg, ArgAction, Command};
@@ -237,6 +238,12 @@ pub fn proposal_command() -> Command {
                         .value_name("RESULT")
                         .help("Optional result message for executed proposals")
                 )
+                .arg(
+                    Arg::new("force")
+                        .long("force")
+                        .help("Force status transition ignoring state transition rules")
+                        .action(ArgAction::SetTrue)
+                )
         )
         .subcommand(
             Command::new("view")
@@ -319,6 +326,43 @@ fn did_to_identity(did: &str) -> Identity {
     // Create a basic Identity with just the DID and default values
     Identity::new(did.to_string(), None, "member".to_string(), None)
         .expect("Failed to create identity from DID")
+}
+
+// Helper function to parse DSL from file
+fn parse_dsl_from_file<S>(
+    vm: &VM<S>, 
+    path: &str
+) -> Result<Vec<Op>, Box<dyn Error>> 
+where 
+    S: Storage + Send + Sync + Clone + Debug + 'static
+{
+    let storage = vm
+        .storage_backend
+        .as_ref()
+        .ok_or_else(|| "Storage backend not configured for loading logic")?;
+    
+    // Check if this is a storage path or filesystem path
+    let contents = if path.starts_with("governance/") {
+        // It's a storage path - load from storage
+        let auth_context = vm.auth_context.as_ref();
+        match storage.get(auth_context, "governance", path) {
+            Ok(bytes) => String::from_utf8(bytes)
+                .map_err(|e| format!("Invalid UTF-8 in stored logic: {}", e))?,
+            Err(e) => return Err(format!("Failed to load logic from storage: {}", e).into()),
+        }
+    } else {
+        // It's a filesystem path - load from file
+        match std::fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(e) => return Err(format!("Failed to read logic file {}: {}", path, e).into()),
+        }
+    };
+    
+    // Parse the DSL content
+    match parse_dsl(&contents) {
+        Ok(ops) => Ok(ops),
+        Err(e) => Err(format!("Failed to parse DSL: {}", e).into()),
+    }
 }
 
 // Handler for proposal command
@@ -914,6 +958,7 @@ where
             let proposal_id = transition_matches.get_one::<String>("id").unwrap().clone();
             let status_str = transition_matches.get_one::<String>("status").unwrap().clone();
             let result = transition_matches.get_one::<String>("result").cloned();
+            let force = transition_matches.get_flag("force");
             
             // Get storage backend
             let storage = vm
@@ -938,13 +983,156 @@ where
             
             // Apply transition based on the status string
             match status_str.to_lowercase().as_str() {
-                "active" => proposal.mark_active(),
-                "voting" => proposal.mark_voting(),
-                "executed" => {
-                    let execution_result = result.unwrap_or_else(|| "Executed successfully".to_string());
-                    proposal.mark_executed(execution_result);
+                "active" => {
+                    if !matches!(proposal.status, ProposalStatus::Draft) && !force {
+                        return Err(format!(
+                            "Cannot transition proposal from {:?} to Active without --force flag",
+                            proposal.status
+                        ).into());
+                    }
+                    proposal.mark_active();
                 },
-                "rejected" => proposal.mark_rejected(),
+                "voting" => {
+                    if !matches!(proposal.status, ProposalStatus::Active) && !force {
+                        return Err(format!(
+                            "Cannot transition proposal from {:?} to Voting without --force flag",
+                            proposal.status
+                        ).into());
+                    }
+                    proposal.mark_voting();
+                },
+                "executed" => {
+                    // Check if current status is Voting
+                    if !matches!(proposal.status, ProposalStatus::Voting) && !force {
+                        return Err(format!(
+                            "Cannot execute proposal from {:?} state. Must be in Voting state or use --force flag.",
+                            proposal.status
+                        ).into());
+                    }
+                    
+                    // For custom result, use that instead of executing logic
+                    if let Some(custom_result) = result {
+                        proposal.mark_executed(custom_result);
+                    } else {
+                        // Try to execute logic if available
+                        if let Some(logic_path) = &proposal.logic_path.clone() {
+                            println!("Executing proposal logic from: {}", logic_path);
+                            
+                            // First, save the proposal with updated status
+                            storage.set_json(
+                                Some(auth_context),
+                                namespace,
+                                &key,
+                                &proposal,
+                            )?;
+                            
+                            // Clone the path first to avoid borrowing issues
+                            let logic_path_clone = logic_path.clone();
+                            
+                            // Get the logic content directly
+                            let logic_content = match storage.get(Some(auth_context), "governance", &logic_path_clone) {
+                                Ok(bytes) => match String::from_utf8(bytes) {
+                                    Ok(content) => content,
+                                    Err(e) => {
+                                        let error_msg = format!("Invalid UTF-8 in logic file: {}", e);
+                                        println!("{}", error_msg);
+                                        proposal.mark_executed(error_msg);
+                                        storage.set_json(Some(auth_context), namespace, &key, &proposal)?;
+                                        return Ok(());
+                                    }
+                                },
+                                Err(e) => {
+                                    let error_msg = format!("Failed to read logic file: {}", e);
+                                    println!("{}", error_msg);
+                                    proposal.mark_executed(error_msg);
+                                    storage.set_json(Some(auth_context), namespace, &key, &proposal)?;
+                                    return Ok(());
+                                }
+                            };
+                            
+                            // Parse the DSL directly
+                            let ops = match parse_dsl(&logic_content) {
+                                Ok(ops) => ops,
+                                Err(e) => {
+                                    let error_msg = format!("Failed to parse proposal logic: {}", e);
+                                    println!("{}", error_msg);
+                                    proposal.mark_executed(error_msg);
+                                    storage.set_json(Some(auth_context), namespace, &key, &proposal)?;
+                                    return Ok(());
+                                }
+                            };
+                            
+                            // Store temporary variables for what we need after vm.execute
+                            let proposal_id_for_result = proposal_id.clone();
+                            let logic_path_for_result = logic_path.clone();
+                            
+                            // Release the storage borrow before executing
+                            // We no longer need the storage reference until after execute
+                            drop(storage);
+                            
+                            // Execute the operations
+                            let execution_result = match vm.execute(&ops) {
+                                Ok(_) => format!("Successfully executed logic at {}", logic_path_for_result),
+                                Err(e) => format!("Logic execution failed: {}", e),
+                            };
+                            
+                            println!("Execution result: {}", execution_result);
+                            
+                            // Get a fresh storage reference
+                            let storage = vm
+                                .storage_backend
+                                .as_mut()
+                                .ok_or_else(|| "Storage backend not configured for proposal execution")?;
+                            
+                            // Reload the proposal (it might have been modified during execution)
+                            let mut updated_proposal: Proposal = match storage.get_json(Some(auth_context), namespace, &key) {
+                                Ok(p) => p,
+                                Err(e) => {
+                                    let error_msg = format!("Failed to reload proposal after execution: {}", e);
+                                    println!("{}", error_msg);
+                                    // Create a fresh proposal as fallback (we can't use the old one since we dropped it)
+                                    let mut p = Proposal::new(
+                                        proposal_id_for_result,
+                                        user_did.to_string(),
+                                        Some(logic_path_for_result),
+                                        None,
+                                        None,
+                                        Vec::new()
+                                    );
+                                    p.mark_executed(format!("{} - {}", execution_result, error_msg));
+                                    p
+                                }
+                            };
+                            
+                            updated_proposal.mark_executed(execution_result);
+                            
+                            // Save again with the execution result
+                            storage.set_json(
+                                Some(auth_context),
+                                namespace,
+                                &key,
+                                &updated_proposal,
+                            )?;
+                            
+                            // Early return since we've already saved
+                            return Ok(());
+                        } else {
+                            // No logic path provided
+                            let msg = "No logic path defined for proposal.".to_string();
+                            println!("{}", msg);
+                            proposal.mark_executed(msg);
+                        }
+                    }
+                },
+                "rejected" => {
+                    if !matches!(proposal.status, ProposalStatus::Voting) && !force {
+                        return Err(format!(
+                            "Cannot reject proposal from {:?} state. Must be in Voting state or use --force flag.",
+                            proposal.status
+                        ).into());
+                    }
+                    proposal.mark_rejected();
+                },
                 "expired" => proposal.mark_expired(),
                 _ => return Err(format!("Invalid status: {}", status_str).into()),
             }

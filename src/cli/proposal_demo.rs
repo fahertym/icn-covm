@@ -1,11 +1,14 @@
 use chrono::Utc;
 use std::error::Error;
 use std::fmt::Debug;
+use std::fs;
+use std::path::Path;
 
+use crate::compiler::parse_dsl;
 use crate::governance::proposal::{Proposal, ProposalStatus};
 use crate::storage::auth::AuthContext;
 use crate::storage::implementations::in_memory::InMemoryStorage;
-use crate::storage::traits::StorageExtensions;
+use crate::storage::traits::{Storage, StorageBackend, StorageExtensions};
 use crate::vm::VM;
 
 pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
@@ -24,12 +27,40 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
     // Ensure we have namespaces set up
     init_storage(&mut vm, &auth)?;
     
+    // Create demo DSL logic file
+    let logic_content = r#"
+    # Demo proposal logic
+    # Increments budgets for repairs
+    
+    # Store budget approval timestamp
+    set_value "budget_timestamp" timestamp
+    
+    # Set repair budget
+    set_value "repair_budget" 5000
+    
+    # Log approval
+    emit "budget_approved" data="Repair budget approved for 5000 credits"
+    
+    # Return success
+    push 1
+    "#;
+    
+    // Store the demo logic in storage
+    let logic_path = "governance/logic/repair_budget.dsl";
+    let storage_backend = vm.storage_backend.as_mut().unwrap();
+    storage_backend.set(
+        Some(&auth),
+        "governance",
+        logic_path,
+        logic_content.as_bytes().to_vec(),
+    )?;
+    
     // Create a new proposal
     let proposal_id = "demo-proposal-001";
     let proposal = Proposal::new(
         proposal_id.to_string(),
         user_id.to_string(),
-        Some("governance/logic/repair_budget.dsl".to_string()),
+        Some(logic_path.to_string()),
         None, // No expiration
         Some("governance/discussions/budget".to_string()),
         vec!["doc1.txt".to_string(), "budget.xlsx".to_string()],
@@ -98,6 +129,7 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
     )?;
     
     // Verify transition
+    let storage = vm.storage_backend.as_ref().unwrap();
     let proposal = storage.get_json::<Proposal>(
         Some(&auth),
         "governance",
@@ -120,6 +152,7 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
     
     proposal.mark_voting();
     
+    let storage = vm.storage_backend.as_mut().unwrap();
     storage.set_json(
         Some(&auth),
         "governance",
@@ -128,6 +161,7 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
     )?;
     
     // Verify transition
+    let storage = vm.storage_backend.as_ref().unwrap();
     let proposal = storage.get_json::<Proposal>(
         Some(&auth),
         "governance",
@@ -140,16 +174,37 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
         println!("❌ Failed to transition proposal to Voting");
     }
     
-    // Final transition: Voting -> Executed with result
-    println!("Transitioning proposal to Executed with result...");
+    // Final transition: Voting -> Executed with logic execution
+    println!("Transitioning proposal to Executed with logic execution...");
     let mut proposal = storage.get_json::<Proposal>(
         Some(&auth),
         "governance",
         &format!("governance/proposals/{}", proposal_id),
     )?;
     
-    proposal.mark_executed("Approved with 15/20 votes".to_string());
+    // Parse and execute the logic
+    if let Some(logic_path) = &proposal.logic_path {
+        println!("Executing logic from: {}", logic_path);
+        
+        // Get the logic content from storage
+        let storage_backend = vm.storage_backend.as_ref().unwrap();
+        let logic_bytes = storage_backend.get(Some(&auth), "governance", logic_path)?;
+        let logic_str = String::from_utf8(logic_bytes)?;
+        
+        // Parse and execute
+        let ops = parse_dsl(&logic_str)?;
+        let execution_result = match vm.execute(&ops) {
+            Ok(_) => format!("Successfully executed logic at {}", logic_path),
+            Err(e) => format!("Logic execution failed: {}", e),
+        };
+        
+        println!("Execution result: {}", execution_result);
+        proposal.mark_executed(execution_result);
+    } else {
+        proposal.mark_executed("No logic path available".to_string());
+    }
     
+    let storage = vm.storage_backend.as_mut().unwrap();
     storage.set_json(
         Some(&auth),
         "governance",
@@ -158,6 +213,7 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
     )?;
     
     // Verify final transition
+    let storage = vm.storage_backend.as_ref().unwrap();
     let final_proposal = storage.get_json::<Proposal>(
         Some(&auth),
         "governance",
@@ -174,6 +230,18 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
         println!("✅ Execution result set: {}", result);
     } else {
         println!("❌ Execution result not set correctly");
+    }
+    
+    // Verify that the budget value was set in storage
+    let storage_backend = vm.storage_backend.as_ref().unwrap();
+    if let Ok(budget_bytes) = storage_backend.get(Some(&auth), "governance", "repair_budget") {
+        if let Ok(budget_str) = String::from_utf8(budget_bytes) {
+            println!("✅ Budget was set in storage: {}", budget_str);
+        } else {
+            println!("❌ Budget value not readable as string");
+        }
+    } else {
+        println!("❌ Budget was not set in storage");
     }
     
     println!("Proposal demo completed successfully!");
