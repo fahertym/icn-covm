@@ -182,6 +182,9 @@ pub trait StorageExtensions: StorageBackend {
     /// Saves the execution result of a proposal
     fn save_proposal_execution_result(&mut self, proposal_id: &str, result: &str) -> StorageResult<()>;
     
+    /// Gets the execution result of a proposal
+    fn get_proposal_execution_result(&self, proposal_id: &str) -> StorageResult<String>;
+    
     /// Gets the execution logs of a proposal
     fn get_proposal_execution_logs(&self, proposal_id: &str) -> StorageResult<String>;
 }
@@ -293,6 +296,21 @@ impl<S: StorageBackend> StorageExtensions for S {
         
         // Save the result as a string
         self.set(None, "governance", &result_key, result.as_bytes().to_vec())
+    }
+    
+    fn get_proposal_execution_result(&self, proposal_id: &str) -> StorageResult<String> {
+        // Create the key for retrieving execution result
+        let result_key = format!("proposals/{}/execution_result", proposal_id);
+        
+        // Try to get execution result, return error if not found
+        match self.get(None, "governance", &result_key) {
+            Ok(bytes) => String::from_utf8(bytes).map_err(|e| {
+                crate::storage::errors::StorageError::SerializationError {
+                    details: format!("Invalid UTF-8 in execution result: {}", e),
+                }
+            }),
+            Err(e) => Err(e),
+        }
     }
     
     fn get_proposal_execution_logs(&self, proposal_id: &str) -> StorageResult<String> {

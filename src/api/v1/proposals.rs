@@ -2,10 +2,12 @@ use warp::{Filter, Rejection, Reply};
 use crate::storage::traits::{Storage, StorageExtensions};
 use crate::api::auth::{with_auth, AuthInfo, require_role};
 use crate::api::error::{not_found, bad_request, internal_error};
+use crate::api::storage::AsyncStorage;
 use crate::api::v1::models::{
     Proposal, CreateProposalRequest, PaginationParams, SortParams,
     Comment, CreateCommentRequest
 };
+use crate::api::v1::handlers::get_execution_results_handler;
 use crate::vm::VM;
 use serde_json::json;
 use std::sync::Arc;
@@ -98,6 +100,14 @@ where
         .and(require_role("proposals:execute".to_string()))
         .and_then(execute_proposal_handler);
     
+    let get_execution_results = base
+        .and(warp::path::param::<String>())
+        .and(warp::path("execution_results"))
+        .and(warp::get())
+        .and(with_storage(storage.clone()))
+        .and(with_auth())
+        .and_then(get_execution_results_handler);
+    
     list_proposals
         .or(get_proposal)
         .or(create_proposal)
@@ -106,6 +116,7 @@ where
         .or(get_proposal_comments)
         .or(add_proposal_comment)
         .or(execute_proposal)
+        .or(get_execution_results)
 }
 
 // Filter helpers for dependency injection

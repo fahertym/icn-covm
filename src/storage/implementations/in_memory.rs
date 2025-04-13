@@ -836,6 +836,191 @@ impl StorageBackend for InMemoryStorage {
     }
 }
 
+// Add extension methods for proposal operations
+impl InMemoryStorage {
+    /// Get a proposal by ID
+    pub fn get_proposal(&self, id: &str) -> StorageResult<crate::storage::Proposal> {
+        let key = format!("proposals/{}", id);
+        self.get_json::<crate::storage::Proposal>(None, "governance", &key)
+    }
+    
+    /// Save a proposal
+    pub fn save_proposal(&mut self, proposal: &crate::storage::Proposal) -> StorageResult<()> {
+        let key = format!("proposals/{}", proposal.id);
+        self.set_json(None, "governance", &key, proposal)
+    }
+    
+    /// Save a proposal attachment
+    pub fn save_proposal_attachment(
+        &mut self, 
+        attachment: &crate::storage::ProposalAttachment
+    ) -> StorageResult<()> {
+        let key = format!("proposals/{}/attachments/{}", attachment.proposal_id, attachment.id);
+        self.set_json(None, "governance", &key, attachment)
+    }
+    
+    /// Get proposal attachments
+    pub fn get_proposal_attachments(
+        &self, 
+        proposal_id: &str
+    ) -> StorageResult<Vec<crate::storage::ProposalAttachment>> {
+        let prefix = format!("proposals/{}/attachments/", proposal_id);
+        let keys = self.list_keys(None, "governance", Some(&prefix))?;
+        
+        let mut attachments = Vec::new();
+        for key in keys {
+            let attachment = self.get_json::<crate::storage::ProposalAttachment>(None, "governance", &key)?;
+            attachments.push(attachment);
+        }
+        
+        Ok(attachments)
+    }
+    
+    /// Save a vote on a proposal
+    pub fn save_vote(&mut self, vote: &crate::storage::Vote) -> StorageResult<()> {
+        let key = format!("proposals/{}/votes/{}", vote.proposal_id, vote.id);
+        self.set_json(None, "governance", &key, vote)
+    }
+    
+    /// Get votes for a proposal
+    pub fn get_proposal_votes(&self, proposal_id: &str) -> StorageResult<Vec<crate::storage::Vote>> {
+        let prefix = format!("proposals/{}/votes/", proposal_id);
+        let keys = self.list_keys(None, "governance", Some(&prefix))?;
+        
+        let mut votes = Vec::new();
+        for key in keys {
+            let vote = self.get_json::<crate::storage::Vote>(None, "governance", &key)?;
+            votes.push(vote);
+        }
+        
+        Ok(votes)
+    }
+    
+    /// Save a comment on a proposal
+    pub fn save_comment(&mut self, comment: &crate::storage::Comment) -> StorageResult<()> {
+        let key = format!("proposals/{}/comments/{}", comment.proposal_id, comment.id);
+        self.set_json(None, "governance", &key, comment)
+    }
+    
+    /// Get comments for a proposal
+    pub fn get_proposal_comments(&self, proposal_id: &str) -> StorageResult<Vec<crate::storage::Comment>> {
+        let prefix = format!("proposals/{}/comments/", proposal_id);
+        let keys = self.list_keys(None, "governance", Some(&prefix))?;
+        
+        let mut comments = Vec::new();
+        for key in keys {
+            let comment = self.get_json::<crate::storage::Comment>(None, "governance", &key)?;
+            comments.push(comment);
+        }
+        
+        Ok(comments)
+    }
+    
+    /// List all proposals
+    pub fn list_proposals(&self) -> StorageResult<Vec<crate::storage::Proposal>> {
+        let prefix = "proposals/";
+        let keys = self.list_keys(None, "governance", Some(prefix))?;
+        
+        // Filter out keys that have subpaths (like /votes/, /comments/, etc.)
+        let proposal_keys = keys.into_iter()
+            .filter(|k| !k.contains("/votes/") && !k.contains("/comments/") && 
+                    !k.contains("/attachments/") && !k.contains("/execution_"))
+            .collect::<Vec<_>>();
+        
+        let mut proposals = Vec::new();
+        for key in proposal_keys {
+            match self.get_json::<crate::storage::Proposal>(None, "governance", &key) {
+                Ok(proposal) => proposals.push(proposal),
+                Err(_) => continue, // Skip any keys that don't deserialize to proposals
+            }
+        }
+        
+        Ok(proposals)
+    }
+    
+    /// Get the logic path for a proposal
+    pub fn get_proposal_logic_path(&self, proposal_id: &str) -> StorageResult<String> {
+        // Get the logic path from the proposal metadata
+        let meta_key = format!("proposals/{}/metadata", proposal_id);
+        let bytes = self.get(None, "governance", &meta_key)?;
+        
+        // Parse metadata to extract logic_path
+        let metadata: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| {
+            crate::storage::errors::StorageError::SerializationError {
+                details: format!("Failed to parse proposal metadata: {}", e),
+            }
+        })?;
+        
+        // Extract logic path from metadata
+        match metadata.get("logic_path") {
+            Some(path) => match path.as_str() {
+                Some(path_str) => Ok(path_str.to_string()),
+                None => Err(crate::storage::errors::StorageError::InvalidValue {
+                    details: "logic_path is not a string".to_string(),
+                }),
+            },
+            None => Err(crate::storage::errors::StorageError::KeyNotFound {
+                key: "logic_path".to_string(),
+            }),
+        }
+    }
+    
+    /// Get the DSL logic code for a proposal
+    pub fn get_proposal_logic(&self, logic_path: &str) -> StorageResult<String> {
+        // Get the DSL code from the specified path
+        let bytes = self.get(None, "governance", logic_path)?;
+        
+        // Convert bytes to string
+        String::from_utf8(bytes).map_err(|e| {
+            crate::storage::errors::StorageError::SerializationError {
+                details: format!("Invalid UTF-8 in DSL code: {}", e),
+            }
+        })
+    }
+    
+    /// Saves the execution result of a proposal
+    pub fn save_proposal_execution_result(&mut self, proposal_id: &str, result: &str) -> StorageResult<()> {
+        // Create the key for storing execution result
+        let result_key = format!("proposals/{}/execution_result", proposal_id);
+        
+        // Save the result as a string
+        self.set(None, "governance", &result_key, result.as_bytes().to_vec())
+    }
+    
+    /// Gets the execution result of a proposal
+    pub fn get_proposal_execution_result(&self, proposal_id: &str) -> StorageResult<String> {
+        // Create the key for retrieving execution result
+        let result_key = format!("proposals/{}/execution_result", proposal_id);
+        
+        // Try to get execution result, return error if not found
+        match self.get(None, "governance", &result_key) {
+            Ok(bytes) => String::from_utf8(bytes).map_err(|e| {
+                crate::storage::errors::StorageError::SerializationError {
+                    details: format!("Invalid UTF-8 in execution result: {}", e),
+                }
+            }),
+            Err(e) => Err(e),
+        }
+    }
+    
+    /// Gets the execution logs of a proposal
+    pub fn get_proposal_execution_logs(&self, proposal_id: &str) -> StorageResult<String> {
+        // Create the key for retrieving execution logs
+        let logs_key = format!("proposals/{}/execution_logs", proposal_id);
+        
+        // Try to get logs, return empty string if not found
+        match self.get(None, "governance", &logs_key) {
+            Ok(bytes) => String::from_utf8(bytes).map_err(|e| {
+                crate::storage::errors::StorageError::SerializationError {
+                    details: format!("Invalid UTF-8 in execution logs: {}", e),
+                }
+            }),
+            Err(crate::storage::errors::StorageError::KeyNotFound { .. }) => Ok(String::new()),
+            Err(e) => Err(e),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
