@@ -30,6 +30,7 @@ rand = "0.8"
 ed25519-dalek = "2"
 multibase = "0.9"
 did-key = "^0.2"
+uuid = { version = "1.4", features = ["v4"] }
 
 [dev-dependencies]
 assert_cmd = "2.0"

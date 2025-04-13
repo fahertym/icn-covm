@@ -18,6 +18,7 @@ pub struct Proposal {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum ProposalStatus {
     Draft,
+    Deliberation,
     Active,
     Voting,
     Executed,
@@ -55,6 +56,10 @@ impl Proposal {
     
     pub fn mark_active(&mut self) {
         self.status = ProposalStatus::Active;
+    }
+
+    pub fn mark_deliberation(&mut self) {
+        self.status = ProposalStatus::Deliberation;
     }
 
     pub fn mark_voting(&mut self) {

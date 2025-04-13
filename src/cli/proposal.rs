@@ -24,10 +24,21 @@ use std::path::PathBuf;
 use std::boxed::Box;
 use std::str::FromStr;
 use crate::governance::proposal::{Proposal, ProposalStatus};
+use serde::{Serialize, Deserialize};
+use uuid;
 
 // Use String for IDs
 pub type ProposalId = String;
 type CommentId = String;
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ProposalComment {
+    pub id: CommentId,
+    pub author: String,
+    pub timestamp: DateTime<Utc>,
+    pub content: String,
+    pub reply_to: Option<CommentId>,
+}
 
 pub fn proposal_command() -> Command {
     Command::new("proposal")
@@ -132,27 +143,25 @@ pub fn proposal_command() -> Command {
         .subcommand(
             Command::new("comment")
                 .about("Add a comment to a proposal")
-        .arg(
+                .arg(
                     Arg::new("id")
                         .long("id")
                         .value_name("PROPOSAL_ID")
                         .help("ID of the proposal to comment on")
-                .required(true)
-                        // No value_parser needed for String
+                        .required(true)
                 )
                 .arg(
                     Arg::new("text")
                         .long("text")
-                        .value_name("STRING")
-                        .help("The text content of the comment")
-                        .required(true),
+                        .value_name("COMMENT_TEXT")
+                        .help("The text of the comment")
+                        .required(true)
                 )
                 .arg(
                     Arg::new("reply-to")
                         .long("reply-to")
                         .value_name("COMMENT_ID")
-                        .help("Optional ID of the comment to reply to")
-                        // No value_parser needed for String
+                        .help("ID of the comment to reply to")
                 )
         )
         .subcommand(
@@ -229,7 +238,7 @@ pub fn proposal_command() -> Command {
                     Arg::new("status")
                         .long("status")
                         .value_name("STATUS")
-                        .help("New status: active, voting, executed, rejected, expired")
+                        .help("New status: deliberation, active, voting, executed, rejected, expired")
                         .required(true)
                 )
                 .arg(
@@ -283,7 +292,7 @@ pub fn proposal_command() -> Command {
                     Arg::new("status")
                         .long("status")
                         .value_name("STATUS")
-                        .help("Filter by status: draft, active, voting, executed, rejected, expired")
+                        .help("Filter by status: draft, deliberation, active, voting, executed, rejected, expired")
                 )
                 .arg(
                     Arg::new("creator")
@@ -545,49 +554,49 @@ where
             vm.execute(&ops)?;
         }
         Some(("comment", comment_matches)) => {
-            println!("Handling proposal comment...");
-            let proposal_id = comment_matches.get_one::<ProposalId>("id").unwrap().clone(); // Clone String ID
-            let text = comment_matches.get_one::<String>("text").unwrap();
-            let reply_to = comment_matches.get_one::<CommentId>("reply-to").cloned(); // Clone Option<String> ID
-
-            // Use user_did for ID generation
-            let timestamp_nanos = Utc::now().timestamp_nanos_opt().unwrap_or(0);
-            let mut hasher = Sha256::new();
-            hasher.update(proposal_id.as_bytes());
-            hasher.update(user_did.as_bytes()); // Use DID
-            hasher.update(&timestamp_nanos.to_le_bytes());
-            let hash_result = hasher.finalize();
-            let comment_id = hex::encode(&hash_result[..16]);
-
-            println!("Generated Comment ID: {}", comment_id);
-
-            let comment = Comment {
+            println!("Adding comment to proposal...");
+            let proposal_id = comment_matches.get_one::<String>("id").unwrap().clone();
+            let comment_text = comment_matches.get_one::<String>("text").unwrap().clone();
+            let reply_to = comment_matches.get_one::<String>("reply-to").cloned();
+            
+            // Generate a unique comment ID
+            let comment_id = format!("comment-{}", uuid::Uuid::new_v4().to_string());
+            
+            // Create the comment
+            let comment = ProposalComment {
                 id: comment_id.clone(),
-                proposal_id: proposal_id.clone(),
-                author: did_to_identity(user_did), // Convert DID string to Identity
+                author: user_did.to_string(),
                 timestamp: Utc::now(),
-                content: text.clone(),
+                content: comment_text,
                 reply_to,
             };
-
-            // Store comment object directly using storage trait
+            
+            // Get storage backend
             let storage = vm
                 .storage_backend
                 .as_mut()
-                .ok_or_else(|| "Storage backend not configured for proposal comment")?;
-
-            // Store comments in "deliberation" namespace
-            let namespace = "deliberation";
-            let key = format!("comments/{}/{}", proposal_id, comment_id);
-            storage.set_json(Some(auth_context), namespace, &key, &comment)?;
-            println!(
-                "Comment {} stored directly for proposal {}.",
-                comment_id, proposal_id
-            );
-            // Explicitly print the ID
-            println!("Comment ID: {}", comment_id);
-
-            // Emit reputation hook
+                .ok_or_else(|| "Storage backend not configured for adding comment")?;
+            
+            // First, verify the proposal exists
+            let namespace = "governance";
+            let proposal_key = format!("governance/proposals/{}", proposal_id);
+            
+            let proposal: Proposal = storage
+                .get_json(Some(auth_context), namespace, &proposal_key)
+                .map_err(|_| format!("Proposal with ID {} not found", proposal_id))?;
+            
+            // Store the comment
+            let comment_key = format!("comments/{}/{}", proposal_id, comment_id);
+            storage.set_json(
+                Some(auth_context),
+                namespace,
+                &comment_key,
+                &comment,
+            )?;
+            
+            println!("Added comment {} to proposal {}", comment_id, proposal_id);
+            
+            // Award reputation for contribution
             let rep_dsl = format!(
                 "increment_reputation \"{}\" reason=\"Commented on proposal {}\"",
                 user_did, proposal_id
@@ -983,8 +992,18 @@ where
             
             // Apply transition based on the status string
             match status_str.to_lowercase().as_str() {
-                "active" => {
+                "deliberation" => {
                     if !matches!(proposal.status, ProposalStatus::Draft) && !force {
+                        return Err(format!(
+                            "Cannot transition proposal from {:?} to Deliberation without --force flag",
+                            proposal.status
+                        ).into());
+                    }
+                    proposal.mark_deliberation();
+                },
+                "active" => {
+                    if !matches!(proposal.status, ProposalStatus::Draft) && 
+                       !matches!(proposal.status, ProposalStatus::Deliberation) && !force {
                         return Err(format!(
                             "Cannot transition proposal from {:?} to Active without --force flag",
                             proposal.status
@@ -1266,6 +1285,7 @@ fn print_threaded_comments(
 fn match_status(status: &ProposalStatus, status_str: &str) -> bool {
     match (status, status_str) {
         (ProposalStatus::Draft, "draft") => true,
+        (ProposalStatus::Deliberation, "deliberation") => true,
         (ProposalStatus::Active, "active") => true,
         (ProposalStatus::Voting, "voting") => true,
         (ProposalStatus::Executed, "executed") => true,

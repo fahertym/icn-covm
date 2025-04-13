@@ -110,8 +110,85 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
     // Demonstrate status transitions
     println!("\n--- Demonstrating status transitions ---");
     
-    // First transition: Draft -> Active
-    println!("Transitioning proposal to Active...");
+    // First transition: Draft -> Deliberation
+    println!("Transitioning proposal to Deliberation...");
+    let mut proposal = storage.get_json::<Proposal>(
+        Some(&auth),
+        "governance",
+        &format!("governance/proposals/{}", proposal_id),
+    )?;
+    
+    proposal.mark_deliberation();
+    
+    let storage = vm.storage_backend.as_mut().unwrap();
+    storage.set_json(
+        Some(&auth),
+        "governance",
+        &proposal.storage_key(),
+        &proposal,
+    )?;
+    
+    // Verify transition
+    let storage = vm.storage_backend.as_ref().unwrap();
+    let proposal = storage.get_json::<Proposal>(
+        Some(&auth),
+        "governance",
+        &format!("governance/proposals/{}", proposal_id),
+    )?;
+    
+    if matches!(proposal.status, ProposalStatus::Deliberation) {
+        println!("✅ Proposal successfully transitioned to Deliberation");
+    } else {
+        println!("❌ Failed to transition proposal to Deliberation");
+    }
+    
+    // Add some example comments
+    println!("\n--- Adding comments during deliberation ---");
+    
+    // Create a parent comment
+    let comment1_id = "comment-demo-001";
+    let comment1 = crate::cli::proposal::ProposalComment {
+        id: comment1_id.to_string(),
+        author: user_id.to_string(),
+        timestamp: Utc::now(),
+        content: "This looks like a good proposal! I support increasing the repair budget.".to_string(),
+        reply_to: None,
+    };
+    
+    // Store the comment
+    let storage = vm.storage_backend.as_mut().unwrap();
+    storage.set_json(
+        Some(&auth),
+        "governance",
+        &format!("comments/{}/{}", proposal_id, comment1_id),
+        &comment1,
+    )?;
+    
+    println!("✅ Added comment: {}", comment1_id);
+    
+    // Create a reply comment
+    let comment2_id = "comment-demo-002";
+    let comment2 = crate::cli::proposal::ProposalComment {
+        id: comment2_id.to_string(),
+        author: "council_member".to_string(),
+        timestamp: Utc::now(),
+        content: "I agree, but have we considered allocating some funds for preventative maintenance?".to_string(),
+        reply_to: Some(comment1_id.to_string()),
+    };
+    
+    // Store the comment
+    storage.set_json(
+        Some(&auth),
+        "governance",
+        &format!("comments/{}/{}", proposal_id, comment2_id),
+        &comment2,
+    )?;
+    
+    println!("✅ Added reply comment: {}", comment2_id);
+    
+    // Second transition: Deliberation -> Active
+    println!("\n--- Continuing with normal flow ---");
+    println!("Transitioning proposal from Deliberation to Active...");
     let mut proposal = storage.get_json::<Proposal>(
         Some(&auth),
         "governance",
@@ -142,7 +219,7 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
         println!("❌ Failed to transition proposal to Active");
     }
     
-    // Second transition: Active -> Voting
+    // Third transition: Active -> Voting
     println!("Transitioning proposal to Voting...");
     let mut proposal = storage.get_json::<Proposal>(
         Some(&auth),
