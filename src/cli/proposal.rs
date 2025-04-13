@@ -1,23 +1,25 @@
 use clap::{arg, Command, Arg, ArgAction, value_parser};
-use std::error::Error;
+use clap::ArgMatches;
+use chrono::{Utc, Duration};
 use crate::vm::VM;
+use std::error::Error;
 use crate::compiler::parse_dsl;
 use crate::storage::auth::AuthContext;
 use std::path::PathBuf;
-use chrono::Utc;
 use serde_json;
-use crate::governance::proposal_lifecycle::Comment;
+use crate::governance::proposal_lifecycle::{Comment, ProposalLifecycle, ProposalState};
 use std::fs;
 use std::path::Path;
-use crate::governance::proposal_lifecycle::ProposalLifecycle;
 use crate::storage::traits::StorageExtensions;
-use crate::governance::proposal_lifecycle::ProposalState;
 use crate::governance::proposal_lifecycle::ExecutionStatus;
 use crate::governance::proposal_lifecycle::VoteChoice;
 use sha2::{Sha256, Digest};
 use hex;
-use chrono::Duration;
 use std::collections::HashMap;
+use std::fmt::Debug;
+use crate::storage::traits::Storage;
+use crate::storage::errors::{StorageError, StorageResult};
+use crate::identity::Identity;
 
 // Use String for IDs
 type ProposalId = String;
@@ -217,8 +219,14 @@ pub fn proposal_command() -> Command {
         )
 }
 
-// Update signature to use String
-pub fn load_proposal(vm: &VM, proposal_id: &ProposalId) -> Result<ProposalLifecycle, Box<dyn Error>> {
+// Helper function to load a proposal from storage
+pub fn load_proposal<S>(
+    vm: &VM<S>, 
+    proposal_id: &ProposalId
+) -> Result<ProposalLifecycle, Box<dyn Error>> 
+where
+    S: Storage + Send + Sync + Clone + Debug + 'static
+{
     let storage = vm.storage_backend.as_ref()
         .ok_or_else(|| "Storage backend not configured for load_proposal")?;
     let namespace = "governance";
@@ -228,12 +236,23 @@ pub fn load_proposal(vm: &VM, proposal_id: &ProposalId) -> Result<ProposalLifecy
         .map_err(|e| format!("Failed to load proposal {} lifecycle: {}", proposal_id, e).into())
 }
 
-pub fn handle_proposal_command(
-    matches: &clap::ArgMatches,
-    vm: &mut VM,
-    auth_context: &AuthContext,
-) -> Result<(), Box<dyn Error>> {
-    let user_did = auth_context.identity_did(); // Get DID once
+// Add this helper function to convert a DID string to an Identity
+fn did_to_identity(did: &str) -> Identity {
+    // Create a basic Identity with just the DID and default values
+    Identity::new(did.to_string(), None, "member".to_string(), None)
+        .expect("Failed to create identity from DID")
+}
+
+// Handler for proposal command
+pub fn handle_proposal_command<S>(
+    vm: &mut VM<S>,
+    matches: &ArgMatches,
+    auth_context: &AuthContext 
+) -> Result<(), Box<dyn Error>> 
+where
+    S: Storage + Send + Sync + Clone + Debug + 'static
+{
+    let user_did = auth_context.identity_did(); // Get DID from auth_context parameter
 
     match matches.subcommand() {
         Some(("create", create_matches)) => {
@@ -266,7 +285,7 @@ pub fn handle_proposal_command(
             // 3. Create ProposalLifecycle instance
             let proposal = ProposalLifecycle::new(
                 proposal_id.clone(),
-                user_did.to_string(), // Use DID as creator
+                did_to_identity(user_did), // Convert DID string to Identity
                 title.clone(),
                 quorum,
                 threshold,
@@ -282,7 +301,7 @@ pub fn handle_proposal_command(
             // Assuming lifecycle is stored in "governance" namespace
             let namespace = "governance";
             let key = format!("proposals/{}/lifecycle", proposal_id);
-            storage.set_json(vm.auth_context.as_ref(), namespace, &key, &proposal)?;
+            storage.set_json(Some(auth_context), namespace, &key, &proposal)?;
             println!("Proposal {} lifecycle stored.", proposal_id);
 
             // 6. Emit reputation hook
@@ -320,7 +339,7 @@ pub fn handle_proposal_command(
             let namespace = "governance";
             let key = format!("proposals/{}/attachments/{}", proposal_id, sanitized_attachment_name);
 
-            storage.set(vm.auth_context.as_ref(), namespace, &key, file_content_bytes)?;
+            storage.set(Some(auth_context), namespace, &key, file_content_bytes)?;
             println!("Attachment '{}' stored directly for proposal {}.", sanitized_attachment_name, proposal_id);
 
             // Emit reputation hook
@@ -348,7 +367,7 @@ pub fn handle_proposal_command(
             let comment = Comment {
                 id: comment_id.clone(),
                 proposal_id: proposal_id.clone(),
-                author: user_did.to_string(), // Use DID as author
+                author: did_to_identity(user_did), // Convert DID string to Identity
                 timestamp: Utc::now(),
                 content: text.clone(),
                 reply_to,
@@ -361,7 +380,7 @@ pub fn handle_proposal_command(
             // Store comments in "deliberation" namespace
             let namespace = "deliberation";
             let key = format!("comments/{}/{}", proposal_id, comment_id);
-            storage.set_json(vm.auth_context.as_ref(), namespace, &key, &comment)?;
+            storage.set_json(Some(auth_context), namespace, &key, &comment)?;
             println!("Comment {} stored directly for proposal {}.", comment_id, proposal_id);
             // Explicitly print the ID
             println!("Comment ID: {}", comment_id);
@@ -398,7 +417,7 @@ pub fn handle_proposal_command(
             println!("--- Proposal Details ---");
             println!("ID:          {}", proposal.id);
             println!("Title:       {}", proposal.title);
-            println!("Creator:     {}", proposal.creator); // Displaying DID
+            println!("Creator:     {:?}", proposal.creator); // Using debug format instead of Display
             println!("State:       {:?}", proposal.state);
             println!("Version:     {}", proposal.current_version);
             println!("Created At:  {}", proposal.created_at.to_rfc3339());
@@ -412,18 +431,18 @@ pub fn handle_proposal_command(
 
             // --- Vote Tally (if Voting) ---
             if proposal.state == ProposalState::Voting {
-                match proposal.tally_votes(vm) {
-                    Ok((yes, no, abstain)) => {
+                match proposal.tally_votes(vm, Some(auth_context)) {
+                    Ok(votes) => {
                         println!("--- Current Votes ---");
-                        println!("  Yes:       {}", yes);
-                        println!("  No:        {}", no);
-                        println!("  Abstain:   {}", abstain);
-                        let total = yes + no;
-                        let quorum_met = total >= proposal.quorum;
-                        let threshold_met = yes >= proposal.threshold;
-                        println!("  Quorum:    {} / {} (Met: {})", total, proposal.quorum, quorum_met);
-                        println!("  Threshold: {} / {} (Met: {})", yes, proposal.threshold, threshold_met);
-                    }
+                        println!("  Yes:       {}", votes.get("yes").unwrap_or(&0));
+                        println!("  No:        {}", votes.get("no").unwrap_or(&0));
+                        println!("  Abstain:   {}", votes.get("abstain").unwrap_or(&0));
+                        
+                        // Display quorum and threshold status
+                        let total_votes = votes.get("yes").unwrap_or(&0) + votes.get("no").unwrap_or(&0);
+                        println!("  Quorum:    {}/{} votes", total_votes, proposal.quorum);
+                        println!("  Threshold: {}/{} yes votes", votes.get("yes").unwrap_or(&0), proposal.threshold);
+                    },
                     Err(e) => {
                         println!("Error tallying votes: {}", e);
                     }
@@ -526,7 +545,7 @@ pub fn handle_proposal_command(
                 return Err(format!("Proposal {} cannot be edited in its current state: {:?}", proposal_id, proposal.state).into());
             }
             // Check permissions using DID
-            if proposal.creator != user_did {
+            if proposal.creator.did != user_did {
                  return Err(format!("User {} does not have permission to edit proposal {}", user_did, proposal_id).into());
             }
 
@@ -596,7 +615,7 @@ pub fn handle_proposal_command(
              let namespace = "governance";
              let key = format!("proposals/{}/lifecycle", proposal_id);
              // Use direct method call
-             storage.set_json(vm.auth_context.as_ref(), namespace, &key, &proposal)?;
+             storage.set_json(Some(auth_context), namespace, &key, &proposal)?;
              println!("Proposal {} published (state: {:?}).", proposal_id, proposal.state);
 
              // TODO: Add reputation hook?
@@ -621,7 +640,7 @@ pub fn handle_proposal_command(
 
             let mut proposal = load_proposal(vm, &proposal_id)?;
 
-            if let Err(e) = proposal.transition_to_executed(vm) {
+            if let Err(e) = proposal.transition_to_executed(vm, Some(auth_context)) {
                 eprintln!("Error during execution check/transition for proposal {}: {}", proposal_id, e);
             }
 
@@ -668,7 +687,7 @@ fn print_threaded_comments(
              let mut sorted_replies = replies.clone();
              sorted_replies.sort_by_key(|id| comments_map.get(id).map(|c| c.timestamp));
             for reply_id in sorted_replies {
-                print_threaded_comments(reply_id, comments_map, replies_map, depth + 1);
+                print_threaded_comments(&reply_id, comments_map, replies_map, depth + 1);
             }
         }
     } else {

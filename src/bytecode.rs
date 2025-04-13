@@ -11,9 +11,11 @@
 //! The bytecode system improves performance for repeated execution by converting
 //! the nested AST representation into a flat, linear sequence of instructions.
 
-use crate::vm::{VM, VMError, Op};
+use crate::vm::{Op, VM, VMError};
+use crate::storage::traits::Storage;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt::Debug;
 
 
 /// Bytecode operations for the ICN-COVM virtual machine
@@ -581,7 +583,7 @@ impl BytecodeCompiler {
                 Op::IncrementReputation { identity_id, amount, reason } => {
                     self.program.instructions.push(BytecodeOp::IncrementReputation {
                         identity_id: identity_id.clone(),
-                        amount: *amount,
+                        amount: amount.clone(),
                         reason: reason.clone(),
                     });
                 },
@@ -854,30 +856,30 @@ impl BytecodeCompiler {
 }
 
 /// Bytecode program execution context
-pub struct BytecodeExecutor {
-    /// Virtual machine reference
-    pub vm: VM,
-    
-    /// Program counter
+pub struct BytecodeExecution<S>
+where
+    S: Storage + Send + Sync + Clone + Debug + 'static
+{
+    pub vm: VM<S>,
+    pub bytecode: Vec<BytecodeOp>,
     pub pc: usize,
-    
-    /// Bytecode instructions
-    pub code: Vec<BytecodeOp>,
 }
 
-impl BytecodeExecutor {
-    /// Create a new bytecode executor with the given VM and code
-    pub fn new(vm: VM, code: Vec<BytecodeOp>) -> Self {
+impl<S> BytecodeExecution<S>  
+where
+    S: Storage + Send + Sync + Clone + Debug + 'static
+{
+    pub fn new(vm: VM<S>, code: Vec<BytecodeOp>) -> Self {
         Self {
             vm,
+            bytecode: code,
             pc: 0,
-            code,
         }
     }
     
     /// Execute the bytecode program
     pub fn execute(&mut self) -> Result<(), VMError> {
-        while self.pc < self.code.len() {
+        while self.pc < self.bytecode.len() {
             self.step()?;
         }
         
@@ -886,11 +888,11 @@ impl BytecodeExecutor {
     
     /// Execute a single bytecode instruction
     pub fn step(&mut self) -> Result<(), VMError> {
-        if self.pc >= self.code.len() {
+        if self.pc >= self.bytecode.len() {
             return Ok(());
         }
 
-        match &self.code[self.pc] {
+        match &self.bytecode[self.pc] {
             BytecodeOp::Push(val) => {
                 self.vm.stack.push(*val);
                 self.pc += 1;
@@ -1348,7 +1350,7 @@ impl BytecodeExecutor {
                 Err(VMError::NotImplemented("RequireValidSignature operation not implemented yet".to_string()))
             },
             BytecodeOp::IncrementReputation { identity_id, amount, reason } => {
-                self.vm.execute_increment_reputation(identity_id, *amount, &reason)?;
+                self.vm.execute_increment_reputation(identity_id, amount.clone())?;
                 self.pc += 1;
                 Ok(())
             },
@@ -1812,17 +1814,35 @@ impl BytecodeExecutor {
                 Err(VMError::NotImplemented("RequireValidSignature operation not implemented yet".to_string()))
             },
             BytecodeOp::IncrementReputation { identity_id, amount, reason } => {
-                self.vm.execute_increment_reputation(identity_id, *amount, &reason)?;
+                self.vm.execute_increment_reputation(identity_id, amount.clone())?;
                 self.pc += 1;
                 Ok(())
             },
             BytecodeOp::IfPassed(block) => {
-                // This is handled in the step method
+                // Check if the proposal has passed (condition is 0.0)
+                let condition = self.vm.pop_one("IfPassed condition")?;
+                if condition == 0.0 {
+                    // Clone the block operations to avoid borrow checker issues
+                    let block_ops = block.clone();
+                    // Execute each operation in the block
+                    for op in block_ops {
+                        self.execute_op(&op)?;
+                    }
+                }
                 self.pc += 1;
                 Ok(())
             },
             BytecodeOp::Else(block) => {
-                // This is handled in the step method
+                // Check if the proposal has failed (condition is 0.0)
+                let condition = self.vm.pop_one("Else condition")?;
+                if condition == 0.0 {
+                    // Clone the block operations to avoid borrow checker issues
+                    let block_ops = block.clone();
+                    // Execute each operation in the block
+                    for op in block_ops {
+                        self.execute_op(&op)?;
+                    }
+                }
                 self.pc += 1;
                 Ok(())
             },

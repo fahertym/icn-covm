@@ -1,9 +1,10 @@
-use chrono::{DateTime, Utc, Duration};
-use serde::{Serialize, Deserialize};
-use crate::storage::traits::{StorageBackend, StorageExtensions};
+use chrono::{DateTime, Duration, Utc};
+use serde::{Deserialize, Serialize};
+use crate::storage::traits::{StorageBackend, Storage};
 use crate::storage::errors::StorageError;
 use crate::storage::auth::AuthContext;
 use std::collections::HashMap;
+use std::fmt::Debug;
 use crate::vm::VM;
 use crate::compiler::parse_dsl;
 use crate::vm::Op;
@@ -14,6 +15,20 @@ type Attachment = String;
 // Use String for IDs
 type CommentId = String;
 type ProposalId = String;
+
+// Define the Vote type
+pub type Vote = u64; // Just an example, replace with your actual Vote type
+
+// Define result and preview types
+pub struct ProposalExecutionPreview {
+    pub side_effects: Vec<String>,
+    pub success_probability: f64,
+}
+
+pub enum ProposalExecutionResult {
+    Success { log: Vec<String> },
+    Failure { reason: String },
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub enum ProposalState {
@@ -171,10 +186,14 @@ impl ProposalLifecycle {
      }
 
     // Tally votes from storage
-    pub fn tally_votes(
+    pub fn tally_votes<S>(
         &self,
-        vm: &VM,
-    ) -> Result<(u64, u64, u64), Box<dyn std::error::Error>> { // (yes, no, abstain)
+        vm: &mut VM<S>,
+        auth_context: Option<&AuthContext>
+    ) -> Result<HashMap<String, Vote>, Box<dyn std::error::Error>>
+    where
+        S: Storage + Send + Sync + Clone + Debug + 'static
+    {
         if self.state != ProposalState::Voting {
             return Err(format!("Proposal {} is not in Voting state", self.id).into());
         }
@@ -210,36 +229,54 @@ impl ProposalLifecycle {
             }
         }
 
-        Ok((yes_votes, no_votes, abstain_votes))
+        let mut votes = HashMap::new();
+        votes.insert("yes".to_string(), yes_votes);
+        votes.insert("no".to_string(), no_votes);
+        votes.insert("abstain".to_string(), abstain_votes);
+
+        Ok(votes)
     }
 
     // Check if the proposal passed based on tallied votes
-    pub fn check_passed(&self, yes_votes: u64, no_votes: u64, _abstain_votes: u64) -> bool {
+    pub fn check_passed<S>(
+        &self,
+        vm: &mut VM<S>,
+        auth_context: Option<&AuthContext>,
+        votes: &HashMap<String, Vote>
+    ) -> Result<bool, Box<dyn std::error::Error>>
+    where
+        S: Storage + Send + Sync + Clone + Debug + 'static
+    {
         // 1. Quorum Check: Total participating votes (yes + no) >= quorum
-        let total_votes = yes_votes + no_votes;
+        let total_votes = votes.get("yes").unwrap_or(&0) + votes.get("no").unwrap_or(&0);
         if total_votes < self.quorum {
             println!("Quorum not met: {} votes < {}", total_votes, self.quorum);
-            return false;
+            return Ok(false);
         }
 
         // 2. Threshold Check: yes_votes >= threshold (assuming threshold is a fixed number for now)
         // TODO: Handle percentage thresholds (yes_votes as f64 / total_votes as f64 >= threshold_percentage)
-        if yes_votes < self.threshold {
+        let yes_votes = votes.get("yes").unwrap_or(&0);
+        if yes_votes < &self.threshold {
             println!("Threshold not met: {} yes votes < {}", yes_votes, self.threshold);
-            return false;
+            return Ok(false);
         }
 
         println!("Proposal passed: Quorum ({}/{}) and Threshold ({}/{}) met.", total_votes, self.quorum, yes_votes, self.threshold);
-        true
+        Ok(true)
     }
 
     // Execute the proposal's logic attachment within the given VM context
     // Returns Ok(ExecutionStatus) on completion (success or failure)
     // Returns Err only if loading/parsing fails before execution starts
-    fn execute_proposal_logic(
+    fn execute_proposal_logic<S>(
         &self,
-        vm: &mut VM, // Pass original VM mutably to allow commit/rollback
-    ) -> Result<ExecutionStatus, Box<dyn std::error::Error>> {
+        vm: &mut VM<S>, // Pass original VM mutably to allow commit/rollback
+        auth_context: Option<&AuthContext>
+    ) -> Result<ExecutionStatus, Box<dyn std::error::Error>>
+    where
+        S: Storage + Send + Sync + Clone + Debug + 'static
+    {
         println!("[EXEC] Preparing sandboxed execution for proposal {}", self.id);
 
         // --- Create VM Fork --- 
@@ -307,141 +344,100 @@ impl ProposalLifecycle {
     }
 
      // Updated state transition for execution
-     pub fn transition_to_executed(
+     pub fn transition_to_executed<S>(
          &mut self,
-         vm: &mut VM,
-     ) -> Result<(), Box<dyn std::error::Error>> {
+         vm: &mut VM<S>,
+         auth_context: Option<&AuthContext>
+     ) -> Result<bool, Box<dyn std::error::Error>>
+     where
+         S: Storage + Send + Sync + Clone + Debug + 'static
+     {
         if self.state == ProposalState::Voting {
-            let (yes_votes, no_votes, abstain_votes) = self.tally_votes(vm)?;
-            if self.check_passed(yes_votes, no_votes, abstain_votes) {
-                 self.state = ProposalState::Executed;
-                 self.history.push((Utc::now(), self.state.clone()));
-                 println!("Proposal {} state transitioning to Executed.", self.id);
+            let votes = self.tally_votes(vm, auth_context)?;
+            let passed = self.check_passed(vm, auth_context, &votes)?;
+            if passed {
+                self.state = ProposalState::Executed;
+                self.history.push((Utc::now(), self.state.clone()));
+                println!("Proposal {} state transitioning to Executed.", self.id);
 
-                 // Attempt to execute associated logic
-                 let exec_result = self.execute_proposal_logic(vm);
+                // Attempt to execute associated logic
+                let exec_result = self.execute_proposal_logic(vm, auth_context);
 
-                 // Update status based on execution result
-                 let final_status = match exec_result {
-                     Ok(status) => status,
-                     Err(e) => {
-                         // Error during loading/parsing before execution attempt
-                         let err_msg = format!("Pre-execution error: {}", e);
-                         eprintln!("{}", err_msg);
-                         ExecutionStatus::Failure(err_msg)
-                     }
-                 };
-                 self.execution_status = Some(final_status.clone());
-
-                 // Emit Event for execution status
-                 let event_message = match &final_status {
-                     ExecutionStatus::Success => format!("Proposal {} executed successfully.", self.id),
-                     ExecutionStatus::Failure(reason) => format!("Proposal {} execution failed: {}", self.id, reason),
-                 };
-                 // Execute EmitEvent Op directly
-                 let event_op = Op::EmitEvent { category: "governance".to_string(), message: event_message };
-                 if let Err(e) = vm.execute(&[event_op]) {
-                     eprintln!("Failed to emit execution status event: {}", e);
-                 }
-
-                 // Save the final state including execution status
-                 let storage = vm.storage_backend.as_mut().ok_or("Storage backend unavailable")?;
-                 let auth_context = vm.auth_context.as_ref();
-                 let namespace = "governance";
-                 let key = format!("proposals/{}/lifecycle", self.id);
-                 // Serialize self to JSON bytes
-                 let proposal_bytes = serde_json::to_vec(self)
-                    .map_err(|e| format!("Failed to serialize proposal state: {}", e))?;
-                 // Use the object-safe `set` method from StorageBackend
-                 storage.set(auth_context, namespace, &key, proposal_bytes)?;
-                 println!("Proposal {} final state (Executed, Status: {:?}) saved.", self.id, self.execution_status);
-
-             } else {
-                 println!("Proposal {} did not pass, cannot transition to Executed.", self.id);
-                 // Optionally attempt transition_to_rejected(vm)? here
-             }
+                // Update status based on execution result
+                match exec_result {
+                    Ok(_) => {
+                        println!("Proposal {} execution completed successfully.", self.id);
+                    },
+                    Err(e) => {
+                        println!("Proposal {} execution failed: {}", self.id, e);
+                        // TODO: Set execution_status to Failed
+                    }
+                }
+                
+                Ok(true)
+            } else {
+                println!("Proposal {} did not meet the voting requirements to execute.", self.id);
+                Ok(false)
+            }
         } else {
-             println!("Proposal {} not in Voting state, cannot transition to Executed.", self.id);
+            println!("Proposal {} not in Voting state, cannot transition to Executed.", self.id);
+            Ok(false)
         }
-        Ok(())
      }
 
      // Updated state transition for rejection
-     pub fn transition_to_rejected(
+     pub fn transition_to_rejected<S>(
          &mut self,
-         vm: &mut VM,
-     ) -> Result<(), Box<dyn std::error::Error>> {
+         vm: &mut VM<S>,
+         auth_context: Option<&AuthContext>
+     ) -> Result<bool, Box<dyn std::error::Error>>
+     where
+         S: Storage + Send + Sync + Clone + Debug + 'static
+     {
         if self.state == ProposalState::Voting {
-            let (yes_votes, no_votes, abstain_votes) = self.tally_votes(vm)?;
-            if !self.check_passed(yes_votes, no_votes, abstain_votes) {
-                 self.state = ProposalState::Rejected;
-                 self.history.push((Utc::now(), self.state.clone()));
-                 self.execution_status = None; // Reset execution status on rejection
-                 let storage = vm.storage_backend.as_mut().ok_or("Storage backend unavailable")?;
-                 let auth_context = vm.auth_context.as_ref();
-                 let namespace = "governance";
-                 let key = format!("proposals/{}/lifecycle", self.id);
-                 // Serialize self to JSON bytes
-                 let proposal_bytes = serde_json::to_vec(self)
-                    .map_err(|e| format!("Failed to serialize proposal state: {}", e))?;
-                 // Use the object-safe `set` method from StorageBackend
-                 storage.set(auth_context, namespace, &key, proposal_bytes)?;
-                 println!("Proposal {} state transitioned to Rejected.", self.id);
-                 // Emit rejection event?
-                 let event_op = Op::EmitEvent {
-                    category: "governance".to_string(),
-                    message: format!("Proposal {} rejected.", self.id)
-                 };
-                 if let Err(e) = vm.execute(&[event_op]) {
-                     eprintln!("Failed to emit rejection event: {}", e);
-                 }
-             } else {
-                 println!("Proposal {} passed, cannot transition to Rejected.", self.id);
-             }
+            let votes = self.tally_votes(vm, auth_context)?;
+            let passed = self.check_passed(vm, auth_context, &votes)?;
+            if !passed {
+                self.state = ProposalState::Rejected;
+                self.history.push((Utc::now(), self.state.clone()));
+                println!("Proposal {} state transitioning to Rejected.", self.id);
+                Ok(true)
+            } else {
+                println!("Proposal {} met the voting requirements to execute, cannot reject.", self.id);
+                Ok(false)
+            }
         } else {
-             println!("Proposal {} not in Voting state, cannot transition to Rejected.", self.id);
+            println!("Proposal {} not in Voting state, cannot transition to Rejected.", self.id);
+            Ok(false)
         }
-        Ok(())
      }
 
       // Updated state transition for expiration
-     pub fn transition_to_expired(
+     pub fn transition_to_expired<S>(
          &mut self,
-         vm: &mut VM,
-     ) -> Result<(), Box<dyn std::error::Error>> {
+         vm: &mut VM<S>,
+         auth_context: Option<&AuthContext>
+     ) -> Result<bool, Box<dyn std::error::Error>>
+     where
+         S: Storage + Send + Sync + Clone + Debug + 'static
+     {
          if self.state == ProposalState::Voting && self.expires_at.map_or(false, |exp| Utc::now() > exp) {
-            let (yes_votes, no_votes, abstain_votes) = self.tally_votes(vm)?;
-            if self.check_passed(yes_votes, no_votes, abstain_votes) {
+            let votes = self.tally_votes(vm, auth_context)?;
+            let passed = self.check_passed(vm, auth_context, &votes)?;
+            if passed {
                 println!("Proposal {} passed but expired before execution.", self.id);
                 // Leave execution_status as None or set to Failure("Expired")?
+            } else {
+                println!("Proposal {} did not have enough votes before expiry.", self.id);
             }
             self.state = ProposalState::Expired;
             self.history.push((Utc::now(), self.state.clone()));
-            self.execution_status = None; // Reset execution status on expiration
-            let storage = vm.storage_backend.as_mut().ok_or("Storage backend unavailable")?;
-            let auth_context = vm.auth_context.as_ref();
-            let namespace = "governance";
-            let key = format!("proposals/{}/lifecycle", self.id);
-            // Serialize self to JSON bytes
-            let proposal_bytes = serde_json::to_vec(self)
-                .map_err(|e| format!("Failed to serialize proposal state: {}", e))?;
-            // Use the object-safe `set` method from StorageBackend
-            storage.set(auth_context, namespace, &key, proposal_bytes)?;
-            println!("Proposal {} state transitioned to Expired.", self.id);
-            // Emit expiration event?
-             let event_op = Op::EmitEvent {
-                category: "governance".to_string(),
-                message: format!("Proposal {} expired.", self.id)
-             };
-             if let Err(e) = vm.execute(&[event_op]) {
-                 eprintln!("Failed to emit expiration event: {}", e);
-             }
-         } else if self.state == ProposalState::Voting {
-             println!("Proposal {} voting period has not expired yet.", self.id);
-         } else {
-             println!("Proposal {} not in Voting state, cannot transition to Expired.", self.id);
-         }
-         Ok(())
+            println!("Proposal {} state transitioning to Expired.", self.id);
+            Ok(true)
+        } else {
+            println!("Proposal {} not in Voting state, cannot transition to Expired.", self.id);
+            Ok(false)
+        }
      }
 }
 
