@@ -1,7 +1,7 @@
 use crate::identity::Identity;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 
 /// Represents a role assignment for an identity in a specific namespace
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -21,6 +21,12 @@ pub struct Membership {
     pub namespace: String,
     /// Optional metadata about the membership
     pub metadata: HashMap<String, String>,
+}
+
+impl Display for Membership {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Member {} of {}", self.identity_did, self.namespace)
+    }
 }
 
 /// Represents a delegation from one identity to another

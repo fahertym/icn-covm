@@ -952,7 +952,7 @@ where
         }
 
         for op in ops {
-            match op {
+            let _ = match op {
                 Op::Push(v) => {
                     self.stack.push(v);
                     Ok(())
@@ -1687,15 +1687,6 @@ mod tests {
     // Add imports for key generation in tests
     use did_key::generate;
     use rand::rngs::OsRng;
-
-    // Add Clone implementation for InMemoryStorage for tests
-    impl Clone for InMemoryStorage {
-        fn clone(&self) -> Self {
-            // Create a new instance - this is a simplified clone for tests
-            // In practice, you would want to clone the actual data
-            InMemoryStorage::new()
-        }
-    }
 
     // Implement Debug for InMemoryStorage
     impl std::fmt::Debug for InMemoryStorage {

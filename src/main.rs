@@ -3,6 +3,7 @@
 use icn_covm::bytecode::{BytecodeCompiler, BytecodeExecution};
 use icn_covm::cli::proposal::{handle_proposal_command, proposal_command};
 use icn_covm::cli::proposal_demo::run_proposal_demo;
+use icn_covm::cli::federation::{federation_command, handle_federation_command};
 use icn_covm::compiler::{parse_dsl, parse_dsl_with_stdlib, CompilerError};
 use icn_covm::federation::messages::{ProposalScope, ProposalStatus, VotingModel};
 use icn_covm::federation::{NetworkNode, NodeConfig};
@@ -76,6 +77,10 @@ impl From<String> for AppError {
 async fn main() -> Result<(), Box<dyn Error>> {
     // Initialize logging
     env_logger::init();
+
+    // Default storage settings
+    let default_storage_backend = "memory";
+    let default_storage_path = "./storage";
 
     // Parse command line arguments
     let api_cmd = Command::new("api")
@@ -242,6 +247,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 )
         )
         .subcommand(proposal_command())
+        .subcommand(federation_command())
         .subcommand(
             Command::new("proposal-demo")
                 .about("Run a demo of the proposal lifecycle")
@@ -297,113 +303,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         )
                 )
         )
-        .subcommand(
-            Command::new("federation")
-                .about("Federation commands for cooperative voting")
-                .arg(
-                    Arg::new("storage-backend")
-                        .long("storage-backend")
-                        .value_name("TYPE")
-                        .help("Storage backend type (memory or file)")
-                        .default_value("file"),
-                )
-                .arg(
-                    Arg::new("storage-path")
-                        .long("storage-path")
-                        .value_name("PATH")
-                        .help("Path for file storage backend")
-                        .default_value("./storage"),
-                )
-                .arg(
-                    Arg::new("federation-port")
-                        .long("federation-port")
-                        .value_name("PORT")
-                        .help("Port number for federation listening")
-                        .default_value("4001"),
-                )
-                .arg(
-                    Arg::new("bootstrap-nodes")
-                        .long("bootstrap-nodes")
-                        .value_name("MULTIADDR")
-                        .help("Multiaddresses of bootstrap nodes (can be used multiple times)")
-                        .action(ArgAction::Append),
-                )
-                .arg(
-                    Arg::new("node-name")
-                        .long("node-name")
-                        .value_name("NAME")
-                        .help("Human-readable name for this node")
-                        .default_value("icn-covm-node"),
-                )
-                .subcommand(
-                    Command::new("broadcast-proposal")
-                        .about("Broadcast a proposal to the federation")
-                        .arg(
-                            Arg::new("proposal-file")
-                                .help("Path to proposal DSL file")
-                                .required(true)
-                                .index(1),
-                        )
-                        .arg(
-                            Arg::new("scope")
-                                .long("scope")
-                                .value_name("SCOPE")
-                                .help("Scope of the proposal (single|multi|global)")
-                                .default_value("global"),
-                        )
-                        .arg(
-                            Arg::new("model")
-                                .long("model")
-                                .value_name("MODEL")
-                                .help("Voting model to use (member|coop)")
-                                .default_value("member"),
-                        )
-                        .arg(
-                            Arg::new("coops")
-                                .long("coops")
-                                .value_name("COOPS")
-                                .help("Comma-separated list of cooperative IDs (for multi scope)")
-                                .default_value(""),
-                        )
-                        .arg(
-                            Arg::new("expires-in")
-                                .long("expires-in")
-                                .value_name("SECONDS")
-                                .help("Set proposal to expire after specified number of seconds")
-                                .value_parser(clap::value_parser!(u64))
-                        )
-                )
-                .subcommand(
-                    Command::new("submit-vote")
-                        .about("Submit a vote for a federated proposal")
-                        .arg(
-                            Arg::new("vote-file")
-                                .help("Path to vote DSL file")
-                                .required(true)
-                                .index(1),
-                        )
-                )
-                .subcommand(
-                    Command::new("execute-proposal")
-                        .about("Execute a proposal to tally votes and determine the result")
-                        .arg(
-                            Arg::new("proposal-id")
-                                .help("Unique ID of the proposal to execute")
-                                .required(true)
-                                .index(1),
-                        )
-                        .arg(
-                            Arg::new("force")
-                                .long("force")
-                                .help("Force execution even if the proposal hasn't expired yet")
-                                .action(clap::ArgAction::SetTrue)
-                        )
-                )
-        )
         .subcommand(api_cmd);
 
     // Handle subcommands
-    let result = match matches.subcommand() {
+    let result: Result<(), AppError> = match matches.subcommand() {
         Some(("run", run_matches)) => {
             // Extract parameters
             let params = run_matches
@@ -507,18 +410,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
             _ => Err("Unknown identity subcommand".into()),
         },
-        Some(("proposal", proposal_matches)) => {
-            // Use default storage configuration
-            let storage_backend = "memory";
-            let storage_path = "./storage";
-            
-            // Set up auth context
-            let auth_context = get_or_create_auth_context(storage_backend, storage_path)?;
-            let storage = setup_storage(storage_backend, storage_path)?;
+        Some(("proposal", sub_matches)) => {
+            let auth_context = get_or_create_auth_context(default_storage_backend, default_storage_path)?;
+            let storage = setup_storage(default_storage_backend, default_storage_path)?;
             let mut vm = VM::with_storage_backend(storage);
-            vm.set_auth_context(auth_context.clone());
-            
-            handle_proposal_command(&mut vm, proposal_matches, &auth_context).map_err(|e| e.to_string().into())
+            handle_proposal_command(&mut vm, sub_matches, &auth_context).map_err(|e| e.into())
         }
         Some(("proposal-demo", _)) => {
             run_proposal_demo().map_err(|e| e.to_string().into())
@@ -543,90 +439,25 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 _ => Err("Unknown storage subcommand".into()),
             }
         }
-        Some(("federation", federation_matches)) => {
-            let storage_backend = federation_matches
-                .get_one::<String>("storage-backend")
-                .unwrap();
-            let storage_path = federation_matches
-                .get_one::<String>("storage-path")
-                .unwrap();
-            let federation_port = federation_matches
-                .get_one::<String>("federation-port")
-                .unwrap()
-                .parse::<u16>()
-                .unwrap();
-            let bootstrap_nodes = federation_matches
-                .get_many::<String>("bootstrap-nodes")
-                .unwrap_or_default()
-                .map(|s| s.parse().expect("Invalid multiaddress format"))
-                .collect::<Vec<_>>();
-            let node_name = federation_matches
-                .get_one::<String>("node-name")
-                .unwrap()
-                .to_string();
-
-            match federation_matches.subcommand() {
-                Some(("broadcast-proposal", broadcast_matches)) => {
-                    let proposal_file = broadcast_matches
-                        .get_one::<String>("proposal-file")
-                        .unwrap();
-                    let scope = broadcast_matches.get_one::<String>("scope").unwrap();
-                    let model = broadcast_matches.get_one::<String>("model").unwrap();
-                    let coops = broadcast_matches.get_one::<String>("coops").unwrap();
-                    let expires_in = broadcast_matches.get_one::<u64>("expires-in").map(|v| *v);
-                    broadcast_proposal(
-                        proposal_file,
-                        storage_backend,
-                        storage_path,
-                        federation_port,
-                        bootstrap_nodes,
-                        node_name,
-                        scope,
-                        model,
-                        coops,
-                        expires_in,
-                    )
-                    .await
-                }
-                Some(("submit-vote", submit_matches)) => {
-                    let vote_file = submit_matches.get_one::<String>("vote-file").unwrap();
-                    submit_vote(
-                        vote_file,
-                        storage_backend,
-                        storage_path,
-                        federation_port,
-                        bootstrap_nodes,
-                        node_name,
-                    )
-                    .await
-                }
-                Some(("execute-proposal", execute_matches)) => {
-                    let proposal_id = execute_matches.get_one::<String>("proposal-id").unwrap();
-                    let force = execute_matches.get_flag("force");
-                    execute_proposal(
-                        proposal_id,
-                        storage_backend,
-                        storage_path,
-                        federation_port,
-                        bootstrap_nodes,
-                        node_name,
-                        force,
-                    )
-                    .await
-                }
-                _ => Err("Unknown federation subcommand".into()),
-            }
+        Some(("federation", sub_matches)) => {
+            let auth_context = get_or_create_auth_context(default_storage_backend, default_storage_path)?;
+            let storage = setup_storage(default_storage_backend, default_storage_path)?;
+            let mut vm = VM::with_storage_backend(storage);
+            handle_federation_command(&mut vm, sub_matches, &auth_context)
+                .await
+                .map_err(|e| e.into())
         }
         Some(("api", api_matches)) => {
             let port = *api_matches.get_one::<u16>("port").unwrap_or(&3030);
             println!("Starting API server on port {}...", port);
             
             // Initialize VM with storage
-            let storage = setup_storage("memory", "./storage")?;
+            let storage = setup_storage(default_storage_backend, default_storage_path)?;
             let mut vm = VM::with_storage_backend(storage);
             
             // Start the API server
-            crate::api::start_api_server(vm, port).await?;
+            crate::api::start_api_server(vm, port).await
+                .map_err(|e| AppError::Other(format!("API server error: {}", e)))
         }
         _ => Err("Unknown command".into()),
     };

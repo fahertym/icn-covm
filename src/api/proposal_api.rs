@@ -3,7 +3,7 @@ use crate::cli::proposal::{
 };
 use crate::governance::proposal::Proposal;
 use crate::storage::auth::AuthContext;
-use crate::storage::traits::Storage;
+use crate::storage::traits::{Storage, StorageExtensions};
 use crate::vm::VM;
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -80,7 +80,7 @@ pub async fn start_api<S>(
     port: u16,
 ) -> Result<(), Box<dyn std::error::Error>>
 where
-    S: Storage + Send + Sync + Clone + Debug + 'static,
+    S: Storage + StorageExtensions + Send + Sync + Clone + Debug + 'static,
 {
     let vm = Arc::new(Mutex::new(vm));
     
@@ -115,7 +115,7 @@ fn with_vm<S>(
     vm: Arc<Mutex<VM<S>>>,
 ) -> impl Filter<Extract = (Arc<Mutex<VM<S>>>,), Error = Infallible> + Clone
 where
-    S: Storage + Send + Sync + Clone + Debug + 'static,
+    S: Storage + StorageExtensions + Send + Sync + Clone + Debug + 'static,
 {
     warp::any().map(move || vm.clone())
 }
@@ -126,7 +126,7 @@ async fn get_proposal<S>(
     vm: Arc<Mutex<VM<S>>>,
 ) -> Result<impl Reply, Rejection>
 where
-    S: Storage + Send + Sync + Clone + Debug + 'static,
+    S: Storage + StorageExtensions + Send + Sync + Clone + Debug + 'static,
 {
     let vm_lock = vm.lock().await;
     
@@ -184,7 +184,7 @@ async fn get_proposal_comments<S>(
     vm: Arc<Mutex<VM<S>>>,
 ) -> Result<impl Reply, Rejection>
 where
-    S: Storage + Send + Sync + Clone + Debug + 'static,
+    S: Storage + StorageExtensions + Send + Sync + Clone + Debug + 'static,
 {
     let vm_lock = vm.lock().await;
     
@@ -224,7 +224,7 @@ async fn get_proposal_summary<S>(
     vm: Arc<Mutex<VM<S>>>,
 ) -> Result<impl Reply, Rejection>
 where
-    S: Storage + Send + Sync + Clone + Debug + 'static,
+    S: Storage + StorageExtensions + Send + Sync + Clone + Debug + 'static,
 {
     let vm_lock = vm.lock().await;
     
@@ -232,7 +232,7 @@ where
     let proposal_result = load_proposal_from_governance(&vm_lock, &id);
     let comments_result = fetch_comments_threaded(&vm_lock, &id, None);
     
-    if let (Ok(proposal), Ok(comments)) = (proposal_result, comments_result) {
+    if let (Ok(proposal), Ok(comments)) = (&proposal_result, &comments_result) {
         // Count votes
         let (yes_votes, no_votes, abstain_votes) = count_votes(&vm_lock, &id)
             .unwrap_or((0, 0, 0));
@@ -268,7 +268,7 @@ where
         
         // Build response
         let summary = ProposalSummary {
-            id: proposal.id,
+            id: proposal.id.clone(),
             title: "".to_string(), // Would need to fetch from lifecycle
             status: format!("{:?}", proposal.status),
             comment_count: comments.len(),
@@ -285,10 +285,14 @@ where
         
         Ok(warp::reply::json(&summary))
     } else {
+        // Make a clone of the results to avoid move errors
+        let proposal_err = proposal_result.as_ref().err().map(|e| format!("{}", e));
+        let comments_err = comments_result.as_ref().err().map(|e| format!("{}", e));
+        
         // Handle errors
-        let error_message = match (proposal_result, comments_result) {
-            (Err(e), _) => format!("Failed to load proposal: {}", e),
-            (_, Err(e)) => format!("Failed to load comments: {}", e),
+        let error_message = match (proposal_err, comments_err) {
+            (Some(e), _) => format!("Failed to load proposal: {}", e),
+            (_, Some(e)) => format!("Failed to load comments: {}", e),
             _ => "Unknown error".to_string(),
         };
         

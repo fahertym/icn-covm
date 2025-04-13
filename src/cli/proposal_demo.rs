@@ -185,6 +185,8 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
         timestamp: Utc::now(),
         content: "This looks like a good proposal! I support increasing the repair budget.".to_string(),
         reply_to: None,
+        tags: Vec::new(),
+        reactions: HashMap::new(),
     };
     
     // Store the comment
@@ -206,6 +208,8 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
         timestamp: Utc::now(),
         content: "I agree, but have we considered allocating some funds for preventative maintenance?".to_string(),
         reply_to: Some(comment1_id.to_string()),
+        tags: Vec::new(),
+        reactions: HashMap::new(),
     };
     
     // Store the comment
@@ -226,6 +230,8 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
         timestamp: Utc::now() + Duration::seconds(30),
         content: "That's a great point about preventative maintenance. I'll allocate 20% for that purpose.".to_string(),
         reply_to: Some(comment2_id.to_string()),
+        tags: Vec::new(),
+        reactions: HashMap::new(),
     };
     
     storage.set_json(
@@ -245,6 +251,8 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
         timestamp: Utc::now() + Duration::seconds(60),
         content: "Have we verified this budget against our quarterly allocations?".to_string(),
         reply_to: None,
+        tags: Vec::new(),
+        reactions: HashMap::new(),
     };
     
     storage.set_json(
@@ -264,6 +272,8 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
         timestamp: Utc::now() + Duration::seconds(90),
         content: "Yes, I've confirmed with accounting that this fits within our Q3 maintenance budget.".to_string(),
         reply_to: Some(comment4_id.to_string()),
+        tags: Vec::new(),
+        reactions: HashMap::new(),
     };
     
     storage.set_json(
@@ -276,7 +286,7 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
     println!("✅ Added reply to second thread: {}", comment5_id);
     
     // Release mutable borrow on VM first
-    drop(storage);
+    let _ = storage;
     
     // Demonstrate comment display
     println!("\n--- Demonstrating threaded comment display ---");
