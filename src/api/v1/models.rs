@@ -418,4 +418,31 @@ pub struct PagedResponse<T> {
     pub page: usize,
     pub page_size: usize,
     pub data: Vec<T>,
+}
+
+// Execution related models
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ExecutionVersionMeta {
+    /// Version number
+    pub version: u64,
+    /// Timestamp when execution occurred
+    pub executed_at: String,
+    /// Whether the execution was successful
+    pub success: bool,
+    /// Short summary of the execution result
+    pub summary: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ExecutionVersionsResponse {
+    /// Total count of execution versions
+    pub total: usize,
+    /// List of execution version metadata
+    pub versions: Vec<ExecutionVersionMeta>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ExecutionVersionQuery {
+    /// Optional version number to retrieve specific version
+    pub version: Option<u64>,
 } 

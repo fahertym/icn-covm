@@ -7,7 +7,6 @@ use crate::api::v1::models::{
     Proposal, CreateProposalRequest, PaginationParams, SortParams,
     Comment, CreateCommentRequest
 };
-use crate::api::v1::handlers::get_execution_results_handler;
 use crate::vm::VM;
 use serde_json::json;
 use std::sync::Arc;
@@ -25,9 +24,15 @@ pub fn get_routes<S>(
 where
     S: Storage + StorageExtensions + Send + Sync + Clone + Debug + 'static,
 {
+    // Create base path for proposal routes
     let base = warp::path("proposals");
     let vm = Arc::new(vm);
     
+    // Create filter for injecting dependencies
+    let with_storage = move |storage: Arc<Storage>| warp::any().map(move || storage.clone());
+    let with_vm = move |vm: Arc<VM<S>>| warp::any().map(move || vm.clone());
+    
+    // List proposals route
     let list_proposals = base
         .and(warp::get())
         .and(warp::query::<PaginationParams>())
@@ -48,7 +53,7 @@ where
         .and(warp::body::json())
         .and(with_storage(storage.clone()))
         .and(with_auth())
-        .and(require_role("proposals:write".to_string()))
+        .and(require_role("proposals:create".to_string()))
         .and_then(create_proposal_handler);
     
     let update_proposal_status = base
@@ -58,7 +63,7 @@ where
         .and(warp::body::json())
         .and(with_storage(storage.clone()))
         .and(with_auth())
-        .and(require_role("proposals:admin".to_string()))
+        .and(require_role("proposals:update".to_string()))
         .and_then(update_proposal_status_handler);
     
     let vote_on_proposal = base
@@ -75,7 +80,6 @@ where
         .and(warp::path::param::<String>())
         .and(warp::path("comments"))
         .and(warp::get())
-        .and(warp::query::<PaginationParams>())
         .and(with_storage(storage.clone()))
         .and(with_auth())
         .and_then(get_proposal_comments_handler);
@@ -100,14 +104,6 @@ where
         .and(require_role("proposals:execute".to_string()))
         .and_then(execute_proposal_handler);
     
-    let get_execution_results = base
-        .and(warp::path::param::<String>())
-        .and(warp::path("execution_results"))
-        .and(warp::get())
-        .and(with_storage(storage.clone()))
-        .and(with_auth())
-        .and_then(get_execution_results_handler);
-    
     list_proposals
         .or(get_proposal)
         .or(create_proposal)
@@ -116,14 +112,14 @@ where
         .or(get_proposal_comments)
         .or(add_proposal_comment)
         .or(execute_proposal)
-        .or(get_execution_results)
 }
 
-// Filter helpers for dependency injection
+/// Filter helper for storage dependency injection
 fn with_storage(storage: Arc<Storage>) -> impl Filter<Extract = (Arc<Storage>,), Error = std::convert::Infallible> + Clone {
     warp::any().map(move || storage.clone())
 }
 
+/// Filter helper for VM dependency injection
 fn with_vm<S>(vm: Arc<VM<S>>) -> impl Filter<Extract = (Arc<VM<S>>,), Error = std::convert::Infallible> + Clone
 where
     S: Storage + StorageExtensions + Send + Sync + Clone + Debug + 'static,
@@ -606,9 +602,11 @@ where
     let result_string = serde_json::to_string(&execution_result)
         .unwrap_or_else(|_| String::from("\"Execution completed, but result couldn't be serialized\""));
     
-    // Save execution result to storage
-    match storage.save_proposal_execution_result(&id, &result_string).await {
-        Ok(_) => info!("Saved execution result for proposal {}", id),
+    // Save execution result with versioning
+    let success = true; // Assume success since we reached this point
+    let summary = "Proposal executed successfully";
+    match storage.save_proposal_execution_result_versioned(&id, &result_string, success, summary).await {
+        Ok(version) => info!("Saved execution result version {} for proposal {}", version, id),
         Err(e) => {
             warn!("Failed to save execution result for proposal {}: {}", id, e);
             // We'll continue even if saving the result fails

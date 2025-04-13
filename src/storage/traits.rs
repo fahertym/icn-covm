@@ -187,6 +187,30 @@ pub trait StorageExtensions: StorageBackend {
     
     /// Gets the execution logs of a proposal
     fn get_proposal_execution_logs(&self, proposal_id: &str) -> StorageResult<String>;
+    
+    /// Saves a versioned execution result of a proposal
+    fn save_proposal_execution_result_versioned(&mut self, proposal_id: &str, result: &str, success: bool, summary: &str) -> StorageResult<u64>;
+    
+    /// Gets a versioned execution result of a proposal
+    fn get_proposal_execution_result_versioned(&self, proposal_id: &str, version: u64) -> StorageResult<String>;
+    
+    /// Gets the latest execution result version for a proposal
+    fn get_latest_execution_result_version(&self, proposal_id: &str) -> StorageResult<u64>;
+    
+    /// Gets the latest execution result for a proposal
+    fn get_latest_execution_result(&self, proposal_id: &str) -> StorageResult<String>;
+    
+    /// Lists all execution version metadata for a proposal
+    fn list_execution_versions(&self, proposal_id: &str) -> StorageResult<Vec<ExecutionVersionMeta>>;
+}
+
+/// Metadata about a proposal execution version
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ExecutionVersionMeta {
+    pub version: u64,
+    pub executed_at: String,
+    pub success: bool,
+    pub summary: String,
 }
 
 // Blanket impl for all types implementing StorageBackend
@@ -324,9 +348,147 @@ impl<S: StorageBackend> StorageExtensions for S {
                     details: format!("Invalid UTF-8 in execution logs: {}", e),
                 }
             }),
-            Err(crate::storage::errors::StorageError::KeyNotFound { .. }) => Ok(String::new()),
+            Err(crate::storage::errors::StorageError::NotFound { .. }) => Ok(String::new()),
             Err(e) => Err(e),
         }
+    }
+    
+    fn save_proposal_execution_result_versioned(&mut self, proposal_id: &str, result: &str, success: bool, summary: &str) -> StorageResult<u64> {
+        // Get the latest version and increment it
+        let next_version = match self.get_latest_execution_result_version(proposal_id) {
+            Ok(version) => version + 1,
+            Err(_) => 1, // Start with version 1 if no versions exist
+        };
+        
+        // Create the key for storing versioned execution result
+        let result_key = format!("proposals/{}/execution_results/{}", proposal_id, next_version);
+        
+        // Save the result as a string
+        self.set(None, "governance", &result_key, result.as_bytes().to_vec())?;
+        
+        // Save metadata for this version
+        let meta = ExecutionVersionMeta {
+            version: next_version,
+            executed_at: crate::storage::now().to_string(),
+            success,
+            summary: summary.to_string(),
+        };
+        
+        let meta_key = format!("proposals/{}/execution_results/{}/meta", proposal_id, next_version);
+        let meta_bytes = serde_json::to_vec(&meta).map_err(|e| {
+            crate::storage::errors::StorageError::SerializationError {
+                details: format!("Failed to serialize execution metadata: {}", e),
+            }
+        })?;
+        
+        self.set(None, "governance", &meta_key, meta_bytes)?;
+        
+        // Update the latest version pointer
+        let latest_key = format!("proposals/{}/execution_results/latest", proposal_id);
+        let version_bytes = next_version.to_string().into_bytes();
+        self.set(None, "governance", &latest_key, version_bytes)?;
+        
+        Ok(next_version)
+    }
+    
+    fn get_proposal_execution_result_versioned(&self, proposal_id: &str, version: u64) -> StorageResult<String> {
+        // Create the key for retrieving versioned execution result
+        let result_key = format!("proposals/{}/execution_results/{}", proposal_id, version);
+        
+        // Try to get execution result, return error if not found
+        match self.get(None, "governance", &result_key) {
+            Ok(bytes) => String::from_utf8(bytes).map_err(|e| {
+                crate::storage::errors::StorageError::SerializationError {
+                    details: format!("Invalid UTF-8 in execution result: {}", e),
+                }
+            }),
+            Err(e) => Err(e),
+        }
+    }
+    
+    fn get_latest_execution_result_version(&self, proposal_id: &str) -> StorageResult<u64> {
+        // Create the key for retrieving the latest version pointer
+        let latest_key = format!("proposals/{}/execution_results/latest", proposal_id);
+        
+        // Try to get the latest version
+        match self.get(None, "governance", &latest_key) {
+            Ok(bytes) => {
+                let version_str = String::from_utf8(bytes).map_err(|e| {
+                    crate::storage::errors::StorageError::SerializationError {
+                        details: format!("Invalid UTF-8 in version pointer: {}", e),
+                    }
+                })?;
+                
+                version_str.parse::<u64>().map_err(|e| {
+                    crate::storage::errors::StorageError::SerializationError {
+                        details: format!("Invalid version number: {}", e),
+                    }
+                })
+            },
+            // If the latest pointer doesn't exist, list all versions and find the max
+            Err(crate::storage::errors::StorageError::NotFound { .. }) => {
+                let prefix = format!("proposals/{}/execution_results/", proposal_id);
+                let keys = self.list_keys(None, "governance", Some(&prefix))?;
+                
+                // Find max version from keys
+                let mut max_version = 0;
+                for key in keys {
+                    if let Some(version_str) = key.strip_prefix(&prefix) {
+                        if !version_str.contains('/') { // Skip metadata keys with /
+                            if let Ok(version) = version_str.parse::<u64>() {
+                                if version > max_version {
+                                    max_version = version;
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                if max_version == 0 {
+                    Err(crate::storage::errors::StorageError::NotFound {
+                        key: format!("No execution results for proposal {}", proposal_id),
+                    })
+                } else {
+                    Ok(max_version)
+                }
+            },
+            Err(e) => Err(e),
+        }
+    }
+    
+    fn get_latest_execution_result(&self, proposal_id: &str) -> StorageResult<String> {
+        // Get the latest version
+        let latest_version = self.get_latest_execution_result_version(proposal_id)?;
+        
+        // Get the result for that version
+        self.get_proposal_execution_result_versioned(proposal_id, latest_version)
+    }
+    
+    fn list_execution_versions(&self, proposal_id: &str) -> StorageResult<Vec<ExecutionVersionMeta>> {
+        let prefix = format!("proposals/{}/execution_results/", proposal_id);
+        let keys = self.list_keys(None, "governance", Some(&prefix))?;
+        
+        let mut versions = Vec::new();
+        
+        // Filter for metadata keys and collect version info
+        for key in keys {
+            if key.ends_with("/meta") {
+                match self.get(None, "governance", &key) {
+                    Ok(bytes) => {
+                        match serde_json::from_slice::<ExecutionVersionMeta>(&bytes) {
+                            Ok(meta) => versions.push(meta),
+                            Err(_) => continue, // Skip invalid metadata
+                        }
+                    },
+                    Err(_) => continue, // Skip if can't read metadata
+                }
+            }
+        }
+        
+        // Sort by version (descending)
+        versions.sort_by(|a, b| b.version.cmp(&a.version));
+        
+        Ok(versions)
     }
 }
 
