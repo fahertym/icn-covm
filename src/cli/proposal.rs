@@ -24,6 +24,7 @@ use crate::storage::traits::Storage;
 use crate::storage::traits::StorageExtensions;
 use crate::vm::VM;
 use crate::vm::Op;
+use crate::vm::VMError;
 use chrono::{DateTime, Duration, Utc};
 use clap::ArgMatches;
 use clap::{arg, value_parser, Arg, ArgAction, Command};
@@ -66,6 +67,10 @@ pub struct ProposalComment {
     pub content: String,
     /// Optional reference to parent comment if this is a reply
     pub reply_to: Option<CommentId>,
+    /// Tags associated with this comment (e.g., #finance, #technical)
+    pub tags: Vec<String>,
+    /// Reactions to this comment, mapping emoji to count
+    pub reactions: HashMap<String, u32>,
 }
 
 /// Creates the command-line interface for proposal management
@@ -81,6 +86,10 @@ pub struct ProposalComment {
 /// - view: View proposal details
 /// - list: List and filter proposals
 /// - comments: View all comments for a proposal
+/// - comment-react: Add a reaction to a comment
+/// - comment-tag: Add tags to an existing comment
+/// - simulate: Simulate the execution of a proposal without making persistent changes
+/// - summary: Get high-level summary of a proposal's activity and state
 ///
 /// # Returns
 /// A configured `Command` object ready to be used in a CLI application
@@ -204,8 +213,8 @@ pub fn proposal_command() -> Command {
                 .arg(
                     Arg::new("text")
                         .long("text")
-                        .value_name("COMMENT_TEXT")
-                        .help("The text of the comment")
+                        .value_name("TEXT")
+                        .help("Text content of the comment")
                         .required(true)
                 )
                 .arg(
@@ -213,6 +222,66 @@ pub fn proposal_command() -> Command {
                         .long("reply-to")
                         .value_name("COMMENT_ID")
                         .help("ID of the comment to reply to")
+                        // Not required, optional for replies
+                        // No value_parser needed for String
+                )
+                .arg(
+                    Arg::new("tag")
+                        .long("tag")
+                        .value_name("TAG")
+                        .help("Add a tag to the comment (e.g., '#finance')")
+                        .action(ArgAction::Append)
+                )
+        )
+        .subcommand(
+            Command::new("comment-react")
+                .about("Add a reaction to a comment")
+                .arg(
+                    Arg::new("id")
+                        .long("id")
+                        .value_name("COMMENT_ID")
+                        .help("ID of the comment to react to")
+                        .required(true)
+                )
+                .arg(
+                    Arg::new("proposal-id")
+                        .long("proposal-id")
+                        .value_name("PROPOSAL_ID")
+                        .help("ID of the proposal containing the comment")
+                        .required(true)
+                )
+                .arg(
+                    Arg::new("reaction")
+                        .long("reaction")
+                        .value_name("EMOJI")
+                        .help("Reaction emoji to add (e.g., '👍', '🔥')")
+                        .required(true)
+                )
+        )
+        .subcommand(
+            Command::new("comment-tag")
+                .about("Add tags to an existing comment")
+                .arg(
+                    Arg::new("id")
+                        .long("id")
+                        .value_name("COMMENT_ID")
+                        .help("ID of the comment to tag")
+                        .required(true)
+                )
+                .arg(
+                    Arg::new("proposal-id")
+                        .long("proposal-id")
+                        .value_name("PROPOSAL_ID")
+                        .help("ID of the proposal containing the comment")
+                        .required(true)
+                )
+                .arg(
+                    Arg::new("tag")
+                        .long("tag")
+                        .value_name("TAG")
+                        .help("Tag to add (e.g., '#finance')")
+                        .required(true)
+                        .action(ArgAction::Append)
                 )
         )
         .subcommand(
@@ -307,33 +376,13 @@ pub fn proposal_command() -> Command {
         )
         .subcommand(
             Command::new("view")
-                .about("View the details and status of a proposal")
-                 .arg(
+                .about("View detailed information about a proposal")
+                .arg(
                     Arg::new("id")
                         .long("id")
                         .value_name("PROPOSAL_ID")
                         .help("ID of the proposal to view")
                         .required(true)
-                        // No value_parser needed for String
-                )
-                .arg(
-                    Arg::new("version")
-                        .long("version")
-                        .value_name("VERSION_NUMBER")
-                        .help("Optionally specify a version to view")
-                        .value_parser(value_parser!(u64)), // Not required
-                )
-                .arg(
-                    Arg::new("comments")
-                        .long("comments")
-                        .help("Flag to also view comments")
-                        .action(ArgAction::SetTrue), // Not required
-        )
-        .arg(
-                    Arg::new("history")
-                        .long("history")
-                        .help("Flag to also view history")
-                        .action(ArgAction::SetTrue), // Not required
                 )
         )
         .subcommand(
@@ -374,6 +423,28 @@ pub fn proposal_command() -> Command {
                         .long("sort")
                         .value_name("SORT_BY")
                         .help("Sort comments by: time (default), author")
+                )
+        )
+        .subcommand(
+            Command::new("simulate")
+                .about("Simulate the execution of a proposal without making persistent changes")
+                .arg(
+                    Arg::new("id")
+                        .long("id")
+                        .value_name("PROPOSAL_ID")
+                        .help("ID of the proposal to simulate")
+                        .required(true)
+                )
+        )
+        .subcommand(
+            Command::new("summary")
+                .about("Get high-level summary of a proposal's activity and state")
+                .arg(
+                    Arg::new("id")
+                        .long("id")
+                        .value_name("PROPOSAL_ID")
+                        .help("ID of the proposal to summarize")
+                        .required(true)
                 )
         )
 }
@@ -685,16 +756,23 @@ where
             let comment_text = comment_matches.get_one::<String>("text").unwrap().clone();
             let reply_to = comment_matches.get_one::<String>("reply-to").cloned();
             
-            // Generate a unique comment ID
-            let comment_id = format!("comment-{}", uuid::Uuid::new_v4().to_string());
+            // Get tags if provided
+            let tags = if let Some(tag_values) = comment_matches.get_many::<String>("tag") {
+                tag_values.cloned().collect()
+            } else {
+                Vec::new()
+            };
             
-            // Create the comment
+            // Create a new comment with tags
+            let comment_id = uuid::Uuid::new_v4().to_string();
             let comment = ProposalComment {
                 id: comment_id.clone(),
                 author: user_did.to_string(),
                 timestamp: Utc::now(),
-                content: comment_text,
-                reply_to,
+                content: comment_text.clone(),
+                reply_to: reply_to.clone(),
+                tags,
+                reactions: HashMap::new(),
             };
             
             // Get storage backend
@@ -731,205 +809,8 @@ where
             vm.execute(&ops)?;
         }
         Some(("view", view_matches)) => {
-            println!("Handling proposal view...");
-            let proposal_id = view_matches.get_one::<ProposalId>("id").unwrap().clone();
-            let specific_version = view_matches.get_one::<u64>("version").copied();
-            let show_comments = view_matches.get_flag("comments");
-            let show_history = view_matches.get_flag("history");
-
-            let storage = vm
-                .storage_backend
-                .as_ref()
-                .ok_or_else(|| "Storage backend not configured for proposal view")?;
-            let namespace = "governance";
-
-            // --- Load Proposal Lifecycle (specific version or latest) ---
-            let proposal: ProposalLifecycle = if let Some(version) = specific_version {
-                let key = format!("governance/proposals/{}/lifecycle", proposal_id);
-                storage
-                    .get_version_json(vm.auth_context.as_ref(), namespace, &key, version)
-                    .map_err(|e| {
-                        format!(
-                            "Failed to load version {} of proposal {}: {}",
-                            version, proposal_id, e
-                        )
-                    })?
-                    .ok_or_else(|| {
-                        format!("Version {} not found for proposal {}", version, proposal_id)
-                    })?
-            } else {
-                // Use existing helper for latest version
-                load_proposal(vm, &proposal_id)?
-            };
-
-            // --- Print Core Details ---
-            println!("--- Proposal Details ---");
-            println!("ID:          {}", proposal.id);
-            println!("Title:       {}", proposal.title);
-            println!("Creator:     {:?}", proposal.creator); // Using debug format instead of Display
-            println!("State:       {:?}", proposal.state);
-            println!("Version:     {}", proposal.current_version);
-            println!("Created At:  {}", proposal.created_at.to_rfc3339());
-            if let Some(expires) = proposal.expires_at {
-                println!("Expires At:  {}", expires.to_rfc3339());
-            } else {
-                println!("Expires At:  N/A");
-            }
-            println!("Quorum:      {}", proposal.quorum);
-            println!("Threshold:   {}", proposal.threshold);
-
-            // --- Vote Tally (if Voting) ---
-            if proposal.state == ProposalState::Voting {
-                // Get a clone of the storage reference to avoid borrowing vm
-                let storage = vm
-                    .storage_backend
-                    .as_ref()
-                    .ok_or_else(|| "Storage backend not configured for tallying votes")?;
-
-                // Build a list of keys for votes
-                let vote_prefix = format!("governance/proposals/{}/votes/", proposal_id);
-                let mut yes_votes = 0;
-                let mut no_votes = 0;
-                let mut abstain_votes = 0;
-
-                // Count votes directly
-                if let Ok(vote_keys) =
-                    storage.list_keys(vm.auth_context.as_ref(), "governance", Some(&vote_prefix))
-                {
-                    for key in vote_keys {
-                        if let Ok(vote_bytes) =
-                            storage.get(vm.auth_context.as_ref(), "governance", &key)
-                        {
-                            if let Ok(vote_str) = String::from_utf8(vote_bytes) {
-                                match vote_str.as_str() {
-                                    "yes" => yes_votes += 1,
-                                    "no" => no_votes += 1,
-                                    "abstain" => abstain_votes += 1,
-                                    _ => { /* Invalid vote */ }
-                                }
-                            }
-                        }
-                    }
-
-                    // Build a votes map
-                    let mut votes = HashMap::new();
-                    votes.insert("yes".to_string(), yes_votes);
-                    votes.insert("no".to_string(), no_votes);
-                    votes.insert("abstain".to_string(), abstain_votes);
-
-                    println!("--- Current Votes ---");
-                    println!("  Yes:       {}", yes_votes);
-                    println!("  No:        {}", no_votes);
-                    println!("  Abstain:   {}", abstain_votes);
-
-                    // Display quorum and threshold status
-                    let total_votes = yes_votes + no_votes;
-                    println!("  Quorum:    {}/{} votes", total_votes, proposal.quorum);
-                    println!(
-                        "  Threshold: {}/{} yes votes",
-                        yes_votes, proposal.threshold
-                    );
-                } else {
-                    println!("Error reading votes.");
-                }
-            }
-
-            // --- List Attachments ---
-            let attachment_prefix = format!("governance/proposals/{}/attachments/", proposal.id);
-            match storage.list_keys(
-                vm.auth_context.as_ref(),
-                namespace,
-                Some(&attachment_prefix),
-            ) {
-                Ok(keys) if !keys.is_empty() => {
-                    println!("--- Attachments ---");
-                    for key in keys {
-                        if let Some(name) = key.split('/').last() {
-                            println!("  - {}", name);
-                        }
-                    }
-                }
-                Ok(_) => { /* No attachments found */ }
-                Err(e) => {
-                    println!("Error listing attachments: {}", e);
-                }
-            }
-
-            // --- Execution Status ---
-            if let Some(status) = &proposal.execution_status {
-                println!("--- Execution Status ---");
-                match status {
-                    ExecutionStatus::Success => println!("  Status: Success"),
-                    ExecutionStatus::Failure(reason) => println!("  Status: Failure - {}", reason),
-                }
-            }
-
-            // --- History ---
-            if show_history {
-                println!("--- History ---");
-                for (timestamp, state) in &proposal.history {
-                    println!("  [{}] -> {:?}", timestamp.to_rfc3339(), state);
-                }
-            }
-
-            // --- Comments ---
-            if show_comments {
-                println!("--- Comments ---");
-                let comment_prefix = format!("governance/proposals/{}/comments/", proposal.id);
-                match storage.list_keys(vm.auth_context.as_ref(), namespace, Some(&comment_prefix))
-                {
-                    Ok(comment_keys) if !comment_keys.is_empty() => {
-                        let mut all_comments: HashMap<CommentId, ProposalComment> = HashMap::new();
-                        let mut root_comments = Vec::new();
-                        let mut replies_map: HashMap<Option<CommentId>, Vec<CommentId>> =
-                            HashMap::new();
-
-                        for key in comment_keys {
-                            match storage.get_json::<ProposalComment>(
-                                vm.auth_context.as_ref(),
-                                namespace,
-                                &key,
-                            ) {
-                                Ok(comment) => {
-                                    let comment_id = comment.id.clone();
-                                    let reply_to = comment.reply_to.clone();
-                                    all_comments.insert(comment_id.clone(), comment);
-                                    replies_map.entry(reply_to).or_default().push(comment_id);
-                                }
-                                Err(e) => println!("Error loading comment {}: {}", key, e),
-                            }
-                        }
-
-                        // Find root comments (those not replying to anything)
-                        if let Some(roots) = replies_map.get(&None) {
-                            root_comments = roots.clone();
-                            
-                            // Sort root comments by timestamp (default)
-                            root_comments.sort_by_key(|id| all_comments.get(id).map(|c| c.timestamp));
-                        }
-
-                        println!("\n--- Threaded Comments ---");
-                        
-                        if root_comments.is_empty() {
-                            println!("No comments found.");
-                        } else {
-                            for root_id in root_comments {
-                                print_view_comments(&root_id, &all_comments, &replies_map, 0);
-                                println!(); // Add a blank line between top-level comments
-                            }
-                        }
-                        
-                        println!("Total comments: {}", all_comments.len());
-                    }
-                    Ok(_) => {
-                        println!("No comments found.");
-                    }
-                    Err(e) => {
-                        println!("Error listing comments: {}", e);
-                    }
-                }
-            }
-            println!("-----------------------");
+            let proposal_id = view_matches.get_one::<String>("id").unwrap();
+            return handle_view_command(vm, proposal_id);
         }
         Some(("edit", edit_matches)) => {
             println!("Handling proposal edit...");
@@ -1442,6 +1323,32 @@ where
             
             println!("Total comments: {}", comments.len());
         }
+        Some(("simulate", simulate_matches)) => {
+            let proposal_id = simulate_matches.get_one::<String>("id").unwrap();
+            return handle_simulate_command(vm, proposal_id);
+        }
+        Some(("summary", summary_matches)) => {
+            let proposal_id = summary_matches.get_one::<String>("id").unwrap();
+            return handle_summary_command(vm, proposal_id);
+        }
+        Some(("comment-react", react_matches)) => {
+            let comment_id = react_matches.get_one::<String>("id").unwrap();
+            let proposal_id = react_matches.get_one::<String>("proposal-id").unwrap();
+            let reaction = react_matches.get_one::<String>("reaction").unwrap();
+            
+            return handle_comment_react_command(vm, comment_id, proposal_id, reaction, auth_context);
+        }
+        Some(("comment-tag", tag_matches)) => {
+            let comment_id = tag_matches.get_one::<String>("id").unwrap();
+            let proposal_id = tag_matches.get_one::<String>("proposal-id").unwrap();
+            let tags: Vec<String> = if let Some(tag_values) = tag_matches.get_many::<String>("tag") {
+                tag_values.cloned().collect()
+            } else {
+                Vec::new()
+            };
+            
+            return handle_comment_tag_command(vm, comment_id, proposal_id, &tags, auth_context);
+        }
         _ => unreachable!("Subcommand should be required"),
     }
     Ok(())
@@ -1550,21 +1457,36 @@ fn print_view_comments(
     depth: usize,
 ) {
     if let Some(comment) = comments_map.get(comment_id) {
-        let indent = "  ".repeat(depth);
-        println!("{}[{}] by {}:", indent, &comment.id, &comment.author);
-        println!("{}  {}", indent, &comment.content);
-        println!("{}  @{}", indent, comment.timestamp.to_rfc3339());
-
+        // Indent based on depth
+        let indent = " ".repeat(depth * 4);
+        
+        // Format timestamp as a readable date/time
+        let timestamp_str = comment.timestamp.format("%Y-%m-%d %H:%M:%S UTC").to_string();
+        
+        println!("{}└─ Comment {} (from {})", indent, comment.id, comment.author);
+        println!("{}   Date: {}", indent, timestamp_str);
+        println!("{}   {}", indent, comment.content);
+        
+        // Print tags if present
+        if !comment.tags.is_empty() {
+            println!("{}   Tags: {}", indent, comment.tags.join(", "));
+        }
+        
+        // Print reactions if present
+        if !comment.reactions.is_empty() {
+            let reactions_str: Vec<String> = comment.reactions
+                .iter()
+                .map(|(emoji, count)| format!("{} {}", emoji, count))
+                .collect();
+            println!("{}   Reactions: {}", indent, reactions_str.join(", "));
+        }
+        
+        // Print any replies recursively
         if let Some(replies) = replies_map.get(&Some(comment.id.clone())) {
-            // Sort replies by timestamp before printing
-            let mut sorted_replies = replies.clone();
-            sorted_replies.sort_by_key(|id| comments_map.get(id).map(|c| c.timestamp));
-            for reply_id in sorted_replies {
-                print_view_comments(&reply_id, comments_map, replies_map, depth + 1);
+            for reply_id in replies {
+                print_view_comments(reply_id, comments_map, replies_map, depth + 1);
             }
         }
-    } else {
-        println!("Error: Comment {} not found in map.", comment_id);
     }
 }
 
@@ -1613,4 +1535,652 @@ fn print_proposal_summary(proposal: &Proposal) {
         println!("  Result: {}", result);
     }
     println!("---------------------");
+}
+
+/// Loads a proposal from storage and handles errors uniformly
+pub fn load_proposal_from_governance<S>(
+    vm: &VM<S>,
+    proposal_id: &ProposalId,
+) -> Result<Proposal, Box<dyn Error>>
+where
+    S: Storage + Send + Sync + Clone + Debug + 'static,
+{
+    // Load the proposal from storage
+    let storage_key = format!("governance/proposals/{}", proposal_id);
+    
+    let proposal_data = vm.storage_backend.as_ref()
+        .ok_or_else(|| VMError::StorageUnavailable)?
+        .read(&storage_key, None, "proposals")
+        .map_err(|e| {
+            eprintln!("Failed to read proposal: {}", e);
+            Box::new(e) as Box<dyn Error>
+        })?;
+
+    // Deserialize the proposal
+    serde_json::from_slice::<Proposal>(&proposal_data)
+        .map_err(|e| {
+            eprintln!("Failed to deserialize proposal: {}", e);
+            Box::new(e) as Box<dyn Error>
+        })
+}
+
+/// Count votes for a proposal from storage
+fn count_votes<S>(
+    vm: &VM<S>,
+    proposal_id: &ProposalId,
+) -> Result<(u32, u32, u32), Box<dyn Error>>
+where
+    S: Storage + Send + Sync + Clone + Debug + 'static,
+{
+    let votes_path = format!("votes/{}", proposal_id);
+    let mut yes_votes = 0;
+    let mut no_votes = 0;
+    let mut abstain_votes = 0;
+
+    // Try to list all files in the votes directory
+    match vm.storage_backend.as_ref()
+        .ok_or_else(|| VMError::StorageUnavailable)?
+        .list_items(&votes_path, None, "votes") {
+        Ok(voter_items) => {
+            // Process each voter's vote
+            for voter_item in voter_items {
+                let voter_id = voter_item.split('/').last().unwrap_or_default();
+                let vote_key = format!("{}/{}", votes_path, voter_id);
+                
+                match vm.storage_backend.as_ref().unwrap().read(&vote_key, None, "votes") {
+                    Ok(vote_data) => {
+                        // Try to deserialize as VoteChoice
+                        if let Ok(vote) = serde_json::from_slice::<VoteChoice>(&vote_data) {
+                            match vote {
+                                VoteChoice::Yes => yes_votes += 1,
+                                VoteChoice::No => no_votes += 1,
+                                VoteChoice::Abstain => abstain_votes += 1,
+                            }
+                        }
+                    },
+                    Err(e) => {
+                        eprintln!("Warning: Failed to read vote from {}: {}", voter_id, e);
+                        // Continue with other votes
+                    }
+                }
+            }
+        },
+        Err(e) => {
+            // If directory doesn't exist, it might mean no votes yet
+            if let StorageError::ItemNotFound(_, _) = e {
+                // This is fine - no votes yet
+                println!("No votes found for proposal {}", proposal_id);
+            } else {
+                // Other errors should be reported
+                eprintln!("Error accessing votes: {}", e);
+                return Err(Box::new(e));
+            }
+        }
+    }
+
+    Ok((yes_votes, no_votes, abstain_votes))
+}
+
+/// Handle the view command to display proposal details
+fn handle_view_command<S>(
+    vm: &VM<S>,
+    proposal_id: &str,
+) -> Result<(), Box<dyn Error>>
+where
+    S: Storage + Send + Sync + Clone + Debug + 'static,
+{
+    // Load the proposal
+    let proposal = load_proposal_from_governance(vm, proposal_id)?;
+    
+    // Count votes
+    let (yes_votes, no_votes, abstain_votes) = count_votes(vm, proposal_id)?;
+    let total_votes = yes_votes + no_votes + abstain_votes;
+    
+    // Calculate participation percentage for quorum
+    let quorum_percentage = if let Ok(lifecycle) = load_proposal(vm, proposal_id) {
+        if lifecycle.quorum > 0 {
+            let quorum_percentage = (total_votes as f64 / lifecycle.quorum as f64) * 100.0;
+            format!("{:.1}%", quorum_percentage)
+        } else {
+            "N/A".to_string()
+        }
+    } else {
+        "Unknown".to_string()
+    };
+    
+    // Calculate threshold percentage
+    let threshold_percentage = if let Ok(lifecycle) = load_proposal(vm, proposal_id) {
+        if lifecycle.threshold > 0 && total_votes > 0 {
+            let threshold_percentage = (yes_votes as f64 / total_votes as f64) * 100.0;
+            format!("{:.1}%", threshold_percentage)
+        } else {
+            "N/A".to_string()
+        }
+    } else {
+        "Unknown".to_string()
+    };
+
+    // Print formatted output
+    println!("\n=== Proposal Details: {} ===", proposal_id);
+    println!("Title:     {}", load_proposal(vm, proposal_id).map(|p| p.title).unwrap_or_else(|_| "N/A".to_string()));
+    println!("Creator:   {}", proposal.creator);
+    println!("Status:    {:?}", proposal.status);
+    println!("Created:   {}", proposal.created_at);
+    
+    // Print vote counts
+    println!("\n=== Voting Information ===");
+    println!("Yes votes:      {}", yes_votes);
+    println!("No votes:       {}", no_votes);
+    println!("Abstain votes:  {}", abstain_votes);
+    println!("Total votes:    {}", total_votes);
+    println!("Quorum:         {}", quorum_percentage);
+    println!("Threshold:      {}", threshold_percentage);
+    
+    // Print execution result if any
+    if let Some(result) = &proposal.execution_result {
+        println!("\n=== Execution Result ===");
+        println!("{}", result);
+    }
+    
+    // Print other metadata
+    println!("\n=== Additional Information ===");
+    if let Some(expires) = &proposal.expires_at {
+        println!("Expires at: {}", expires);
+    }
+    
+    if let Some(logic_path) = &proposal.logic_path {
+        println!("Logic path: {}", logic_path);
+    }
+
+    Ok(())
+}
+
+/// Load a ProposalLifecycle for more information
+fn load_proposal_lifecycle<S>(
+    vm: &VM<S>,
+    proposal_id: &str,
+) -> Result<ProposalLifecycle, Box<dyn Error>>
+where
+    S: Storage + Send + Sync + Clone + Debug + 'static,
+{
+    // Try loading the old proposal lifecycle format
+    let storage_key = format!("proposals/{}", proposal_id);
+    
+    let proposal_data = vm.storage_backend.as_ref()
+        .ok_or_else(|| VMError::StorageUnavailable)?
+        .read(&storage_key, None, "proposals")
+        .map_err(|e| {
+            eprintln!("Failed to read proposal lifecycle: {}", e);
+            Box::new(e) as Box<dyn Error>
+        })?;
+
+    // Deserialize the proposal
+    serde_json::from_slice::<ProposalLifecycle>(&proposal_data)
+        .map_err(|e| {
+            eprintln!("Failed to deserialize proposal lifecycle: {}", e);
+            Box::new(e) as Box<dyn Error>
+        })
+}
+
+/// Handle the simulate command to run the proposal logic in a sandbox environment
+fn handle_simulate_command<S>(
+    vm: &VM<S>,
+    proposal_id: &str,
+) -> Result<(), Box<dyn Error>>
+where
+    S: Storage + Send + Sync + Clone + Debug + 'static,
+{
+    // Load the proposal
+    let proposal = load_proposal_from_governance(vm, proposal_id)?;
+    
+    // Check if there's logic path specified
+    let logic_path = proposal.logic_path.ok_or_else(|| 
+        format!("No logic path defined for proposal {}", proposal_id))?;
+    
+    println!("\n=== Simulating Proposal Execution ===");
+    println!("Proposal ID: {}", proposal_id);
+    println!("Logic path: {}", logic_path);
+    
+    // Create a forked VM for simulation
+    let mut simulation_vm = vm.fork()?;
+    
+    // Parse the DSL from the logic path
+    println!("Loading logic from: {}", logic_path);
+    
+    // First, let's try to read the file
+    let logic_content = match simulation_vm.storage_backend.as_ref()
+        .ok_or_else(|| VMError::StorageUnavailable)?
+        .read(&logic_path, None, "proposals") {
+        Ok(data) => String::from_utf8_lossy(&data).to_string(),
+        Err(e) => return Err(format!("Failed to read logic file: {}", e).into())
+    };
+    
+    // Now parse it
+    let operations = match parse_dsl(&logic_content) {
+        Ok(ops) => ops,
+        Err(e) => return Err(format!("Failed to parse DSL: {}", e).into())
+    };
+    
+    println!("Successfully parsed DSL with {} operations", operations.len());
+    
+    // Execute in the forked VM
+    println!("Running simulation...");
+    
+    // Capture stack state before
+    let stack_before = simulation_vm.get_stack();
+    let memory_before = simulation_vm.get_memory_map();
+    
+    // Execute operations
+    match simulation_vm.execute(&operations) {
+        Ok(_) => {
+            println!("\n✅ Simulation completed successfully");
+            
+            // Get final stack state
+            let stack_after = simulation_vm.get_stack();
+            let memory_after = simulation_vm.get_memory_map();
+            
+            // Print final stack
+            println!("\n=== Final Stack ===");
+            if stack_after.is_empty() {
+                println!("(empty)");
+            } else {
+                for (i, value) in stack_after.iter().enumerate() {
+                    println!("[{}]: {}", i, value);
+                }
+            }
+            
+            // Print memory changes
+            println!("\n=== Memory Changes ===");
+            let mut changes_found = false;
+            
+            // Check for new or modified variables
+            for (key, value) in &memory_after {
+                match memory_before.get(key) {
+                    Some(old_value) if old_value != value => {
+                        println!("{}: {} → {}", key, old_value, value);
+                        changes_found = true;
+                    }
+                    None => {
+                        println!("{}: (new) {}", key, value);
+                        changes_found = true;
+                    }
+                    _ => {} // Value unchanged
+                }
+            }
+            
+            // Check for deleted variables
+            for key in memory_before.keys() {
+                if !memory_after.contains_key(key) {
+                    println!("{}: (deleted)", key);
+                    changes_found = true;
+                }
+            }
+            
+            if !changes_found {
+                println!("(no changes)");
+            }
+            
+            println!("\n⚠️ Note: This was a simulation only, no changes were persisted.");
+        }
+        Err(e) => {
+            println!("\n❌ Simulation failed: {}", e);
+        }
+    }
+    
+    Ok(())
+}
+
+/// Handle the summary command to display high-level information about a proposal
+fn handle_summary_command<S>(
+    vm: &VM<S>,
+    proposal_id: &str,
+) -> Result<(), Box<dyn Error>>
+where
+    S: Storage + Send + Sync + Clone + Debug + 'static,
+{
+    // Load the proposal
+    let proposal = load_proposal_from_governance(vm, proposal_id)?;
+    
+    // Get vote information
+    let (yes_votes, no_votes, abstain_votes) = count_votes(vm, proposal_id)?;
+    let total_votes = yes_votes + no_votes + abstain_votes;
+    
+    // Count comments
+    let comments = fetch_comments_threaded(vm, proposal_id, None)?;
+    let comment_count = comments.len();
+    
+    // Find most active participants
+    let mut participant_activity: HashMap<String, u32> = HashMap::new();
+    for comment in comments.values() {
+        *participant_activity.entry(comment.author.clone()).or_insert(0) += 1;
+    }
+    
+    // Sort participants by activity
+    let mut participants: Vec<(String, u32)> = participant_activity.into_iter().collect();
+    participants.sort_by(|a, b| b.1.cmp(&a.1));
+    
+    // Get last comment timestamp
+    let last_updated = comments.values()
+        .map(|c| c.timestamp)
+        .max()
+        .unwrap_or(proposal.created_at);
+    
+    // Print summary
+    println!("\n=== Proposal Summary: {} ===", proposal_id);
+    if let Ok(lifecycle) = load_proposal(vm, proposal_id) {
+        println!("Title:      {}", lifecycle.title);
+    }
+    println!("Status:     {:?}", proposal.status);
+    println!("Created:    {}", proposal.created_at);
+    println!("Last Activity: {}", last_updated);
+    
+    println!("\n=== Activity Stats ===");
+    println!("Comments:   {}", comment_count);
+    println!("Votes:      {}", total_votes);
+    
+    println!("\n=== Voting Summary ===");
+    println!("Yes:        {}", yes_votes);
+    println!("No:         {}", no_votes);
+    println!("Abstain:    {}", abstain_votes);
+    
+    println!("\n=== Top Participants ===");
+    for (i, (author, count)) in participants.iter().take(5).enumerate() {
+        println!("{}. {} - {} comment(s)", i+1, author, count);
+    }
+    
+    Ok(())
+}
+
+/// Handle the comment-react command to add reactions to comments
+fn handle_comment_react_command<S>(
+    vm: &mut VM<S>,
+    comment_id: &str,
+    proposal_id: &str,
+    reaction: &str,
+    auth_context: &AuthContext,
+) -> Result<(), Box<dyn Error>>
+where
+    S: Storage + Send + Sync + Clone + Debug + 'static,
+{
+    // Load the comment
+    let comment_key = format!("comments/{}/{}", proposal_id, comment_id);
+    let storage = vm.storage_backend.as_ref().ok_or_else(|| VMError::StorageUnavailable)?;
+    
+    // Try to fetch the existing comment
+    let comment_data = storage.read(&comment_key, Some(auth_context), "comments")
+        .map_err(|e| format!("Failed to read comment: {}", e))?;
+    
+    // Deserialize the comment
+    let mut comment: ProposalComment = serde_json::from_slice(&comment_data)
+        .map_err(|e| format!("Failed to deserialize comment: {}", e))?;
+    
+    // Update or add the reaction
+    *comment.reactions.entry(reaction.to_string()).or_insert(0) += 1;
+    
+    // Save the updated comment back to storage
+    let updated_comment_data = serde_json::to_vec(&comment)
+        .map_err(|e| format!("Failed to serialize updated comment: {}", e))?;
+    
+    storage.write(&comment_key, &updated_comment_data, Some(auth_context), "comments")
+        .map_err(|e| format!("Failed to write updated comment: {}", e))?;
+    
+    println!("Added reaction '{}' to comment {}", reaction, comment_id);
+    println!("Current reactions: {:?}", comment.reactions);
+    
+    Ok(())
+}
+
+/// Handle the comment-tag command to add tags to comments
+fn handle_comment_tag_command<S>(
+    vm: &mut VM<S>,
+    comment_id: &str,
+    proposal_id: &str,
+    tags: &[String],
+    auth_context: &AuthContext,
+) -> Result<(), Box<dyn Error>>
+where
+    S: Storage + Send + Sync + Clone + Debug + 'static,
+{
+    // Load the comment
+    let comment_key = format!("comments/{}/{}", proposal_id, comment_id);
+    let storage = vm.storage_backend.as_ref().ok_or_else(|| VMError::StorageUnavailable)?;
+    
+    // Try to fetch the existing comment
+    let comment_data = storage.read(&comment_key, Some(auth_context), "comments")
+        .map_err(|e| format!("Failed to read comment: {}", e))?;
+    
+    // Deserialize the comment
+    let mut comment: ProposalComment = serde_json::from_slice(&comment_data)
+        .map_err(|e| format!("Failed to deserialize comment: {}", e))?;
+    
+    // Add new tags that don't already exist
+    for tag in tags {
+        if !comment.tags.contains(tag) {
+            comment.tags.push(tag.clone());
+        }
+    }
+    
+    // Save the updated comment back to storage
+    let updated_comment_data = serde_json::to_vec(&comment)
+        .map_err(|e| format!("Failed to serialize updated comment: {}", e))?;
+    
+    storage.write(&comment_key, &updated_comment_data, Some(auth_context), "comments")
+        .map_err(|e| format!("Failed to write updated comment: {}", e))?;
+    
+    println!("Added tags to comment {}: {:?}", comment_id, tags);
+    println!("All tags: {:?}", comment.tags);
+    
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::implementations::in_memory::InMemoryStorage;
+    use chrono::Duration;
+    
+    // Helper function to create a test VM with in-memory storage
+    fn setup_test_vm() -> VM<InMemoryStorage> {
+        let storage = InMemoryStorage::new();
+        let vm = VM::with_storage_backend(storage);
+        vm
+    }
+    
+    // Helper function to create a test auth context
+    fn setup_test_auth() -> AuthContext {
+        AuthContext {
+            identity_id: "test_user_1".to_string(),
+            timestamp: Utc::now(),
+            signature: "test_signature".to_string(),
+        }
+    }
+    
+    // Helper function to create a test proposal
+    fn create_test_proposal(vm: &mut VM<InMemoryStorage>, proposal_id: &str) -> Result<(), Box<dyn Error>> {
+        let proposal = Proposal::new(
+            proposal_id.to_string(),
+            "test_creator".to_string(),
+            Some("test_logic.dsl".to_string()),
+            None,
+            Some("test_discussion".to_string()),
+            vec![],
+        );
+        
+        // Save the proposal
+        let storage_key = format!("governance/proposals/{}", proposal_id);
+        let proposal_data = serde_json::to_vec(&proposal)?;
+        
+        vm.storage_backend.as_mut().unwrap().write(
+            &storage_key,
+            &proposal_data,
+            None,
+            "proposals",
+        )?;
+        
+        // Also create a lifecycle version for the proposal with quorum and threshold
+        let lifecycle = ProposalLifecycle::new(
+            proposal_id.to_string(),
+            Identity {
+                id: "test_creator".to_string(),
+                profiles: vec![],
+                created_at: Utc::now(),
+            },
+            "Test Proposal Title".to_string(),
+            10, // quorum
+            6,  // threshold
+            Some(Duration::hours(24)),
+            None,
+        );
+        
+        let lifecycle_key = format!("proposals/{}", proposal_id);
+        let lifecycle_data = serde_json::to_vec(&lifecycle)?;
+        
+        vm.storage_backend.as_mut().unwrap().write(
+            &lifecycle_key,
+            &lifecycle_data,
+            None,
+            "proposals",
+        )?;
+        
+        // Create test logic for simulation
+        let test_logic = "PUSH 10\nPUSH 5\nADD\nSTORE result";
+        let logic_key = "test_logic.dsl";
+        
+        vm.storage_backend.as_mut().unwrap().write(
+            logic_key,
+            test_logic.as_bytes(),
+            None,
+            "proposals",
+        )?;
+        
+        Ok(())
+    }
+    
+    // Test adding and retrieving a comment with tags
+    #[test]
+    fn test_comment_with_tags() -> Result<(), Box<dyn Error>> {
+        let mut vm = setup_test_vm();
+        let auth = setup_test_auth();
+        let proposal_id = "test-proposal-1";
+        
+        // Create a test proposal
+        create_test_proposal(&mut vm, proposal_id)?;
+        
+        // Create a comment with tags
+        let comment_id = "test-comment-1";
+        let comment = ProposalComment {
+            id: comment_id.to_string(),
+            author: auth.identity_id.clone(),
+            timestamp: Utc::now(),
+            content: "This is a test comment".to_string(),
+            reply_to: None,
+            tags: vec!["#test".to_string(), "#finance".to_string()],
+            reactions: HashMap::new(),
+        };
+        
+        // Save the comment
+        let comment_key = format!("comments/{}/{}", proposal_id, comment_id);
+        let comment_data = serde_json::to_vec(&comment)?;
+        
+        vm.storage_backend.as_mut().unwrap().write(
+            &comment_key,
+            &comment_data,
+            Some(&auth),
+            "comments",
+        )?;
+        
+        // Retrieve the comment
+        let retrieved_data = vm.storage_backend.as_ref().unwrap().read(
+            &comment_key,
+            Some(&auth),
+            "comments",
+        )?;
+        
+        let retrieved_comment: ProposalComment = serde_json::from_slice(&retrieved_data)?;
+        
+        // Check that tags were saved correctly
+        assert_eq!(retrieved_comment.tags.len(), 2);
+        assert!(retrieved_comment.tags.contains(&"#test".to_string()));
+        assert!(retrieved_comment.tags.contains(&"#finance".to_string()));
+        
+        Ok(())
+    }
+    
+    // Test adding reactions to a comment
+    #[test]
+    fn test_comment_reactions() -> Result<(), Box<dyn Error>> {
+        let mut vm = setup_test_vm();
+        let auth = setup_test_auth();
+        let proposal_id = "test-proposal-2";
+        
+        // Create a test proposal
+        create_test_proposal(&mut vm, proposal_id)?;
+        
+        // Create a comment
+        let comment_id = "test-comment-2";
+        let mut comment = ProposalComment {
+            id: comment_id.to_string(),
+            author: auth.identity_id.clone(),
+            timestamp: Utc::now(),
+            content: "This is a test comment for reactions".to_string(),
+            reply_to: None,
+            tags: vec![],
+            reactions: HashMap::new(),
+        };
+        
+        // Save the comment
+        let comment_key = format!("comments/{}/{}", proposal_id, comment_id);
+        let comment_data = serde_json::to_vec(&comment)?;
+        
+        vm.storage_backend.as_mut().unwrap().write(
+            &comment_key,
+            &comment_data,
+            Some(&auth),
+            "comments",
+        )?;
+        
+        // Add a reaction using our handler
+        handle_comment_react_command(&mut vm, comment_id, proposal_id, "👍", &auth)?;
+        
+        // Add another reaction using our handler
+        handle_comment_react_command(&mut vm, comment_id, proposal_id, "👍", &auth)?;
+        
+        // Add a different reaction
+        handle_comment_react_command(&mut vm, comment_id, proposal_id, "🔥", &auth)?;
+        
+        // Retrieve the comment
+        let retrieved_data = vm.storage_backend.as_ref().unwrap().read(
+            &comment_key,
+            Some(&auth),
+            "comments",
+        )?;
+        
+        let retrieved_comment: ProposalComment = serde_json::from_slice(&retrieved_data)?;
+        
+        // Check reactions were saved and counted correctly
+        assert_eq!(retrieved_comment.reactions.len(), 2);
+        assert_eq!(retrieved_comment.reactions.get("👍"), Some(&2));
+        assert_eq!(retrieved_comment.reactions.get("🔥"), Some(&1));
+        
+        Ok(())
+    }
+    
+    // Test the simulation of a proposal
+    #[test]
+    fn test_proposal_simulation() -> Result<(), Box<dyn Error>> {
+        let mut vm = setup_test_vm();
+        let auth = setup_test_auth();
+        let proposal_id = "test-proposal-3";
+        
+        // Create a test proposal with logic
+        create_test_proposal(&mut vm, proposal_id)?;
+        
+        // Run simulation
+        handle_simulate_command(&mut vm, proposal_id)?;
+        
+        // Verify the original VM wasn't modified
+        // This is a basic test - in a real test we'd check more specific behavior
+        
+        Ok(())
+    }
 }

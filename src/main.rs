@@ -23,6 +23,21 @@ use std::path::Path;
 use std::process;
 use std::time::Instant;
 use thiserror::Error;
+use anyhow::{anyhow, Context, Result};
+use std::error::Error;
+use std::path::PathBuf;
+
+// Code imports
+use icn_covm::api;
+use icn_covm::bytecode;
+use icn_covm::cli;
+use icn_covm::events::{Event, LogFormat, set_log_file, set_log_format};
+use icn_covm::identity::{Identity, IdentityError};
+use icn_covm::storage::auth::AuthContext;
+use icn_covm::storage::implementations::file_storage::FileStorage;
+use icn_covm::storage::implementations::in_memory::InMemoryStorage;
+use icn_covm::storage::traits::Storage;
+use icn_covm::vm::VM;
 
 #[derive(Debug, Error)]
 enum AppError {
@@ -58,11 +73,23 @@ impl From<String> for AppError {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), AppError> {
+async fn main() -> Result<(), Box<dyn Error>> {
     // Initialize logging
     env_logger::init();
 
     // Parse command line arguments
+    let api_cmd = Command::new("api")
+        .about("Start the API server for web/mobile access")
+        .arg(
+            Arg::new("port")
+                .long("port")
+                .short('p')
+                .value_name("PORT")
+                .help("Port to listen on (default: 3030)")
+                .value_parser(clap::value_parser!(u16))
+                .default_value("3030"),
+        );
+
     let matches = Command::new("icn-covm")
         .version("0.7.0")
         .author("Intercooperative Network")
@@ -373,7 +400,7 @@ async fn main() -> Result<(), AppError> {
                         )
                 )
         )
-        .get_matches();
+        .subcommand(api_cmd);
 
     // Handle subcommands
     let result = match matches.subcommand() {
@@ -589,6 +616,17 @@ async fn main() -> Result<(), AppError> {
                 }
                 _ => Err("Unknown federation subcommand".into()),
             }
+        }
+        Some(("api", api_matches)) => {
+            let port = *api_matches.get_one::<u16>("port").unwrap_or(&3030);
+            println!("Starting API server on port {}...", port);
+            
+            // Initialize VM with storage
+            let storage = setup_storage("memory", "./storage")?;
+            let mut vm = VM::with_storage_backend(storage);
+            
+            // Start the API server
+            crate::api::start_api_server(vm, port).await?;
         }
         _ => Err("Unknown command".into()),
     };
