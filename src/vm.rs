@@ -713,6 +713,9 @@ where
 
     /// Storage namespace for current execution
     pub namespace: String,
+    
+    /// Runtime parameters
+    pub parameters: HashMap<String, String>,
 
     // Store the concrete storage type S
     pub storage_backend: Option<S>,
@@ -740,6 +743,7 @@ where
             events: Vec::new(),
             auth_context: None,
             namespace: "default".to_string(),
+            parameters: HashMap::new(),
             storage_backend: None, // No storage by default
             transaction_active: false,
         }
@@ -833,6 +837,7 @@ where
             events: Vec::new(),
             auth_context: self.auth_context.clone(),
             namespace: self.namespace.clone(),
+            parameters: self.parameters.clone(),
             storage_backend: None,
             transaction_active: false,
         };
@@ -914,6 +919,22 @@ where
         let top = self.stack.pop().unwrap();
         let second = self.stack.pop().unwrap();
         Ok((second, top))
+    }
+
+    /// Set the parameters for the VM
+    pub fn set_parameters(&mut self, parameters: HashMap<String, String>) -> Result<(), VMError> {
+        self.parameters = parameters;
+        Ok(())
+    }
+    
+    /// Get a copy of the stack
+    pub fn get_stack(&self) -> Vec<f64> {
+        self.stack.clone()
+    }
+    
+    /// Get a copy of the memory map
+    pub fn get_memory_map(&self) -> HashMap<String, f64> {
+        self.memory.clone()
     }
 
     // Execute method needs adapting

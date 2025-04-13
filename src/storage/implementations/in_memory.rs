@@ -1,5 +1,6 @@
 use serde::{de::DeserializeOwned, Serialize};
 use std::collections::HashMap;
+use std::fmt;
 
 use crate::storage::auth::AuthContext;
 use crate::storage::errors::{StorageError, StorageResult};
@@ -17,6 +18,7 @@ fn to_bytes(s: &str) -> Vec<u8> {
 
 /// An in-memory implementation of the `StorageBackend` trait.
 /// Suitable for testing and demos.
+#[derive(Clone)]
 pub struct InMemoryStorage {
     // Namespace -> Key -> Value
     data: HashMap<String, HashMap<String, Vec<u8>>>,
@@ -30,6 +32,18 @@ pub struct InMemoryStorage {
     // Each operation is (namespace, key, Option<old_value>)
     // None means the key didn't exist before the transaction started.
     transaction_stack: Vec<Vec<(String, String, Option<Vec<u8>>)>>,
+}
+
+impl fmt::Debug for InMemoryStorage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("InMemoryStorage")
+            .field("data", &self.data)
+            .field("versions", &self.versions)
+            .field("accounts", &self.accounts)
+            .field("audit_log", &self.audit_log)
+            .field("transaction_stack", &self.transaction_stack)
+            .finish()
+    }
 }
 
 impl InMemoryStorage {

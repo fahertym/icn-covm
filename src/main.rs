@@ -1,22 +1,17 @@
 // pub mod storage;
 
-use icn_covm::bytecode::{BytecodeCompiler, BytecodeExecutor};
+use icn_covm::bytecode::{BytecodeCompiler, BytecodeExecution};
+use icn_covm::cli::proposal::{handle_proposal_command, proposal_command};
 use icn_covm::compiler::{parse_dsl, parse_dsl_with_stdlib, CompilerError};
-use icn_covm::federation::messages::{ProposalScope, VotingModel};
+use icn_covm::federation::messages::{ProposalScope, ProposalStatus, VotingModel};
 use icn_covm::federation::{NetworkNode, NodeConfig};
-use icn_covm::identity::{Identity, MemberProfile};
+use icn_covm::identity::Identity;
 use icn_covm::storage::auth::AuthContext;
 use icn_covm::storage::implementations::file_storage::FileStorage;
 use icn_covm::storage::implementations::in_memory::InMemoryStorage;
 use icn_covm::storage::traits::StorageBackend;
 use icn_covm::storage::utils::now;
 use icn_covm::vm::{VMError, VM};
-
-// Declare the cli module locally
-mod cli;
-
-// Use the local cli module path instead of the library path
-use cli::proposal::{handle_proposal_command, proposal_command};
 
 use clap::{Arg, ArgAction, Command};
 use log::{debug, error, info, warn};
@@ -482,7 +477,7 @@ async fn main() -> Result<(), AppError> {
         },
         Some(("proposal", proposal_matches)) => {
             // Create VM and auth context for proposal commands
-            let mut vm = VM::new();
+            let mut vm: VM<InMemoryStorage> = VM::new();
             let auth_context = create_demo_auth_context();
             vm.set_auth_context(auth_context.clone());
             vm.set_namespace("demo");
@@ -501,7 +496,7 @@ async fn main() -> Result<(), AppError> {
             let storage = create_storage_backend(storage_backend, storage_path)?;
             vm.set_storage_backend(storage);
 
-            handle_proposal_command(proposal_matches, &mut vm, &auth_context)
+            handle_proposal_command(&mut vm, proposal_matches, &auth_context)
                 .map_err(|e| AppError::Other(e.to_string()))
         }
         Some(("storage", storage_matches)) => {
@@ -752,12 +747,12 @@ fn run_program(
         }
 
         // Create bytecode interpreter with proper auth context and storage
-        let mut vm = VM::new();
+        let mut vm: VM<InMemoryStorage> = VM::new();
         vm.set_auth_context(auth_context);
         vm.set_namespace("demo");
         vm.set_storage_backend(storage);
 
-        let mut interpreter = BytecodeExecutor::new(vm, program.instructions);
+        let mut interpreter = BytecodeExecution::new(VM::<InMemoryStorage>::new(), program.instructions);
 
         // Set parameters
         interpreter.vm.set_parameters(parameters)?;
@@ -788,7 +783,7 @@ fn run_program(
         }
     } else {
         // AST execution with FileStorage
-        let mut vm = VM::new();
+        let mut vm: VM<InMemoryStorage> = VM::new();
         vm.set_auth_context(auth_context);
         vm.set_namespace("demo");
         vm.set_storage_backend(storage);
@@ -837,7 +832,7 @@ fn initialize_storage<T: StorageBackend>(
     verbose: bool,
 ) -> Result<(), AppError> {
     // Create user account
-    if let Err(e) = storage.create_account(Some(auth_context), &auth_context.user_id, 1024 * 1024) {
+    if let Err(e) = storage.create_account(Some(auth_context), &auth_context.user_id(), 1024 * 1024) {
         if verbose {
             println!("Warning: Failed to create account: {:?}", e);
         }
@@ -859,23 +854,17 @@ fn create_demo_auth_context() -> AuthContext {
     let user_id = "demo_user";
     let mut auth = AuthContext::new(user_id);
 
-    // Add roles with storage permissions - match the required roles in StorageBackend impl
-    auth.add_role("global", "admin"); // Permission to create accounts and namespaces
-    auth.add_role("demo", "reader"); // Permission to read from demo namespace
-    auth.add_role("demo", "writer"); // Permission to write to demo namespace
-    auth.add_role("demo", "admin"); // Permission to administrate demo namespace
-
-    // Set up identity
-    let mut identity = Identity::new(user_id, "user");
-    identity.add_metadata("description", "Demo User");
-
     // Register the identity
-    auth.register_identity(identity);
+    auth.register_identity(Identity::new(
+        user_id.to_string(), 
+        None, 
+        "user".to_string(),
+        None
+    ).expect("Failed to create identity"));
 
-    // Set up member profile
-    let mut profile = MemberProfile::new(Identity::new(user_id, "user"), now());
-    profile.add_role("user");
-    auth.register_member(profile);
+    // Add user roles directly to the auth context
+    auth.add_role("global", "user");
+    auth.add_role("demo", "reader");
 
     auth
 }
@@ -888,7 +877,7 @@ fn setup_storage_for_demo() -> (AuthContext, InMemoryStorage) {
     let mut storage = InMemoryStorage::new();
 
     // Create user account
-    if let Err(e) = storage.create_account(Some(&auth), &auth.user_id, 1024 * 1024) {
+    if let Err(e) = storage.create_account(Some(&auth), &auth.user_id(), 1024 * 1024) {
         println!("Warning: Failed to create account: {:?}", e);
     }
 
@@ -945,7 +934,7 @@ fn run_benchmark(
     // Run AST interpreter
     println!("\n1. Running AST interpreter...");
 
-    let mut vm = VM::new();
+    let mut vm: VM<InMemoryStorage> = VM::new();
 
     // Set up auth context and namespace
     let auth_context = setup_storage_for_demo().0;
@@ -971,11 +960,11 @@ fn run_benchmark(
     println!("Bytecode compilation time: {:?}", compiler_duration);
     println!("Bytecode size: {} instructions", program.instructions.len());
 
-    let mut vm = VM::new();
+    let mut vm: VM<InMemoryStorage> = VM::new();
     vm.set_auth_context(auth_context);
     vm.set_namespace("demo");
 
-    let mut interpreter = BytecodeExecutor::new(vm, program.instructions);
+    let mut interpreter = BytecodeExecution::new(VM::<InMemoryStorage>::new(), program.instructions);
     interpreter.vm.set_parameters(parameters)?;
 
     let bytecode_start = Instant::now();
@@ -1033,7 +1022,7 @@ fn run_interactive(
 
     println!("ICN Cooperative VM Interactive Shell (type 'exit' to quit, 'help' for commands)");
 
-    let mut vm = VM::new();
+    let mut vm: VM<InMemoryStorage> = VM::new();
 
     // Set up auth context and namespace
     let (auth_context, _storage) = setup_storage_for_demo();
@@ -1118,7 +1107,7 @@ fn run_interactive(
                 }
             }
             "reset" => {
-                vm = VM::new();
+                vm = VM::<InMemoryStorage>::new();
                 println!("VM reset");
             }
             "mode ast" => {
@@ -1178,7 +1167,7 @@ fn run_interactive(
                             }
 
                             let mut interpreter =
-                                BytecodeExecutor::new(VM::new(), program.instructions);
+                                BytecodeExecution::new(VM::<InMemoryStorage>::new(), program.instructions);
 
                             // Copy VM state to interpreter
                             for (key, value) in vm.memory.iter() {
@@ -1240,16 +1229,21 @@ fn register_identity(
         .ok_or("Missing 'id' field")?;
 
     // Create the identity
-    let mut identity = Identity::new(id, id_type);
-
-    // Add metadata
-    if let Some(metadata) = identity_data.get("metadata").and_then(|v| v.as_object()) {
-        for (key, value) in metadata {
-            if let Some(val_str) = value.as_str() {
-                identity.add_metadata(key, val_str);
-            }
-        }
-    }
+    let identity = Identity::new(
+        id.to_string(), 
+        None, 
+        id_type.to_string(),
+        Some(identity_data.get("metadata")
+            .and_then(|v| v.as_object())
+            .map(|map| {
+                let mut hashmap = HashMap::new();
+                for (k, v) in map {
+                    hashmap.insert(k.clone(), v.clone());
+                }
+                hashmap
+            })
+            .unwrap_or_default())
+    ).expect("Failed to create identity");
 
     // Create a basic auth context to simulate registration
     let mut auth = AuthContext::new("system");
@@ -1408,9 +1402,14 @@ fn create_admin_auth_context() -> AuthContext {
     // Add admin roles for all operations
     auth.add_role("global", "admin");
 
-    // Set up identity
-    let mut identity = Identity::new("admin", "admin");
-    identity.add_metadata("description", "Storage CLI Admin");
+    // Set up admin identity
+    let mut identity = Identity::new(
+        "admin".to_string(), 
+        None, 
+        "admin".to_string(),
+        None
+    ).expect("Failed to create admin identity");
+    identity.profile.other_fields.insert("description".to_string(), serde_json::Value::String("Storage CLI Admin".to_string()));
 
     // Register the identity
     auth.register_identity(identity);
@@ -1486,7 +1485,7 @@ async fn broadcast_proposal(
         scope,
         voting_model,
         expires_at: expires_in.map(|seconds| (now() as i64) + (seconds as i64)),
-        status: icn_covm::federation::ProposalStatus::Open,
+        status: ProposalStatus::Open,
     };
 
     // Configure federation
@@ -1842,7 +1841,7 @@ async fn execute_proposal(
     }
 
     // Create and configure a VM to execute the ranked vote
-    let mut vm = VM::new();
+    let mut vm: VM<InMemoryStorage> = VM::new();
 
     // Prepare the stack with ballot data
     for ballot in &ballots {
