@@ -1,3 +1,20 @@
+//! In-memory storage implementation for testing and demonstration.
+//!
+//! This module provides an implementation of the `StorageBackend` trait that
+//! stores all data in memory. It is primarily intended for:
+//! - Testing storage-dependent code
+//! - Demo applications
+//! - Development environments
+//!
+//! The implementation includes support for:
+//! - Key-value data storage
+//! - Namespaces (including hierarchy)
+//! - Versioning of stored values
+//! - Permission checking
+//! - Resource quota management
+//! - Auditing/event logging
+//! - Transaction support (begin/commit/rollback)
+
 use serde::{de::DeserializeOwned, Serialize};
 use std::collections::HashMap;
 use std::fmt;
@@ -11,26 +28,39 @@ use crate::storage::traits::StorageBackend;
 use crate::storage::utils::now;
 use crate::storage::versioning::{VersionDiff, VersionInfo};
 
-// Helper function for tests to convert string to bytes
+/// Helper function for tests to convert string to bytes
+///
+/// Simplifies creating test data by converting a string literal to a byte vector.
 fn to_bytes(s: &str) -> Vec<u8> {
     s.as_bytes().to_vec()
 }
 
 /// An in-memory implementation of the `StorageBackend` trait.
-/// Suitable for testing and demos.
-#[derive(Clone)]
+/// 
+/// This storage backend maintains all data in memory, making it suitable for:
+/// - Unit and integration testing
+/// - Demonstration applications
+/// - Development environments
+/// - Scenarios where persistence is not required
+///
+/// The implementation provides full support for the `StorageBackend` trait, including:
+/// - Versioning of stored values
+/// - Namespaces with quotas
+/// - Permission checking
+/// - Audit logging
+/// - Transactions
 pub struct InMemoryStorage {
-    // Namespace -> Key -> Value
+    /// Main data store: Namespace -> Key -> Value
     data: HashMap<String, HashMap<String, Vec<u8>>>,
-    // Namespace -> Key -> VersionInfo
+    /// Version history: Namespace -> Key -> VersionInfo
     versions: HashMap<String, HashMap<String, VersionInfo>>,
-    // User ID -> ResourceAccount
+    /// User accounts: User ID -> ResourceAccount
     accounts: HashMap<String, ResourceAccount>,
-    // Audit log
+    /// Audit log of all operations
     audit_log: Vec<StorageEvent>,
-    // Transaction support: Stack of operations to rollback
-    // Each operation is (namespace, key, Option<old_value>)
-    // None means the key didn't exist before the transaction started.
+    /// Transaction support: Stack of operations to rollback
+    /// Each operation is (namespace, key, Option<old_value>)
+    /// None means the key didn't exist before the transaction started.
     transaction_stack: Vec<Vec<(String, String, Option<Vec<u8>>)>>,
 }
 
@@ -47,6 +77,10 @@ impl fmt::Debug for InMemoryStorage {
 }
 
 impl InMemoryStorage {
+    /// Create a new, empty in-memory storage instance
+    ///
+    /// # Returns
+    /// A new `InMemoryStorage` with no data, accounts, or transactions
     pub fn new() -> Self {
         Self {
             data: HashMap::new(),
@@ -57,13 +91,28 @@ impl InMemoryStorage {
         }
     }
 
-    // Helper to create a combined key for internal maps
+    /// Create a combined key for internal maps
+    ///
+    /// # Parameters
+    /// * `namespace` - The namespace portion of the key
+    /// * `key` - The key within the namespace
+    ///
+    /// # Returns
+    /// A string combining namespace and key for use in error messages
     fn make_internal_key(namespace: &str, key: &str) -> String {
         // Simple concatenation, might need more robust namespacing
         format!("{}:{}", namespace, key)
     }
 
-    // Records an operation for potential rollback if a transaction is active
+    /// Record an operation for potential transaction rollback
+    ///
+    /// Stores the original state of a key being modified so it can be
+    /// restored if the current transaction is rolled back.
+    ///
+    /// # Parameters
+    /// * `namespace` - The namespace of the key being modified
+    /// * `key` - The key being modified
+    /// * `old_value` - The original value of the key, or None if it didn't exist
     fn record_for_rollback(&mut self, namespace: &str, key: &str, old_value: Option<Vec<u8>>) {
         if let Some(current_transaction) = self.transaction_stack.last_mut() {
             // Avoid recording the same key multiple times in one transaction? Maybe not necessary.
@@ -71,7 +120,16 @@ impl InMemoryStorage {
         }
     }
 
-    // Emit an event to the audit log
+    /// Add an event to the audit log
+    ///
+    /// Records information about storage operations for auditing purposes.
+    ///
+    /// # Parameters
+    /// * `event_type` - Type of event (e.g., "create", "update", "delete")
+    /// * `auth` - Authentication context of the user performing the operation
+    /// * `namespace` - Namespace where the operation occurred
+    /// * `key` - Key that was affected
+    /// * `details` - Additional information about the operation
     fn emit_event(
         &mut self,
         event_type: &str,
@@ -91,8 +149,28 @@ impl InMemoryStorage {
         });
     }
 
-    /// Helper method to set data by serializing a Rust type into JSON.
-    /// This is implemented directly on InMemoryStorage, not part of the trait.
+    /// Set a value in storage by serializing a Rust type to JSON
+    ///
+    /// Convenience helper that serializes the provided value to JSON
+    /// and stores the resulting bytes.
+    ///
+    /// # Type Parameters
+    /// * `T` - Any type that implements Serialize
+    ///
+    /// # Parameters
+    /// * `auth` - Optional authentication context
+    /// * `namespace` - Namespace to store the value in
+    /// * `key` - Key to store the value under
+    /// * `value` - The value to serialize and store
+    ///
+    /// # Returns
+    /// * `StorageResult<()>` - Success or an error
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// * Serialization fails
+    /// * The user doesn't have permission
+    /// * The storage operation fails
     pub fn set_json<T: Serialize>(
         &mut self,
         auth: Option<&AuthContext>,
@@ -107,8 +185,27 @@ impl InMemoryStorage {
         self.set(auth, namespace, key, serialized)
     }
 
-    /// Helper method to get data by deserializing JSON into a Rust type.
-    /// This is implemented directly on InMemoryStorage, not part of the trait.
+    /// Retrieve and deserialize a JSON value from storage
+    ///
+    /// Convenience helper that retrieves bytes from storage and
+    /// deserializes them into the requested type.
+    ///
+    /// # Type Parameters
+    /// * `T` - Any type that implements DeserializeOwned
+    ///
+    /// # Parameters
+    /// * `auth` - Optional authentication context
+    /// * `namespace` - Namespace to retrieve from
+    /// * `key` - Key to retrieve
+    ///
+    /// # Returns
+    /// * `StorageResult<T>` - The deserialized value or an error
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// * The key doesn't exist
+    /// * The user doesn't have permission
+    /// * Deserialization fails
     pub fn get_json<T: DeserializeOwned>(
         &self,
         auth: Option<&AuthContext>,

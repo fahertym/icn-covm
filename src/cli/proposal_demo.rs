@@ -1,3 +1,10 @@
+//! Demonstration and testing module for the governance proposal system.
+//!
+//! This module provides a complete end-to-end demonstration of the proposal lifecycle,
+//! showing how proposals are created, commented on, and transitioned through various
+//! states from draft to execution. It serves both as a functional test and as
+//! example code showing how to use the proposal system.
+
 use chrono::{DateTime, Duration, Utc};
 use std::error::Error;
 use std::fmt::Debug;
@@ -12,6 +19,21 @@ use crate::storage::implementations::in_memory::InMemoryStorage;
 use crate::storage::traits::{Storage, StorageBackend, StorageExtensions};
 use crate::vm::VM;
 
+/// Run a complete demonstration of the proposal lifecycle
+///
+/// This function demonstrates the entire proposal management system by:
+/// 1. Setting up storage and VM context
+/// 2. Creating example DSL logic for a proposal
+/// 3. Creating a proposal and storing it
+/// 4. Adding threaded comments to the proposal
+/// 5. Transitioning the proposal through various states
+/// 6. Executing the proposal's DSL logic
+///
+/// The function also includes various validation checks to ensure
+/// the system is working as expected.
+///
+/// # Returns
+/// * `Result<(), Box<dyn Error>>` - Success or an error if any part of the demo fails
 pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
     println!("Running proposal lifecycle demo...");
     
@@ -589,7 +611,17 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-// Helper to set up storage
+/// Initialize storage for the demo
+///
+/// Sets up the necessary account and namespace structure in storage
+/// to support the proposal demo.
+///
+/// # Parameters
+/// * `vm` - The virtual machine with mutable access to storage
+/// * `auth` - Authentication context with admin permissions
+///
+/// # Returns
+/// * `Result<(), Box<dyn Error>>` - Success or an error
 fn init_storage<S>(vm: &mut VM<S>, auth: &AuthContext) -> Result<(), Box<dyn Error>> 
 where 
     S: StorageExtensions + Clone + Send + Sync + Debug + 'static
@@ -607,6 +639,7 @@ where
 mod tests {
     use super::*;
     
+    /// Test that the proposal lifecycle demo runs successfully
     #[test]
     fn test_proposal_lifecycle() {
         let result = run_proposal_demo();

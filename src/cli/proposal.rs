@@ -1,3 +1,18 @@
+//! Proposal management CLI functionality for governance operations.
+//! 
+//! This module provides the command-line interface for creating, viewing, editing,
+//! and managing proposals within the governance system. It handles the lifecycle
+//! of proposals from creation through deliberation, voting, and execution.
+//!
+//! The module includes functionality for:
+//! - Creating new proposals
+//! - Attaching files to proposals
+//! - Adding and viewing threaded comments
+//! - Transitioning proposals through various states
+//! - Voting on proposals
+//! - Executing proposal logic
+//! - Listing and filtering proposals
+
 use crate::compiler::parse_dsl;
 use crate::governance::proposal_lifecycle::ExecutionStatus;
 use crate::governance::proposal_lifecycle::VoteChoice;
@@ -27,22 +42,48 @@ use crate::governance::proposal::{Proposal, ProposalStatus};
 use serde::{Serialize, Deserialize};
 use uuid;
 
-// Use String for IDs
+/// Type alias for proposal identifiers, represented as strings
 pub type ProposalId = String;
+/// Type alias for comment identifiers, represented as strings
 type CommentId = String;
 
-// Constants for proposal lifecycle
-const MIN_DELIBERATION_HOURS: i64 = 24; // Default minimum deliberation period
+/// Default minimum time (in hours) required for the deliberation phase
+const MIN_DELIBERATION_HOURS: i64 = 24;
 
+/// Represents a comment on a proposal
+///
+/// Comments can be hierarchical, with the `reply_to` field pointing to the parent comment
+/// if this comment is a reply. Top-level comments have `reply_to` set to `None`.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ProposalComment {
+    /// Unique identifier for the comment
     pub id: CommentId,
+    /// Author of the comment, represented by their DID
     pub author: String,
+    /// When the comment was created
     pub timestamp: DateTime<Utc>,
+    /// Text content of the comment
     pub content: String,
+    /// Optional reference to parent comment if this is a reply
     pub reply_to: Option<CommentId>,
 }
 
+/// Creates the command-line interface for proposal management
+///
+/// Defines all subcommands and arguments for the proposal CLI, including:
+/// - create: Create a new proposal
+/// - attach: Attach a file to a proposal
+/// - comment: Add a comment to a proposal
+/// - edit: Edit an existing proposal
+/// - publish: Move a proposal from Draft to OpenForFeedback state
+/// - vote: Cast a vote on a proposal
+/// - transition: Manually change a proposal's state
+/// - view: View proposal details
+/// - list: List and filter proposals
+/// - comments: View all comments for a proposal
+///
+/// # Returns
+/// A configured `Command` object ready to be used in a CLI application
 pub fn proposal_command() -> Command {
     Command::new("proposal")
         .about("Manage governance proposal lifecycle")
@@ -337,7 +378,22 @@ pub fn proposal_command() -> Command {
         )
 }
 
-// Helper function to load a proposal from storage
+/// Helper function to load a proposal from storage
+///
+/// Retrieves a proposal's lifecycle information from storage using its ID.
+///
+/// # Parameters
+/// * `vm` - The virtual machine with access to storage
+/// * `proposal_id` - The ID of the proposal to load
+///
+/// # Returns
+/// * `Result<ProposalLifecycle, Box<dyn Error>>` - The loaded proposal on success, or an error
+///
+/// # Errors
+/// Returns an error if:
+/// * Storage backend is not configured
+/// * Proposal can't be found
+/// * Deserialization fails
 pub fn load_proposal<S>(
     vm: &VM<S>,
     proposal_id: &ProposalId,
@@ -357,14 +413,38 @@ where
         .map_err(|e| format!("Failed to load proposal {} lifecycle: {}", proposal_id, e).into())
 }
 
-// Add this helper function to convert a DID string to an Identity
+/// Converts a DID string to an Identity object
+///
+/// Creates a basic Identity with default values using the provided DID.
+///
+/// # Parameters
+/// * `did` - The DID string to convert
+///
+/// # Returns
+/// An Identity object with the given DID
 fn did_to_identity(did: &str) -> Identity {
     // Create a basic Identity with just the DID and default values
     Identity::new(did.to_string(), None, "member".to_string(), None)
         .expect("Failed to create identity from DID")
 }
 
-// Helper function to parse DSL from file
+/// Parses DSL code from a file or storage path
+///
+/// Loads DSL code from either a filesystem path or a storage path,
+/// then parses it into a vector of operations.
+///
+/// # Parameters
+/// * `vm` - The virtual machine with access to storage
+/// * `path` - Path to the DSL content, either a filesystem path or a storage path
+///
+/// # Returns
+/// * `Result<Vec<Op>, Box<dyn Error>>` - The parsed operations on success, or an error
+///
+/// # Errors
+/// Returns an error if:
+/// * Storage backend is not configured
+/// * File can't be read
+/// * Content can't be parsed as DSL
 fn parse_dsl_from_file<S>(
     vm: &VM<S>, 
     path: &str
@@ -401,7 +481,21 @@ where
     }
 }
 
-// Handler for proposal command
+/// Main handler for proposal commands
+///
+/// Processes all proposal subcommands based on the CLI arguments.
+/// This is the core implementation of the proposal management functionality.
+///
+/// # Parameters
+/// * `vm` - The virtual machine with mutable access to storage and execution environment
+/// * `matches` - The parsed command-line arguments
+/// * `auth_context` - Authentication context for the current user
+///
+/// # Returns
+/// * `Result<(), Box<dyn Error>>` - Success or an error
+///
+/// # Errors
+/// Returns an error if any operation fails based on the specific subcommand.
 pub fn handle_proposal_command<S>(
     vm: &mut VM<S>,
     matches: &ArgMatches,
@@ -1353,7 +1447,26 @@ where
     Ok(())
 }
 
-// Helper function to parse duration strings (e.g., "7d", "48h", "30m")
+/// Parse a duration string into a chrono Duration
+///
+/// Parses strings like "7d", "24h", "30m", "60s" into corresponding Duration values.
+///
+/// # Parameters
+/// * `duration_str` - A string representation of duration (e.g., "7d", "24h")
+///
+/// # Returns
+/// * `Result<Duration, Box<dyn Error>>` - A chrono Duration on success, or an error
+///
+/// # Errors
+/// Returns an error if:
+/// * Format is invalid
+/// * Unit is not one of d (days), h (hours), m (minutes), s (seconds)
+///
+/// # Examples
+/// ```
+/// let duration = parse_duration_string("7d")?; // 7 days
+/// let duration = parse_duration_string("24h")?; // 24 hours
+/// ```
 fn parse_duration_string(duration_str: &str) -> Result<Duration, Box<dyn Error>> {
     // Get the numeric part and unit
     let (num_str, unit) = duration_str.split_at(duration_str.len() - 1);
@@ -1371,7 +1484,22 @@ fn parse_duration_string(duration_str: &str) -> Result<Duration, Box<dyn Error>>
     }
 }
 
-/// Fetch all comments for a proposal and return them as a HashMap keyed by comment ID
+/// Fetch all comments for a proposal
+///
+/// Retrieves comments from storage and returns them as a HashMap keyed by comment ID.
+/// This function checks multiple storage paths to ensure all comments are found,
+/// including both the newer and legacy storage locations.
+///
+/// # Parameters
+/// * `vm` - The virtual machine with access to storage
+/// * `proposal_id` - ID of the proposal to fetch comments for
+/// * `auth` - Optional authentication context
+///
+/// # Returns
+/// * `Result<HashMap<String, ProposalComment>, Box<dyn Error>>` - Comments on success, or an error
+///
+/// # Errors
+/// Returns an error if the storage backend is not available
 pub fn fetch_comments_threaded<S>(
     vm: &VM<S>,
     proposal_id: &str,
@@ -1426,7 +1554,15 @@ where
     Ok(comments)
 }
 
-// Helper function to print comments in a threaded manner
+/// Print comments in a threaded/hierarchical display
+///
+/// Recursively displays a comment and all its replies with proper indentation.
+///
+/// # Parameters
+/// * `comment_id` - ID of the comment to print
+/// * `comments_map` - HashMap of all comments, keyed by comment ID
+/// * `replies_map` - HashMap mapping each comment ID to a vector of its reply comment IDs
+/// * `depth` - Current indentation depth (0 for top-level comments)
 fn print_threaded_comments(
     comment_id: &CommentId,
     comments_map: &HashMap<CommentId, Comment>,
@@ -1452,7 +1588,17 @@ fn print_threaded_comments(
     }
 }
 
-// Helper to match status string with enum
+/// Check if a proposal status matches a status string
+///
+/// Helper function to match status enum values with their string representations
+/// for filtering proposals by status.
+///
+/// # Parameters
+/// * `status` - The proposal status enum value to check
+/// * `status_str` - The status string to match against
+///
+/// # Returns
+/// * `bool` - True if the status matches the string representation
 fn match_status(status: &ProposalStatus, status_str: &str) -> bool {
     match (status, status_str) {
         (ProposalStatus::Draft, "draft") => true,
@@ -1466,7 +1612,13 @@ fn match_status(status: &ProposalStatus, status_str: &str) -> bool {
     }
 }
 
-// Helper to print proposal summary
+/// Display a summary of a proposal
+///
+/// Prints key information about a proposal in a concise format,
+/// suitable for listing multiple proposals.
+///
+/// # Parameters
+/// * `proposal` - The proposal to summarize
 fn print_proposal_summary(proposal: &Proposal) {
     println!("ID: {} | Status: {:?} | Creator: {}", 
         proposal.id, 
