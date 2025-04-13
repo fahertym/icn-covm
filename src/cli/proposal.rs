@@ -1,25 +1,25 @@
-use clap::{arg, Command, Arg, ArgAction, value_parser};
-use clap::ArgMatches;
-use chrono::{Utc, Duration};
-use crate::vm::VM;
-use std::error::Error;
 use crate::compiler::parse_dsl;
-use crate::storage::auth::AuthContext;
-use std::path::PathBuf;
-use serde_json;
-use crate::governance::proposal_lifecycle::{Comment, ProposalLifecycle, ProposalState};
-use std::fs;
-use std::path::Path;
-use crate::storage::traits::StorageExtensions;
 use crate::governance::proposal_lifecycle::ExecutionStatus;
 use crate::governance::proposal_lifecycle::VoteChoice;
-use sha2::{Sha256, Digest};
-use hex;
-use std::collections::HashMap;
-use std::fmt::Debug;
-use crate::storage::traits::Storage;
-use crate::storage::errors::{StorageError, StorageResult};
+use crate::governance::proposal_lifecycle::{Comment, ProposalLifecycle, ProposalState};
 use crate::identity::Identity;
+use crate::storage::auth::AuthContext;
+use crate::storage::errors::{StorageError, StorageResult};
+use crate::storage::traits::Storage;
+use crate::storage::traits::StorageExtensions;
+use crate::vm::VM;
+use chrono::{Duration, Utc};
+use clap::ArgMatches;
+use clap::{arg, value_parser, Arg, ArgAction, Command};
+use hex;
+use serde_json;
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt::Debug;
+use std::fs;
+use std::path::Path;
+use std::path::PathBuf;
 
 // Use String for IDs
 type ProposalId = String;
@@ -221,18 +221,21 @@ pub fn proposal_command() -> Command {
 
 // Helper function to load a proposal from storage
 pub fn load_proposal<S>(
-    vm: &VM<S>, 
-    proposal_id: &ProposalId
-) -> Result<ProposalLifecycle, Box<dyn Error>> 
+    vm: &VM<S>,
+    proposal_id: &ProposalId,
+) -> Result<ProposalLifecycle, Box<dyn Error>>
 where
-    S: Storage + Send + Sync + Clone + Debug + 'static
+    S: Storage + Send + Sync + Clone + Debug + 'static,
 {
-    let storage = vm.storage_backend.as_ref()
+    let storage = vm
+        .storage_backend
+        .as_ref()
         .ok_or_else(|| "Storage backend not configured for load_proposal")?;
     let namespace = "governance";
     let key = format!("proposals/{}/lifecycle", proposal_id);
     // Need to handle potential deserialization issues if ProposalLifecycle still expects u64 ID
-    storage.get_json::<ProposalLifecycle>(vm.auth_context.as_ref(), namespace, &key)
+    storage
+        .get_json::<ProposalLifecycle>(vm.auth_context.as_ref(), namespace, &key)
         .map_err(|e| format!("Failed to load proposal {} lifecycle: {}", proposal_id, e).into())
 }
 
@@ -247,10 +250,10 @@ fn did_to_identity(did: &str) -> Identity {
 pub fn handle_proposal_command<S>(
     vm: &mut VM<S>,
     matches: &ArgMatches,
-    auth_context: &AuthContext 
-) -> Result<(), Box<dyn Error>> 
+    auth_context: &AuthContext,
+) -> Result<(), Box<dyn Error>>
 where
-    S: Storage + Send + Sync + Clone + Debug + 'static
+    S: Storage + Send + Sync + Clone + Debug + 'static,
 {
     let user_did = auth_context.identity_did(); // Get DID from auth_context parameter
 
@@ -264,10 +267,13 @@ where
 
             // Parse optional args
             let discussion_duration_str = create_matches.get_one::<String>("discussion-duration");
-            let required_participants = create_matches.get_one::<u64>("required-participants").copied(); // Get Option<u64>
+            let required_participants = create_matches
+                .get_one::<u64>("required-participants")
+                .copied(); // Get Option<u64>
 
             // Parse duration string (need helper)
-            let discussion_duration = discussion_duration_str.map(|s| parse_duration_string(s))
+            let discussion_duration = discussion_duration_str
+                .map(|s| parse_duration_string(s))
                 .transpose() // Convert Result<Option<Duration>, _> to Option<Result<Duration, _>> then handle error?
                 .map_err(|e| format!("Invalid discussion duration: {}", e))?;
 
@@ -294,7 +300,9 @@ where
             );
 
             // 4. Get storage backend MUTABLY for set_json
-            let storage = vm.storage_backend.as_mut()
+            let storage = vm
+                .storage_backend
+                .as_mut()
                 .ok_or_else(|| "Storage backend not configured for proposal create")?;
 
             // 5. Store lifecycle object
@@ -305,7 +313,10 @@ where
             println!("Proposal {} lifecycle stored.", proposal_id);
 
             // 6. Emit reputation hook
-            let rep_dsl = format!("increment_reputation \"{}\" reason=\"Created proposal {}\"", user_did, proposal_id);
+            let rep_dsl = format!(
+                "increment_reputation \"{}\" reason=\"Created proposal {}\"",
+                user_did, proposal_id
+            );
             let ops = parse_dsl(&rep_dsl)?;
             vm.execute(&ops)?;
 
@@ -320,30 +331,46 @@ where
             let attachment_name_opt = attach_matches.get_one::<String>("name");
 
             if !file_path.exists() || !file_path.is_file() {
-                return Err(format!("Attachment file not found or is not a file: {:?}", file_path).into());
+                return Err(format!(
+                    "Attachment file not found or is not a file: {:?}",
+                    file_path
+                )
+                .into());
             }
             let file_content_bytes = fs::read(file_path)?;
 
             let attachment_name = attachment_name_opt.map(|s| s.clone()).unwrap_or_else(|| {
-                file_path.file_stem()
+                file_path
+                    .file_stem()
                     .map(|stem| stem.to_string_lossy().into_owned())
                     .unwrap_or_else(|| "attachment".to_string())
             });
             let sanitized_attachment_name = attachment_name.replace('/', "_").replace('\\', "_");
 
             // Store attachment bytes directly using storage trait
-            let storage = vm.storage_backend.as_mut()
+            let storage = vm
+                .storage_backend
+                .as_mut()
                 .ok_or_else(|| "Storage backend not configured for proposal attach")?;
 
             // Assuming attachments stored in "governance" namespace
             let namespace = "governance";
-            let key = format!("proposals/{}/attachments/{}", proposal_id, sanitized_attachment_name);
+            let key = format!(
+                "proposals/{}/attachments/{}",
+                proposal_id, sanitized_attachment_name
+            );
 
             storage.set(Some(auth_context), namespace, &key, file_content_bytes)?;
-            println!("Attachment '{}' stored directly for proposal {}.", sanitized_attachment_name, proposal_id);
+            println!(
+                "Attachment '{}' stored directly for proposal {}.",
+                sanitized_attachment_name, proposal_id
+            );
 
             // Emit reputation hook
-            let rep_dsl = format!("increment_reputation \"{}\" reason=\"Attached {} to proposal {}\"", user_did, sanitized_attachment_name, proposal_id);
+            let rep_dsl = format!(
+                "increment_reputation \"{}\" reason=\"Attached {} to proposal {}\"",
+                user_did, sanitized_attachment_name, proposal_id
+            );
             let ops = parse_dsl(&rep_dsl)?;
             vm.execute(&ops)?;
         }
@@ -374,19 +401,27 @@ where
             };
 
             // Store comment object directly using storage trait
-            let storage = vm.storage_backend.as_mut()
+            let storage = vm
+                .storage_backend
+                .as_mut()
                 .ok_or_else(|| "Storage backend not configured for proposal comment")?;
 
             // Store comments in "deliberation" namespace
             let namespace = "deliberation";
             let key = format!("comments/{}/{}", proposal_id, comment_id);
             storage.set_json(Some(auth_context), namespace, &key, &comment)?;
-            println!("Comment {} stored directly for proposal {}.", comment_id, proposal_id);
+            println!(
+                "Comment {} stored directly for proposal {}.",
+                comment_id, proposal_id
+            );
             // Explicitly print the ID
             println!("Comment ID: {}", comment_id);
 
             // Emit reputation hook
-            let rep_dsl = format!("increment_reputation \"{}\" reason=\"Commented on proposal {}\"", user_did, proposal_id);
+            let rep_dsl = format!(
+                "increment_reputation \"{}\" reason=\"Commented on proposal {}\"",
+                user_did, proposal_id
+            );
             let ops = parse_dsl(&rep_dsl)?;
             vm.execute(&ops)?;
         }
@@ -397,21 +432,30 @@ where
             let show_comments = view_matches.get_flag("comments");
             let show_history = view_matches.get_flag("history");
 
-            let storage = vm.storage_backend.as_ref()
+            let storage = vm
+                .storage_backend
+                .as_ref()
                 .ok_or_else(|| "Storage backend not configured for proposal view")?;
             let namespace = "governance";
 
             // --- Load Proposal Lifecycle (specific version or latest) ---
-            let proposal: ProposalLifecycle =
-                if let Some(version) = specific_version {
-                    let key = format!("proposals/{}/lifecycle", proposal_id);
-                     storage.get_version_json(vm.auth_context.as_ref(), namespace, &key, version)
-                         .map_err(|e| format!("Failed to load version {} of proposal {}: {}", version, proposal_id, e))?
-                         .ok_or_else(|| format!("Version {} not found for proposal {}", version, proposal_id))?
-                } else {
-                     // Use existing helper for latest version
-                     load_proposal(vm, &proposal_id)?
-                };
+            let proposal: ProposalLifecycle = if let Some(version) = specific_version {
+                let key = format!("proposals/{}/lifecycle", proposal_id);
+                storage
+                    .get_version_json(vm.auth_context.as_ref(), namespace, &key, version)
+                    .map_err(|e| {
+                        format!(
+                            "Failed to load version {} of proposal {}: {}",
+                            version, proposal_id, e
+                        )
+                    })?
+                    .ok_or_else(|| {
+                        format!("Version {} not found for proposal {}", version, proposal_id)
+                    })?
+            } else {
+                // Use existing helper for latest version
+                load_proposal(vm, &proposal_id)?
+            };
 
             // --- Print Core Details ---
             println!("--- Proposal Details ---");
@@ -432,19 +476,25 @@ where
             // --- Vote Tally (if Voting) ---
             if proposal.state == ProposalState::Voting {
                 // Get a clone of the storage reference to avoid borrowing vm
-                let storage = vm.storage_backend.as_ref()
+                let storage = vm
+                    .storage_backend
+                    .as_ref()
                     .ok_or_else(|| "Storage backend not configured for tallying votes")?;
-                
+
                 // Build a list of keys for votes
                 let vote_prefix = format!("proposals/{}/votes/", proposal_id);
                 let mut yes_votes = 0;
                 let mut no_votes = 0;
                 let mut abstain_votes = 0;
-                
+
                 // Count votes directly
-                if let Ok(vote_keys) = storage.list_keys(vm.auth_context.as_ref(), "governance", Some(&vote_prefix)) {
+                if let Ok(vote_keys) =
+                    storage.list_keys(vm.auth_context.as_ref(), "governance", Some(&vote_prefix))
+                {
                     for key in vote_keys {
-                        if let Ok(vote_bytes) = storage.get(vm.auth_context.as_ref(), "governance", &key) {
+                        if let Ok(vote_bytes) =
+                            storage.get(vm.auth_context.as_ref(), "governance", &key)
+                        {
                             if let Ok(vote_str) = String::from_utf8(vote_bytes) {
                                 match vote_str.as_str() {
                                     "yes" => yes_votes += 1,
@@ -455,22 +505,25 @@ where
                             }
                         }
                     }
-                    
+
                     // Build a votes map
                     let mut votes = HashMap::new();
                     votes.insert("yes".to_string(), yes_votes);
                     votes.insert("no".to_string(), no_votes);
                     votes.insert("abstain".to_string(), abstain_votes);
-                    
+
                     println!("--- Current Votes ---");
                     println!("  Yes:       {}", yes_votes);
                     println!("  No:        {}", no_votes);
                     println!("  Abstain:   {}", abstain_votes);
-                    
+
                     // Display quorum and threshold status
                     let total_votes = yes_votes + no_votes;
                     println!("  Quorum:    {}/{} votes", total_votes, proposal.quorum);
-                    println!("  Threshold: {}/{} yes votes", yes_votes, proposal.threshold);
+                    println!(
+                        "  Threshold: {}/{} yes votes",
+                        yes_votes, proposal.threshold
+                    );
                 } else {
                     println!("Error reading votes.");
                 }
@@ -478,7 +531,11 @@ where
 
             // --- List Attachments ---
             let attachment_prefix = format!("proposals/{}/attachments/", proposal.id);
-            match storage.list_keys(vm.auth_context.as_ref(), namespace, Some(&attachment_prefix)) {
+            match storage.list_keys(
+                vm.auth_context.as_ref(),
+                namespace,
+                Some(&attachment_prefix),
+            ) {
                 Ok(keys) if !keys.is_empty() => {
                     println!("--- Attachments ---");
                     for key in keys {
@@ -489,7 +546,7 @@ where
                 }
                 Ok(_) => { /* No attachments found */ }
                 Err(e) => {
-                     println!("Error listing attachments: {}", e);
+                    println!("Error listing attachments: {}", e);
                 }
             }
 
@@ -503,56 +560,63 @@ where
             }
 
             // --- History ---
-             if show_history {
-                 println!("--- History ---");
-                 for (timestamp, state) in &proposal.history {
-                     println!("  [{}] -> {:?}", timestamp.to_rfc3339(), state);
-                 }
-             }
+            if show_history {
+                println!("--- History ---");
+                for (timestamp, state) in &proposal.history {
+                    println!("  [{}] -> {:?}", timestamp.to_rfc3339(), state);
+                }
+            }
 
             // --- Comments ---
             if show_comments {
                 println!("--- Comments ---");
                 let comment_prefix = format!("proposals/{}/comments/", proposal.id);
-                 match storage.list_keys(vm.auth_context.as_ref(), namespace, Some(&comment_prefix)) {
-                     Ok(comment_keys) if !comment_keys.is_empty() => {
-                         let mut all_comments = HashMap::new();
-                         let mut root_comments = Vec::new();
-                         let mut replies_map: HashMap<Option<CommentId>, Vec<CommentId>> = HashMap::new();
+                match storage.list_keys(vm.auth_context.as_ref(), namespace, Some(&comment_prefix))
+                {
+                    Ok(comment_keys) if !comment_keys.is_empty() => {
+                        let mut all_comments = HashMap::new();
+                        let mut root_comments = Vec::new();
+                        let mut replies_map: HashMap<Option<CommentId>, Vec<CommentId>> =
+                            HashMap::new();
 
-                         for key in comment_keys {
-                              match storage.get_json::<Comment>(vm.auth_context.as_ref(), namespace, &key) {
-                                 Ok(comment) => {
-                                     let comment_id = comment.id.clone();
-                                     let reply_to = comment.reply_to.clone();
-                                     all_comments.insert(comment_id.clone(), comment);
-                                     replies_map.entry(reply_to).or_default().push(comment_id);
-                                 }
-                                 Err(e) => println!("Error loading comment {}: {}", key, e),
-                              }
-                         }
+                        for key in comment_keys {
+                            match storage.get_json::<Comment>(
+                                vm.auth_context.as_ref(),
+                                namespace,
+                                &key,
+                            ) {
+                                Ok(comment) => {
+                                    let comment_id = comment.id.clone();
+                                    let reply_to = comment.reply_to.clone();
+                                    all_comments.insert(comment_id.clone(), comment);
+                                    replies_map.entry(reply_to).or_default().push(comment_id);
+                                }
+                                Err(e) => println!("Error loading comment {}: {}", key, e),
+                            }
+                        }
 
-                         // Find root comments (those not replying to anything)
-                         if let Some(roots) = replies_map.get(&None) {
-                             root_comments = roots.clone();
-                             // Sort root comments by timestamp
-                             root_comments.sort_by_key(|id| all_comments.get(id).map(|c| c.timestamp));
-                         }
+                        // Find root comments (those not replying to anything)
+                        if let Some(roots) = replies_map.get(&None) {
+                            root_comments = roots.clone();
+                            // Sort root comments by timestamp
+                            root_comments
+                                .sort_by_key(|id| all_comments.get(id).map(|c| c.timestamp));
+                        }
 
-                         if root_comments.is_empty() {
-                             println!("No comments found.");
-                         } else {
-                             for root_id in root_comments {
-                                 print_threaded_comments(&root_id, &all_comments, &replies_map, 0);
-                             }
-                         }
-                     }
-                     Ok(_) => {
-                          println!("No comments found.");
-                     }
-                     Err(e) => {
-                         println!("Error listing comments: {}", e);
-                     }
+                        if root_comments.is_empty() {
+                            println!("No comments found.");
+                        } else {
+                            for root_id in root_comments {
+                                print_threaded_comments(&root_id, &all_comments, &replies_map, 0);
+                            }
+                        }
+                    }
+                    Ok(_) => {
+                        println!("No comments found.");
+                    }
+                    Err(e) => {
+                        println!("Error listing comments: {}", e);
+                    }
                 }
             }
             println!("-----------------------");
@@ -568,110 +632,154 @@ where
             let mut proposal = load_proposal(vm, &proposal_id)?;
 
             // 3. Check state
-            if !matches!(proposal.state, ProposalState::Draft | ProposalState::OpenForFeedback) {
-                return Err(format!("Proposal {} cannot be edited in its current state: {:?}", proposal_id, proposal.state).into());
+            if !matches!(
+                proposal.state,
+                ProposalState::Draft | ProposalState::OpenForFeedback
+            ) {
+                return Err(format!(
+                    "Proposal {} cannot be edited in its current state: {:?}",
+                    proposal_id, proposal.state
+                )
+                .into());
             }
             // Check permissions using DID
             if proposal.creator.did != user_did {
-                 return Err(format!("User {} does not have permission to edit proposal {}", user_did, proposal_id).into());
+                return Err(format!(
+                    "User {} does not have permission to edit proposal {}",
+                    user_did, proposal_id
+                )
+                .into());
             }
 
             let mut edited = false;
             let namespace = "governance"; // Namespace for attachments
 
             // Get mutable storage backend reference once
-            let storage = vm.storage_backend.as_mut()
+            let storage = vm
+                .storage_backend
+                .as_mut()
                 .ok_or_else(|| "Storage backend not configured for proposal edit")?;
 
             // 4. Handle new body
             if let Some(path) = new_body_path {
-                 println!("Updating body from {:?}...", path);
-                 if !path.exists() || !path.is_file() {
+                println!("Updating body from {:?}...", path);
+                if !path.exists() || !path.is_file() {
                     return Err(format!("New body file not found: {:?}", path).into());
-                 }
-                 let content_bytes = fs::read(path)?;
-                 let key = format!("proposals/{}/attachments/body", proposal_id);
-                 // Assuming common attachment names like "body.md" or "body"
-                 storage.set(Some(auth_context), namespace, &key, content_bytes)?;
-                 edited = true;
+                }
+                let content_bytes = fs::read(path)?;
+                let key = format!("proposals/{}/attachments/body", proposal_id);
+                // Assuming common attachment names like "body.md" or "body"
+                storage.set(Some(auth_context), namespace, &key, content_bytes)?;
+                edited = true;
             }
 
             // 5. Handle new logic
             if let Some(path) = new_logic_path {
-                 println!("Updating logic from {:?}...", path);
-                 if !path.exists() || !path.is_file() {
-                     return Err(format!("New logic file not found: {:?}", path).into());
-                 }
-                 let content_bytes = fs::read(path)?;
-                 let key = format!("proposals/{}/attachments/logic", proposal_id);
-                 // Assuming common attachment names like "logic.ccl" or "logic"
-                 storage.set(Some(auth_context), namespace, &key, content_bytes)?;
-                 edited = true;
+                println!("Updating logic from {:?}...", path);
+                if !path.exists() || !path.is_file() {
+                    return Err(format!("New logic file not found: {:?}", path).into());
+                }
+                let content_bytes = fs::read(path)?;
+                let key = format!("proposals/{}/attachments/logic", proposal_id);
+                // Assuming common attachment names like "logic.ccl" or "logic"
+                storage.set(Some(auth_context), namespace, &key, content_bytes)?;
+                edited = true;
             }
 
             if edited {
-                 // 6. & 7. Update version and potentially state
-                 proposal.update_version(); // Call the lifecycle method
-                 // Decide if state should change, e.g., back to Draft
-                 // proposal.state = ProposalState::Draft;
-                 proposal.history.push((Utc::now(), proposal.state.clone())); // Record the edit/version bump
+                // 6. & 7. Update version and potentially state
+                proposal.update_version(); // Call the lifecycle method
+                                           // Decide if state should change, e.g., back to Draft
+                                           // proposal.state = ProposalState::Draft;
+                proposal.history.push((Utc::now(), proposal.state.clone())); // Record the edit/version bump
 
-                 // 8. Save updated lifecycle
-                 let lifecycle_key = format!("proposals/{}/lifecycle", proposal_id);
-                 storage.set_json(Some(auth_context), namespace, &lifecycle_key, &proposal)?;
-                 println!("Proposal {} edited. New version: {}.", proposal_id, proposal.current_version);
+                // 8. Save updated lifecycle
+                let lifecycle_key = format!("proposals/{}/lifecycle", proposal_id);
+                storage.set_json(Some(auth_context), namespace, &lifecycle_key, &proposal)?;
+                println!(
+                    "Proposal {} edited. New version: {}.",
+                    proposal_id, proposal.current_version
+                );
 
-                 // 9. Emit reputation hook
-                 let rep_dsl = format!("increment_reputation \"{}\" reason=\"Edited proposal {}\"", user_did, proposal_id);
-                 let ops = parse_dsl(&rep_dsl)?;
-                 vm.execute(&ops)?;
+                // 9. Emit reputation hook
+                let rep_dsl = format!(
+                    "increment_reputation \"{}\" reason=\"Edited proposal {}\"",
+                    user_did, proposal_id
+                );
+                let ops = parse_dsl(&rep_dsl)?;
+                vm.execute(&ops)?;
             } else {
                 println!("No changes specified for proposal {}.", proposal_id);
             }
         }
         Some(("publish", publish_matches)) => {
             println!("Handling proposal publish...");
-             let proposal_id = publish_matches.get_one::<ProposalId>("id").unwrap().clone(); // Clone String ID
+            let proposal_id = publish_matches.get_one::<ProposalId>("id").unwrap().clone(); // Clone String ID
 
             let mut proposal = load_proposal(vm, &proposal_id)?;
             proposal.open_for_feedback(); // Call the state transition method
 
             // Save the updated proposal
-             let storage = vm.storage_backend.as_mut()
-                 .ok_or_else(|| "Storage backend not configured for proposal publish")?;
-             let namespace = "governance";
-             let key = format!("proposals/{}/lifecycle", proposal_id);
-             // Use direct method call
-             storage.set_json(Some(auth_context), namespace, &key, &proposal)?;
-             println!("Proposal {} published (state: {:?}).", proposal_id, proposal.state);
+            let storage = vm
+                .storage_backend
+                .as_mut()
+                .ok_or_else(|| "Storage backend not configured for proposal publish")?;
+            let namespace = "governance";
+            let key = format!("proposals/{}/lifecycle", proposal_id);
+            // Use direct method call
+            storage.set_json(Some(auth_context), namespace, &key, &proposal)?;
+            println!(
+                "Proposal {} published (state: {:?}).",
+                proposal_id, proposal.state
+            );
 
-             // TODO: Add reputation hook?
+            // TODO: Add reputation hook?
         }
         Some(("vote", vote_matches)) => {
             println!("Handling proposal vote...");
             let proposal_id = vote_matches.get_one::<ProposalId>("id").unwrap().clone();
-            let choice_enum = vote_matches.get_one::<VoteChoice>("choice").unwrap().clone();
+            let choice_enum = vote_matches
+                .get_one::<VoteChoice>("choice")
+                .unwrap()
+                .clone();
 
             let choice_str = match choice_enum {
                 VoteChoice::Yes => "yes",
                 VoteChoice::No => "no",
                 VoteChoice::Abstain => "abstain",
-            }.to_string();
+            }
+            .to_string();
 
-            let storage_ref_mut = vm.storage_backend.as_mut()
+            let storage_ref_mut = vm
+                .storage_backend
+                .as_mut()
                 .ok_or_else(|| "Storage backend not configured for proposal vote")?;
             let namespace = "governance";
             let key = format!("proposals/{}/votes/{}", proposal_id, user_did); // Use DID
-            storage_ref_mut.set(Some(auth_context), namespace, &key, choice_str.clone().into_bytes())?;
-            println!("Vote '{}' recorded for proposal {} by {}.", choice_str, proposal_id, user_did);
+            storage_ref_mut.set(
+                Some(auth_context),
+                namespace,
+                &key,
+                choice_str.clone().into_bytes(),
+            )?;
+            println!(
+                "Vote '{}' recorded for proposal {} by {}.",
+                choice_str, proposal_id, user_did
+            );
 
             let mut proposal = load_proposal(vm, &proposal_id)?;
 
             if let Err(e) = proposal.transition_to_executed(vm, Some(auth_context)) {
-                eprintln!("Error during execution check/transition for proposal {}: {}", proposal_id, e);
+                eprintln!(
+                    "Error during execution check/transition for proposal {}: {}",
+                    proposal_id, e
+                );
             }
 
-            let rep_dsl = format!("increment_reputation \"{}\" reason=\"Voted on proposal {}\"", user_did, proposal_id);
+            let rep_dsl = format!(
+                "increment_reputation \"{}\" reason=\"Voted on proposal {}\"",
+                user_did, proposal_id
+            );
             let ops = parse_dsl(&rep_dsl)?;
             vm.execute(&ops)?;
         }
@@ -685,13 +793,24 @@ where
 fn parse_duration_string(duration_str: &str) -> Result<Duration, String> {
     let duration_str = duration_str.trim();
     if let Some(days) = duration_str.strip_suffix('d') {
-        days.parse::<i64>().map(Duration::days).map_err(|_| "Invalid day value".to_string())
+        days.parse::<i64>()
+            .map(Duration::days)
+            .map_err(|_| "Invalid day value".to_string())
     } else if let Some(hours) = duration_str.strip_suffix('h') {
-        hours.parse::<i64>().map(Duration::hours).map_err(|_| "Invalid hour value".to_string())
+        hours
+            .parse::<i64>()
+            .map(Duration::hours)
+            .map_err(|_| "Invalid hour value".to_string())
     } else if let Some(minutes) = duration_str.strip_suffix('m') {
-        minutes.parse::<i64>().map(Duration::minutes).map_err(|_| "Invalid minute value".to_string())
+        minutes
+            .parse::<i64>()
+            .map(Duration::minutes)
+            .map_err(|_| "Invalid minute value".to_string())
     } else {
-        Err(format!("Invalid duration format: {}. Use d, h, or m suffix.", duration_str))
+        Err(format!(
+            "Invalid duration format: {}. Use d, h, or m suffix.",
+            duration_str
+        ))
     }
 }
 
@@ -701,23 +820,23 @@ fn print_threaded_comments(
     comment_id: &CommentId,
     comments_map: &HashMap<CommentId, Comment>,
     replies_map: &HashMap<Option<CommentId>, Vec<CommentId>>,
-    depth: usize
+    depth: usize,
 ) {
-     if let Some(comment) = comments_map.get(comment_id) {
+    if let Some(comment) = comments_map.get(comment_id) {
         let indent = "  ".repeat(depth);
         println!("{}[{}] by {}:", indent, &comment.id, &comment.author.did);
         println!("{}  {}", indent, &comment.content);
         println!("{}  @{}", indent, comment.timestamp.to_rfc3339());
 
         if let Some(replies) = replies_map.get(&Some(comment.id.clone())) {
-             // Sort replies by timestamp before printing
-             let mut sorted_replies = replies.clone();
-             sorted_replies.sort_by_key(|id| comments_map.get(id).map(|c| c.timestamp));
+            // Sort replies by timestamp before printing
+            let mut sorted_replies = replies.clone();
+            sorted_replies.sort_by_key(|id| comments_map.get(id).map(|c| c.timestamp));
             for reply_id in sorted_replies {
                 print_threaded_comments(&reply_id, comments_map, replies_map, depth + 1);
             }
         }
     } else {
-         println!("Error: Comment {} not found in map.", comment_id);
+        println!("Error: Comment {} not found in map.", comment_id);
     }
 }

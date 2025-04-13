@@ -1,5 +1,5 @@
-use serde::{Serialize, Deserialize};
 use crate::storage::utils::Timestamp;
+use serde::{Deserialize, Serialize};
 
 // Represents an event that occurred in the storage system for auditing
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -143,7 +143,7 @@ pub enum CompilerError {
     /// Invalid indentation level
     #[error("Invalid indentation level at line {0}")]
     InvalidIndentation(usize),
-    
+
     /// Syntax error in parsing
     #[error("Syntax error: {details}")]
     SyntaxError { details: String },
@@ -163,11 +163,11 @@ pub enum CompilerError {
     /// Duplicate if passed block in proposal_lifecycle macro
     #[error("Duplicate if passed block in proposal_lifecycle at line {0}, column {1}")]
     DuplicateIfPassedBlock(usize, usize),
-    
+
     /// Duplicate else block in proposal_lifecycle macro
     #[error("Duplicate else block in proposal_lifecycle at line {0}, column {1}")]
     DuplicateElseBlock(usize, usize),
-    
+
     /// Else block without if passed block in proposal_lifecycle macro
     #[error("Else block without if passed block in proposal_lifecycle at line {0}, column {1}")]
     ElseWithoutIfPassed(usize, usize),

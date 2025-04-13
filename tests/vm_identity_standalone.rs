@@ -1,130 +1,104 @@
 // Standalone tests for VM identity operations
 // These tests are independent of the storage implementation
 
-use icn_covm::vm::VM;
-use icn_covm::vm::Op;
+use icn_covm::identity::{Identity, Profile};
 use icn_covm::storage::auth::AuthContext;
-use icn_covm::identity::{Identity, Credential, DelegationLink, MemberProfile};
+use icn_covm::storage::implementations::in_memory::InMemoryStorage;
 use icn_covm::storage::utils;
+use icn_covm::vm::Op;
+use icn_covm::vm::VM;
+use std::collections::HashMap;
 
 fn create_test_identity(id: &str, identity_type: &str) -> Identity {
-    let mut identity = Identity::new(id, identity_type);
-    
-    // Add a public key (mock)
-    let public_key = vec![1, 2, 3, 4, 5];
-    identity.public_key = Some(public_key);
-    identity.crypto_scheme = Some("ed25519".to_string());
-    
-    // Add metadata
-    identity.add_metadata("coop_id", "test_coop");
-    
+    // Create an identity with the new constructor
+    let public_username = format!("{}_user", id);
+    let identity = Identity::new(
+        public_username,
+        None, // no full name
+        identity_type.to_string(),
+        None, // no other profile fields
+    )
+    .expect("Failed to create test identity");
+
     identity
 }
 
 fn setup_identity_context() -> AuthContext {
     // Create an auth context with identities and roles
     let member_id = "member1";
-    let mut auth = AuthContext::new(member_id);
-    
+    let member_identity = create_test_identity(member_id, "member");
+    let mut auth = AuthContext::new(&member_identity.did);
+
     // Add some roles
     auth.add_role("test_coop", "member");
     auth.add_role("coops/test_coop", "member");
     auth.add_role("coops/test_coop/proposals", "proposer");
-    
+
     // Add identities to registry
-    let member_identity = create_test_identity(member_id, "member");
-    auth.register_identity(member_identity);
+    auth.register_identity(member_identity.clone());
     auth.register_identity(create_test_identity("member2", "member"));
     auth.register_identity(create_test_identity("test_coop", "cooperative"));
-    
-    // Add member profiles
-    let mut member = MemberProfile::new(create_test_identity("member1", "member"), utils::now());
-    member.add_role("member");
-    auth.register_member(member);
-    
-    // Add credentials
-    let mut credential = Credential::new(
-        "cred1", 
-        "membership", 
-        "test_coop", 
-        "member1",
-        utils::now(),
-    );
-    credential.add_claim("namespace", "test_coop");
-    auth.register_credential(credential);
-    
-    // Add delegations
-    let mut delegation = DelegationLink::new(
-        "deleg1",
-        "member2",
-        "member1",
-        "voting",
-        utils::now(),
-    );
-    delegation.add_permission("vote");
-    auth.register_delegation(delegation);
-    
+
+    // Add memberships
+    auth.add_membership(&member_identity.did, "coops/test_coop");
+
+    // Add delegations (member2 delegates to member1)
+    let member2_identity = create_test_identity("member2", "member");
+    auth.add_delegation(&member2_identity.did, &member_identity.did, "voting");
+
     auth
 }
 
 #[test]
 fn test_identity_verification() {
     let auth = setup_identity_context();
-    let mut vm = VM::new();
+    let mut vm: VM<InMemoryStorage> = VM::new();
     vm.set_auth_context(auth);
     vm.mock_storage_operations(); // Use mock storage for tests
-    
+
     // Test verifying a signature (using the mock that always returns true if identity exists)
-    let ops = vec![
-        Op::VerifyIdentity { 
-            identity_id: "member1".to_string(),
-            message: "test message".to_string(),
-            signature: "mock signature".to_string(),
-        },
-    ];
-    
+    let ops = vec![Op::VerifyIdentity {
+        identity_id: "member1_user".to_string(),
+        message: "test message".to_string(),
+        signature: "mock signature".to_string(),
+    }];
+
     vm.execute(&ops).unwrap();
-    assert_eq!(vm.top(), Some(1.0)); // Should be true (1.0)
-    
+    assert_eq!(vm.top(), Some(1.0)); // Should be true (1.0) with mock
+
     // Test with non-existent identity
-    let ops = vec![
-        Op::VerifyIdentity { 
-            identity_id: "nonexistent".to_string(),
-            message: "test message".to_string(),
-            signature: "mock signature".to_string(),
-        },
-    ];
-    
+    let ops = vec![Op::VerifyIdentity {
+        identity_id: "nonexistent".to_string(),
+        message: "test message".to_string(),
+        signature: "mock signature".to_string(),
+    }];
+
     vm.execute(&ops).unwrap();
-    assert_eq!(vm.top(), Some(0.0)); // Should be false (0.0)
+    assert_eq!(vm.top(), Some(0.0)); // Should be false (0.0) for unknown identity
 }
 
 #[test]
 fn test_membership_check() {
     let auth = setup_identity_context();
-    let mut vm = VM::new();
+    let mut vm: VM<InMemoryStorage> = VM::new();
     vm.set_auth_context(auth);
     vm.mock_storage_operations(); // Use mock storage for tests
-    
+
     // Test checking membership in a namespace where the member belongs
-    let ops = vec![
-        Op::CheckMembership { 
-            identity_id: "member1".to_string(),
-            namespace: "coops/test_coop".to_string(),
-        },
-    ];
-    
+    let ops = vec![Op::CheckMembership {
+        identity_id: "member1_user".to_string(),
+        namespace: "coops/test_coop".to_string(),
+    }];
+
     vm.execute(&ops).unwrap();
     assert_eq!(vm.top(), Some(1.0)); // Should be true (1.0)
-    
+
     // Test with a namespace where the member doesn't belong
-    let ops = vec![
-        Op::CheckMembership { 
-            identity_id: "member1".to_string(),
-            namespace: "coops/other_coop".to_string(),
-        },
-    ];
-    
+    let ops = vec![Op::CheckMembership {
+        identity_id: "member1_user".to_string(),
+        namespace: "coops/other_coop".to_string(),
+    }];
+
     vm.execute(&ops).unwrap();
     assert_eq!(vm.top(), Some(0.0)); // Should be false (0.0)
 }
@@ -132,93 +106,86 @@ fn test_membership_check() {
 #[test]
 fn test_delegation_check() {
     let auth = setup_identity_context();
-    let mut vm = VM::new();
+    let mut vm: VM<InMemoryStorage> = VM::new();
     vm.set_auth_context(auth);
     vm.mock_storage_operations(); // Use mock storage for tests
-    
+
     // Test checking a valid delegation
-    let ops = vec![
-        Op::CheckDelegation { 
-            delegator_id: "member2".to_string(),
-            delegate_id: "member1".to_string(),
-        },
-    ];
-    
+    let ops = vec![Op::CheckDelegation {
+        delegator_id: "member2_user".to_string(),
+        delegate_id: "member1_user".to_string(),
+    }];
+
     vm.execute(&ops).unwrap();
     assert_eq!(vm.top(), Some(1.0)); // Should be true (1.0)
-    
+
     // Test with invalid delegation
-    let ops = vec![
-        Op::CheckDelegation { 
-            delegator_id: "member1".to_string(),
-            delegate_id: "member2".to_string(),
-        },
-    ];
-    
+    let ops = vec![Op::CheckDelegation {
+        delegator_id: "member1_user".to_string(),
+        delegate_id: "member2_user".to_string(),
+    }];
+
     vm.execute(&ops).unwrap();
     assert_eq!(vm.top(), Some(0.0)); // Should be false (0.0)
 }
 
 #[test]
 fn test_storage_operations_mock() {
-    // For this test, we'll focus on identity operations that don't require full storage
-    // Create a test identity and auth context
+    // Create a VM with InMemoryStorage
+    let mut vm: VM<InMemoryStorage> = VM::new();
+    vm.mock_storage_operations();
+
+    // Set up auth context
     let auth = setup_identity_context();
-    let mut vm = VM::new();
     vm.set_auth_context(auth);
-    
+    vm.set_namespace("default");
+
     // Test with membership check which doesn't need actual storage
-    let ops = vec![
-        Op::CheckMembership { 
-            identity_id: "member1".to_string(),
-            namespace: "coops/test_coop".to_string(),
-        },
-    ];
-    
+    let ops = vec![Op::CheckMembership {
+        identity_id: "member1_user".to_string(),
+        namespace: "coops/test_coop".to_string(),
+    }];
+
     vm.execute(&ops).unwrap();
     assert_eq!(vm.top(), Some(1.0)); // Should be true (1.0) for membership
-    
+
     // Test with false membership
-    let ops = vec![
-        Op::CheckMembership { 
-            identity_id: "member1".to_string(),
-            namespace: "coops/unknown_coop".to_string(),
-        },
-    ];
-    
+    let ops = vec![Op::CheckMembership {
+        identity_id: "member1_user".to_string(),
+        namespace: "coops/unknown_coop".to_string(),
+    }];
+
     vm.execute(&ops).unwrap();
     assert_eq!(vm.top(), Some(0.0)); // Should be false (0.0) for non-membership
 }
 
 #[test]
 fn test_identity_operations_with_storage() {
-    // For this test, we'll focus on identity operations that don't require full storage
-    // Create a test identity and auth context
+    // Create a VM with InMemoryStorage
+    let mut vm: VM<InMemoryStorage> = VM::new();
+    vm.mock_storage_operations();
+
+    // Set up auth context
     let auth = setup_identity_context();
-    let mut vm = VM::new();
     vm.set_auth_context(auth);
-    
+
     // Test with identity verification which doesn't need actual storage
-    let ops = vec![
-        Op::VerifyIdentity { 
-            identity_id: "member1".to_string(),
-            message: "test message".to_string(),
-            signature: "mock signature".to_string(),
-        },
-    ];
-    
+    let ops = vec![Op::VerifyIdentity {
+        identity_id: "member1_user".to_string(),
+        message: "test message".to_string(),
+        signature: "mock signature".to_string(),
+    }];
+
     vm.execute(&ops).unwrap();
     assert_eq!(vm.top(), Some(1.0)); // Should be true (1.0) for a known identity
-    
+
     // Test with non-existent identity
-    let ops = vec![
-        Op::VerifyIdentity { 
-            identity_id: "unknown_member".to_string(),
-            message: "test message".to_string(),
-            signature: "mock signature".to_string(),
-        },
-    ];
-    
+    let ops = vec![Op::VerifyIdentity {
+        identity_id: "unknown_member".to_string(),
+        message: "test message".to_string(),
+        signature: "mock signature".to_string(),
+    }];
+
     vm.execute(&ops).unwrap();
     assert_eq!(vm.top(), Some(0.0)); // Should be false (0.0) for unknown identity
-} 
+}

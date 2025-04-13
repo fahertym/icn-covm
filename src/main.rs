@@ -2,31 +2,31 @@
 
 use icn_covm::bytecode::{BytecodeCompiler, BytecodeExecutor};
 use icn_covm::compiler::{parse_dsl, parse_dsl_with_stdlib, CompilerError};
-use icn_covm::storage::auth::AuthContext;
-use icn_covm::vm::{VM, VMError};
-use icn_covm::identity::{Identity, MemberProfile};
-use icn_covm::storage::traits::StorageBackend;
-use icn_covm::storage::implementations::in_memory::InMemoryStorage;
-use icn_covm::storage::implementations::file_storage::FileStorage;
-use icn_covm::storage::utils::now;
-use icn_covm::federation::{NetworkNode, NodeConfig};
 use icn_covm::federation::messages::{ProposalScope, VotingModel};
+use icn_covm::federation::{NetworkNode, NodeConfig};
+use icn_covm::identity::{Identity, MemberProfile};
+use icn_covm::storage::auth::AuthContext;
+use icn_covm::storage::implementations::file_storage::FileStorage;
+use icn_covm::storage::implementations::in_memory::InMemoryStorage;
+use icn_covm::storage::traits::StorageBackend;
+use icn_covm::storage::utils::now;
+use icn_covm::vm::{VMError, VM};
 
 // Declare the cli module locally
 mod cli;
 
 // Use the local cli module path instead of the library path
-use cli::proposal::{proposal_command, handle_proposal_command};
+use cli::proposal::{handle_proposal_command, proposal_command};
 
-use clap::{Arg, Command, ArgAction};
+use clap::{Arg, ArgAction, Command};
+use log::{debug, error, info};
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 use std::process;
 use std::time::Instant;
 use thiserror::Error;
-use std::io::{Write};
-use log::{info, error, debug};
 
 #[derive(Debug, Error)]
 enum AppError {
@@ -408,16 +408,23 @@ async fn main() -> Result<(), AppError> {
             let storage_path = run_matches
                 .get_one::<String>("storage-path")
                 .unwrap_or(&default_storage_path);
-            
+
             // Get federation configuration
             let enable_federation = run_matches.get_flag("enable-federation");
-            let federation_port = run_matches.get_one::<String>("federation-port").unwrap().parse::<u16>().unwrap_or(0);
+            let federation_port = run_matches
+                .get_one::<String>("federation-port")
+                .unwrap()
+                .parse::<u16>()
+                .unwrap_or(0);
             let bootstrap_nodes = run_matches
                 .get_many::<String>("bootstrap-nodes")
                 .unwrap_or_default()
                 .map(|s| s.parse().expect("Invalid multiaddress format"))
                 .collect::<Vec<_>>();
-            let node_name = run_matches.get_one::<String>("node-name").unwrap().to_string();
+            let node_name = run_matches
+                .get_one::<String>("node-name")
+                .unwrap()
+                .to_string();
             let capabilities = run_matches
                 .get_many::<String>("capabilities")
                 .unwrap_or_default()
@@ -434,13 +441,7 @@ async fn main() -> Result<(), AppError> {
                     storage_path,
                 )
             } else if run_matches.get_flag("interactive") {
-                run_interactive(
-                    verbose,
-                    params, 
-                    use_bytecode,
-                    storage_backend,
-                    storage_path,
-                )
+                run_interactive(verbose, params, use_bytecode, storage_backend, storage_path)
             } else if enable_federation {
                 // Run with federation enabled
                 run_with_federation(
@@ -451,11 +452,12 @@ async fn main() -> Result<(), AppError> {
                     use_bytecode,
                     storage_backend,
                     storage_path,
-                    federation_port, 
+                    federation_port,
                     bootstrap_nodes,
                     node_name,
                     capabilities,
-                ).await
+                )
+                .await
             } else {
                 // Standard run
                 run_program(
@@ -484,7 +486,7 @@ async fn main() -> Result<(), AppError> {
             let auth_context = create_demo_auth_context();
             vm.set_auth_context(auth_context.clone());
             vm.set_namespace("demo");
-            
+
             // Set up storage
             // Use let bindings for default values to ensure they live long enough
             let default_storage_backend = "memory".to_string();
@@ -498,12 +500,14 @@ async fn main() -> Result<(), AppError> {
                 .unwrap_or(&default_storage_path);
             let storage = create_storage_backend(storage_backend, storage_path)?;
             vm.set_storage_backend(storage);
-            
+
             handle_proposal_command(proposal_matches, &mut vm, &auth_context)
                 .map_err(|e| AppError::Other(e.to_string()))
         }
         Some(("storage", storage_matches)) => {
-            let storage_backend = storage_matches.get_one::<String>("storage-backend").unwrap();
+            let storage_backend = storage_matches
+                .get_one::<String>("storage-backend")
+                .unwrap();
             let storage_path = storage_matches.get_one::<String>("storage-path").unwrap();
 
             match storage_matches.subcommand() {
@@ -511,44 +515,86 @@ async fn main() -> Result<(), AppError> {
                     let namespace = list_keys_matches.get_one::<String>("namespace").unwrap();
                     let prefix = list_keys_matches.get_one::<String>("prefix");
                     list_keys_command(namespace, prefix, storage_backend, storage_path)
-                },
+                }
                 Some(("get-value", get_value_matches)) => {
                     let namespace = get_value_matches.get_one::<String>("namespace").unwrap();
                     let key = get_value_matches.get_one::<String>("key").unwrap();
                     get_value_command(namespace, key, storage_backend, storage_path)
-                },
+                }
                 _ => Err("Unknown storage subcommand".into()),
             }
         }
         Some(("federation", federation_matches)) => {
-            let storage_backend = federation_matches.get_one::<String>("storage-backend").unwrap();
-            let storage_path = federation_matches.get_one::<String>("storage-path").unwrap();
-            let federation_port = federation_matches.get_one::<String>("federation-port").unwrap().parse::<u16>().unwrap();
+            let storage_backend = federation_matches
+                .get_one::<String>("storage-backend")
+                .unwrap();
+            let storage_path = federation_matches
+                .get_one::<String>("storage-path")
+                .unwrap();
+            let federation_port = federation_matches
+                .get_one::<String>("federation-port")
+                .unwrap()
+                .parse::<u16>()
+                .unwrap();
             let bootstrap_nodes = federation_matches
                 .get_many::<String>("bootstrap-nodes")
                 .unwrap_or_default()
                 .map(|s| s.parse().expect("Invalid multiaddress format"))
                 .collect::<Vec<_>>();
-            let node_name = federation_matches.get_one::<String>("node-name").unwrap().to_string();
+            let node_name = federation_matches
+                .get_one::<String>("node-name")
+                .unwrap()
+                .to_string();
 
             match federation_matches.subcommand() {
                 Some(("broadcast-proposal", broadcast_matches)) => {
-                    let proposal_file = broadcast_matches.get_one::<String>("proposal-file").unwrap();
+                    let proposal_file = broadcast_matches
+                        .get_one::<String>("proposal-file")
+                        .unwrap();
                     let scope = broadcast_matches.get_one::<String>("scope").unwrap();
                     let model = broadcast_matches.get_one::<String>("model").unwrap();
                     let coops = broadcast_matches.get_one::<String>("coops").unwrap();
                     let expires_in = broadcast_matches.get_one::<u64>("expires-in").map(|v| *v);
-                    broadcast_proposal(proposal_file, storage_backend, storage_path, federation_port, bootstrap_nodes, node_name, scope, model, coops, expires_in).await
-                },
+                    broadcast_proposal(
+                        proposal_file,
+                        storage_backend,
+                        storage_path,
+                        federation_port,
+                        bootstrap_nodes,
+                        node_name,
+                        scope,
+                        model,
+                        coops,
+                        expires_in,
+                    )
+                    .await
+                }
                 Some(("submit-vote", submit_matches)) => {
                     let vote_file = submit_matches.get_one::<String>("vote-file").unwrap();
-                    submit_vote(vote_file, storage_backend, storage_path, federation_port, bootstrap_nodes, node_name).await
-                },
+                    submit_vote(
+                        vote_file,
+                        storage_backend,
+                        storage_path,
+                        federation_port,
+                        bootstrap_nodes,
+                        node_name,
+                    )
+                    .await
+                }
                 Some(("execute-proposal", execute_matches)) => {
                     let proposal_id = execute_matches.get_one::<String>("proposal-id").unwrap();
                     let force = execute_matches.get_flag("force");
-                    execute_proposal(proposal_id, storage_backend, storage_path, federation_port, bootstrap_nodes, node_name, force).await
-                },
+                    execute_proposal(
+                        proposal_id,
+                        storage_backend,
+                        storage_path,
+                        federation_port,
+                        bootstrap_nodes,
+                        node_name,
+                        force,
+                    )
+                    .await
+                }
                 _ => Err("Unknown federation subcommand".into()),
             }
         }
@@ -596,14 +642,22 @@ async fn run_with_federation(
     // Create and start network node
     let mut network_node = match NetworkNode::new(node_config).await {
         Ok(node) => node,
-        Err(e) => return Err(AppError::Federation(format!("Failed to create network node: {}", e))),
+        Err(e) => {
+            return Err(AppError::Federation(format!(
+                "Failed to create network node: {}",
+                e
+            )))
+        }
     };
 
     info!("Local peer ID: {}", network_node.local_peer_id());
 
     // Start the network node
     if let Err(e) = network_node.start().await {
-        return Err(AppError::Federation(format!("Failed to start network node: {}", e)));
+        return Err(AppError::Federation(format!(
+            "Failed to start network node: {}",
+            e
+        )));
     }
 
     // Now run the program if specified
@@ -619,7 +673,7 @@ async fn run_with_federation(
         )?;
     } else {
         info!("No program specified, running in network-only mode");
-        
+
         // Keep the node running until interrupted
         loop {
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
@@ -684,52 +738,52 @@ fn run_program(
 
     // Setup auth context and storage based on selected backend
     let auth_context = create_demo_auth_context();
-    
+
     // Select the appropriate storage backend
     let storage = create_storage_backend(storage_backend, storage_path)?;
-    
+
     if use_bytecode {
         // Bytecode execution with FileStorage
         let mut compiler = BytecodeCompiler::new();
         let program = compiler.compile(&ops);
-        
+
         if verbose {
             println!("Compiled bytecode program:\n{}", program.dump());
         }
-        
+
         // Create bytecode interpreter with proper auth context and storage
         let mut vm = VM::new();
         vm.set_auth_context(auth_context);
         vm.set_namespace("demo");
         vm.set_storage_backend(storage);
-        
+
         let mut interpreter = BytecodeExecutor::new(vm, program.instructions);
-        
+
         // Set parameters
         interpreter.vm.set_parameters(parameters)?;
-        
+
         // Execute
         let start = Instant::now();
         let result = interpreter.execute();
         let duration = start.elapsed();
-        
+
         if verbose {
             println!("Execution completed in {:?}", duration);
         }
-        
+
         if let Err(err) = result {
             return Err(err.into());
         }
-        
+
         if verbose {
             println!("Final stack: {:?}", interpreter.vm.stack);
-            
+
             if let Some(top) = interpreter.vm.top() {
                 println!("Top of stack: {}", top);
             } else {
                 println!("Stack is empty");
             }
-            
+
             println!("Final memory: {:?}", interpreter.vm.memory);
         }
     } else {
@@ -769,7 +823,7 @@ fn run_program(
 fn create_storage_backend(backend_type: &str, path: &str) -> Result<InMemoryStorage, AppError> {
     match backend_type {
         "memory" | _ => {
-            // For simplicity, we're only supporting InMemoryStorage for now 
+            // For simplicity, we're only supporting InMemoryStorage for now
             // since there are type issues with FileStorage
             Ok(InMemoryStorage::new())
         }
@@ -788,14 +842,14 @@ fn initialize_storage<T: StorageBackend>(
             println!("Warning: Failed to create account: {:?}", e);
         }
     }
-    
+
     // Create namespace
     if let Err(e) = storage.create_namespace(Some(auth_context), "demo", 1024 * 1024, None) {
         if verbose {
             println!("Warning: Failed to create namespace: {:?}", e);
         }
     }
-    
+
     Ok(())
 }
 
@@ -804,45 +858,45 @@ fn create_demo_auth_context() -> AuthContext {
     // Create a basic auth context for demo purposes
     let user_id = "demo_user";
     let mut auth = AuthContext::new(user_id);
-    
+
     // Add roles with storage permissions - match the required roles in StorageBackend impl
-    auth.add_role("global", "admin");   // Permission to create accounts and namespaces
-    auth.add_role("demo", "reader");    // Permission to read from demo namespace
-    auth.add_role("demo", "writer");    // Permission to write to demo namespace
-    auth.add_role("demo", "admin");     // Permission to administrate demo namespace
-    
+    auth.add_role("global", "admin"); // Permission to create accounts and namespaces
+    auth.add_role("demo", "reader"); // Permission to read from demo namespace
+    auth.add_role("demo", "writer"); // Permission to write to demo namespace
+    auth.add_role("demo", "admin"); // Permission to administrate demo namespace
+
     // Set up identity
     let mut identity = Identity::new(user_id, "user");
     identity.add_metadata("description", "Demo User");
-    
+
     // Register the identity
     auth.register_identity(identity);
-    
+
     // Set up member profile
     let mut profile = MemberProfile::new(Identity::new(user_id, "user"), now());
     profile.add_role("user");
     auth.register_member(profile);
-    
+
     auth
 }
 
 // Helper function to create a demo auth context and initialize storage
 fn setup_storage_for_demo() -> (AuthContext, InMemoryStorage) {
     let auth = create_demo_auth_context();
-    
+
     // Create storage backend
     let mut storage = InMemoryStorage::new();
-    
+
     // Create user account
     if let Err(e) = storage.create_account(Some(&auth), &auth.user_id, 1024 * 1024) {
         println!("Warning: Failed to create account: {:?}", e);
     }
-    
+
     // Create namespace
     if let Err(e) = storage.create_namespace(Some(&auth), "demo", 1024 * 1024, None) {
         println!("Warning: Failed to create namespace: {:?}", e);
     }
-    
+
     (auth, storage)
 }
 
@@ -892,12 +946,12 @@ fn run_benchmark(
     println!("\n1. Running AST interpreter...");
 
     let mut vm = VM::new();
-    
+
     // Set up auth context and namespace
     let auth_context = setup_storage_for_demo().0;
     vm.set_auth_context(auth_context.clone());
     vm.set_namespace("demo");
-    
+
     vm.set_parameters(parameters.clone())?;
 
     let ast_start = Instant::now();
@@ -920,7 +974,7 @@ fn run_benchmark(
     let mut vm = VM::new();
     vm.set_auth_context(auth_context);
     vm.set_namespace("demo");
-    
+
     let mut interpreter = BytecodeExecutor::new(vm, program.instructions);
     interpreter.vm.set_parameters(parameters)?;
 
@@ -978,14 +1032,14 @@ fn run_interactive(
     use std::io::{self, Write};
 
     println!("ICN Cooperative VM Interactive Shell (type 'exit' to quit, 'help' for commands)");
-    
+
     let mut vm = VM::new();
-    
+
     // Set up auth context and namespace
     let (auth_context, _storage) = setup_storage_for_demo();
     vm.set_auth_context(auth_context);
     vm.set_namespace("demo");
-    
+
     vm.set_parameters(parameters)?;
 
     // Create an editor for interactive input
@@ -1123,7 +1177,8 @@ fn run_interactive(
                                 println!("{}", program.dump());
                             }
 
-                            let mut interpreter = BytecodeExecutor::new(VM::new(), program.instructions);
+                            let mut interpreter =
+                                BytecodeExecutor::new(VM::new(), program.instructions);
 
                             // Copy VM state to interpreter
                             for (key, value) in vm.memory.iter() {
@@ -1174,16 +1229,19 @@ fn register_identity(
 ) -> Result<(), AppError> {
     // Load the identity data from file
     let id_data = fs::read_to_string(id_file)?;
-    
+
     // Parse as JSON
     let identity_data: serde_json::Value = serde_json::from_str(&id_data)?;
-    
+
     // Extract required fields
-    let id = identity_data.get("id").and_then(|v| v.as_str()).ok_or("Missing 'id' field")?;
-    
+    let id = identity_data
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'id' field")?;
+
     // Create the identity
     let mut identity = Identity::new(id, id_type);
-    
+
     // Add metadata
     if let Some(metadata) = identity_data.get("metadata").and_then(|v| v.as_object()) {
         for (key, value) in metadata {
@@ -1192,24 +1250,27 @@ fn register_identity(
             }
         }
     }
-    
+
     // Create a basic auth context to simulate registration
     let mut auth = AuthContext::new("system");
     auth.add_role("global", "admin");
-    
+
     // Register the identity
     auth.register_identity(identity.clone());
-    
+
     // Output the identity
-    println!("Identity registered successfully: {} (type: {})", id, id_type);
-    
+    println!(
+        "Identity registered successfully: {} (type: {})",
+        id, id_type
+    );
+
     // Save to output file if specified
     if let Some(out_file) = output_file {
         let json = serde_json::to_string_pretty(&identity)?;
         fs::write(out_file, json)?;
         println!("Identity saved to: {}", out_file);
     }
-    
+
     Ok(())
 }
 
@@ -1229,10 +1290,11 @@ fn list_keys_command(
         let storage_dir = Path::new(storage_path);
         if !storage_dir.exists() {
             println!("Creating storage directory: {}", storage_path);
-            fs::create_dir_all(storage_dir)
-                .map_err(|e| AppError::Other(format!("Failed to create storage directory: {}", e)))?;
+            fs::create_dir_all(storage_dir).map_err(|e| {
+                AppError::Other(format!("Failed to create storage directory: {}", e))
+            })?;
         }
-        
+
         // Initialize FileStorage backend
         let storage = FileStorage::new(storage_path)
             .map_err(|e| AppError::Other(format!("Failed to initialize file storage: {}", e)))?;
@@ -1241,21 +1303,23 @@ fn list_keys_command(
         // Initialize InMemoryStorage backend
         Box::new(InMemoryStorage::new())
     };
-    
+
     // Convert the optional prefix String to an optional &str
     let prefix_str = prefix.map(|s| s.as_str());
-    
+
     // List keys from the storage backend
     match storage.list_keys(Some(&auth_context), namespace, prefix_str) {
         Ok(keys) => {
             if keys.is_empty() {
-                println!("No keys found in namespace '{}'{}", 
-                    namespace, 
+                println!(
+                    "No keys found in namespace '{}'{}",
+                    namespace,
                     prefix.map_or(String::new(), |p| format!(" with prefix '{}'", p))
                 );
             } else {
-                println!("Keys in namespace '{}'{}", 
-                    namespace, 
+                println!(
+                    "Keys in namespace '{}'{}",
+                    namespace,
                     prefix.map_or(String::new(), |p| format!(" with prefix '{}'", p))
                 );
                 let keys_count = keys.len();
@@ -1265,7 +1329,7 @@ fn list_keys_command(
                 println!("Total: {} keys", keys_count);
             }
             Ok(())
-        },
+        }
         Err(e) => Err(AppError::Other(format!("Failed to list keys: {}", e))),
     }
 }
@@ -1286,10 +1350,11 @@ fn get_value_command(
         let storage_dir = Path::new(storage_path);
         if !storage_dir.exists() {
             println!("Creating storage directory: {}", storage_path);
-            fs::create_dir_all(storage_dir)
-                .map_err(|e| AppError::Other(format!("Failed to create storage directory: {}", e)))?;
+            fs::create_dir_all(storage_dir).map_err(|e| {
+                AppError::Other(format!("Failed to create storage directory: {}", e))
+            })?;
         }
-        
+
         // Initialize FileStorage backend
         let storage = FileStorage::new(storage_path)
             .map_err(|e| AppError::Other(format!("Failed to initialize file storage: {}", e)))?;
@@ -1298,7 +1363,7 @@ fn get_value_command(
         // Initialize InMemoryStorage backend
         Box::new(InMemoryStorage::new())
     };
-    
+
     // Get the value from storage
     match storage.get(Some(&auth_context), namespace, key) {
         Ok(data) => {
@@ -1307,22 +1372,31 @@ fn get_value_command(
                 Ok(text) => {
                     println!("Value for {}:{}", namespace, key);
                     println!("{}", text);
-                    
+
                     // If it looks like JSON, try to pretty-print it
                     if text.trim().starts_with('{') || text.trim().starts_with('[') {
                         if let Ok(json) = serde_json::from_str::<serde_json::Value>(text) {
                             println!("\nFormatted JSON:");
-                            println!("{}", serde_json::to_string_pretty(&json).unwrap_or_else(|_| text.to_string()));
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&json)
+                                    .unwrap_or_else(|_| text.to_string())
+                            );
                         }
                     }
-                },
+                }
                 Err(_) => {
-                    println!("Value for {}:{} (binary data, {} bytes)", namespace, key, data.len());
+                    println!(
+                        "Value for {}:{} (binary data, {} bytes)",
+                        namespace,
+                        key,
+                        data.len()
+                    );
                     println!("{:?}", data);
                 }
             }
             Ok(())
-        },
+        }
         Err(e) => Err(AppError::Other(format!("Failed to get value: {}", e))),
     }
 }
@@ -1330,17 +1404,17 @@ fn get_value_command(
 /// Creates an admin auth context for inspection purposes
 fn create_admin_auth_context() -> AuthContext {
     let mut auth = AuthContext::new("admin");
-    
+
     // Add admin roles for all operations
     auth.add_role("global", "admin");
-    
+
     // Set up identity
     let mut identity = Identity::new("admin", "admin");
     identity.add_metadata("description", "Storage CLI Admin");
-    
+
     // Register the identity
     auth.register_identity(identity);
-    
+
     auth
 }
 
@@ -1358,11 +1432,10 @@ async fn broadcast_proposal(
     expires_in: Option<u64>,
 ) -> Result<(), AppError> {
     info!("Broadcasting proposal from file: {}", proposal_file);
-    
+
     // Read and parse the proposal file
-    let proposal_content = fs::read_to_string(proposal_file)
-        .map_err(|e| AppError::IO(e))?;
-    
+    let proposal_content = fs::read_to_string(proposal_file).map_err(|e| AppError::IO(e))?;
+
     // Parse the proposal content (simple format for now)
     let lines: Vec<&str> = proposal_content.lines().collect();
     if lines.len() < 4 {
@@ -1370,7 +1443,7 @@ async fn broadcast_proposal(
             "Invalid proposal file format. Expected at least 4 lines: ID, namespace, creator, options".to_string(),
         ));
     }
-    
+
     let proposal_id = lines[0].trim().to_string();
     let namespace = lines[1].trim().to_string();
     let creator = lines[2].trim().to_string();
@@ -1378,7 +1451,7 @@ async fn broadcast_proposal(
         .iter()
         .map(|&s| s.trim().to_string())
         .collect::<Vec<String>>();
-    
+
     // Parse the scope
     let scope = match scope {
         "single" => ProposalScope::SingleCoop(creator.clone()),
@@ -1387,22 +1460,22 @@ async fn broadcast_proposal(
                 .split(',')
                 .map(|s| s.trim().to_string())
                 .collect::<Vec<String>>();
-            
+
             if coop_list.is_empty() {
                 ProposalScope::GlobalFederation
             } else {
                 ProposalScope::MultiCoop(coop_list)
             }
-        },
+        }
         _ => ProposalScope::GlobalFederation,
     };
-    
+
     // Parse the voting model
     let voting_model = match model {
         "coop" => VotingModel::OneCoopOneVote,
         _ => VotingModel::OneMemberOneVote,
     };
-    
+
     // Create the proposal object
     let proposal = icn_covm::federation::FederatedProposal {
         proposal_id,
@@ -1414,7 +1487,7 @@ async fn broadcast_proposal(
         voting_model,
         expires_at: expires_in.map(|seconds| (now() as i64) + (seconds as i64)),
     };
-    
+
     // Configure federation
     let node_config = NodeConfig {
         port: Some(federation_port),
@@ -1423,39 +1496,53 @@ async fn broadcast_proposal(
         capabilities: vec!["voting".to_string()],
         protocol_version: "1.0.0".to_string(),
     };
-    
+
     // Create and start network node
     let mut network_node = match NetworkNode::new(node_config).await {
         Ok(node) => node,
-        Err(e) => return Err(AppError::Federation(format!("Failed to create network node: {}", e))),
+        Err(e) => {
+            return Err(AppError::Federation(format!(
+                "Failed to create network node: {}",
+                e
+            )))
+        }
     };
-    
+
     info!("Local peer ID: {}", network_node.local_peer_id());
-    
+
     // Start the network node
     if let Err(e) = network_node.start().await {
-        return Err(AppError::Federation(format!("Failed to start network node: {}", e)));
+        return Err(AppError::Federation(format!(
+            "Failed to start network node: {}",
+            e
+        )));
     }
-    
+
     // Get a storage backend
     let mut storage = create_storage_backend(storage_backend, storage_path)?;
-    
+
     // Store the proposal locally
     let federation_storage = network_node.federation_storage();
     if let Err(e) = federation_storage.save_proposal(&mut storage, proposal.clone()) {
-        return Err(AppError::Federation(format!("Failed to store proposal: {}", e)));
+        return Err(AppError::Federation(format!(
+            "Failed to store proposal: {}",
+            e
+        )));
     }
-    
+
     // Broadcast the proposal to the network
     if let Err(e) = network_node.broadcast_proposal(proposal).await {
-        return Err(AppError::Federation(format!("Failed to broadcast proposal: {}", e)));
+        return Err(AppError::Federation(format!(
+            "Failed to broadcast proposal: {}",
+            e
+        )));
     }
-    
+
     info!("Proposal broadcasted successfully");
-    
+
     // Keep the node running for a short time to ensure propagation
     tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-    
+
     Ok(())
 }
 
@@ -1469,11 +1556,10 @@ async fn submit_vote(
     node_name: String,
 ) -> Result<(), AppError> {
     info!("Submitting vote from file: {}", vote_file);
-    
+
     // Read and parse the vote file
-    let vote_content = fs::read_to_string(vote_file)
-        .map_err(|e| AppError::IO(e))?;
-    
+    let vote_content = fs::read_to_string(vote_file).map_err(|e| AppError::IO(e))?;
+
     // Parse the vote content (simple format for now)
     let lines: Vec<&str> = vote_content.lines().collect();
     if lines.len() < 3 {
@@ -1481,37 +1567,48 @@ async fn submit_vote(
             "Invalid vote file format. Expected at least 3 lines: proposal ID, voter ID, ranked choices".to_string(),
         ));
     }
-    
+
     let proposal_id = lines[0].trim().to_string();
     let voter = lines[1].trim().to_string();
-    
+
     // Parse the ranked choices
     let ranked_choices: Vec<f64> = lines[2]
         .split(',')
-        .map(|s| s.trim().parse::<f64>()
-        .map_err(|_| AppError::Other(format!("Invalid ranked choice: {}", s))))
+        .map(|s| {
+            s.trim()
+                .parse::<f64>()
+                .map_err(|_| AppError::Other(format!("Invalid ranked choice: {}", s)))
+        })
         .collect::<Result<Vec<f64>, AppError>>()?;
-    
+
     // Get the message (optional but recommended for real systems)
-    let message = if lines.len() > 3 { 
-        lines[3].trim().to_string() 
+    let message = if lines.len() > 3 {
+        lines[3].trim().to_string()
     } else {
         // Generate a canonical message for signing if none was provided
-        format!("Vote from {} on proposal {} with choices {}", 
-            voter, proposal_id, lines[2].trim())
+        format!(
+            "Vote from {} on proposal {} with choices {}",
+            voter,
+            proposal_id,
+            lines[2].trim()
+        )
     };
-    
+
     // Get the signature (required for real systems, but we'll accept placeholder for testing)
-    let signature = if lines.len() > 4 { 
-        lines[4].trim().to_string() 
+    let signature = if lines.len() > 4 {
+        lines[4].trim().to_string()
     } else {
         info!("No signature provided in vote file, using 'valid' placeholder for testing only");
         "valid".to_string() // For testing only
     };
-    
-    info!("Parsed vote for proposal {} by {} with {} ranked choices", 
-        proposal_id, voter, ranked_choices.len());
-    
+
+    info!(
+        "Parsed vote for proposal {} by {} with {} ranked choices",
+        proposal_id,
+        voter,
+        ranked_choices.len()
+    );
+
     // Create the vote object
     let vote = icn_covm::federation::FederatedVote {
         proposal_id,
@@ -1520,7 +1617,7 @@ async fn submit_vote(
         message,
         signature,
     };
-    
+
     // Configure federation
     let node_config = NodeConfig {
         port: Some(federation_port),
@@ -1529,39 +1626,50 @@ async fn submit_vote(
         capabilities: vec!["voting".to_string()],
         protocol_version: "1.0.0".to_string(),
     };
-    
+
     // Create and start network node
     let mut network_node = match NetworkNode::new(node_config).await {
         Ok(node) => node,
-        Err(e) => return Err(AppError::Federation(format!("Failed to create network node: {}", e))),
+        Err(e) => {
+            return Err(AppError::Federation(format!(
+                "Failed to create network node: {}",
+                e
+            )))
+        }
     };
-    
+
     info!("Local peer ID: {}", network_node.local_peer_id());
-    
+
     // Start the network node
     if let Err(e) = network_node.start().await {
-        return Err(AppError::Federation(format!("Failed to start network node: {}", e)));
+        return Err(AppError::Federation(format!(
+            "Failed to start network node: {}",
+            e
+        )));
     }
-    
+
     // Get a storage backend
     let mut storage = create_storage_backend(storage_backend, storage_path)?;
-    
+
     // Store the vote locally
     let federation_storage = network_node.federation_storage();
     if let Err(e) = federation_storage.save_vote(&mut storage, vote.clone(), None) {
         return Err(AppError::Federation(format!("Failed to store vote: {}", e)));
     }
-    
+
     // Submit the vote to the network
     if let Err(e) = network_node.submit_vote(vote).await {
-        return Err(AppError::Federation(format!("Failed to submit vote: {}", e)));
+        return Err(AppError::Federation(format!(
+            "Failed to submit vote: {}",
+            e
+        )));
     }
-    
+
     info!("Vote submitted successfully");
-    
+
     // Keep the node running for a short time to ensure propagation
     tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-    
+
     Ok(())
 }
 
@@ -1576,7 +1684,7 @@ async fn execute_proposal(
     force: bool,
 ) -> Result<(), AppError> {
     info!("Executing proposal: {}", proposal_id);
-    
+
     // Configure federation
     let node_config = NodeConfig {
         port: Some(federation_port),
@@ -1585,43 +1693,56 @@ async fn execute_proposal(
         capabilities: vec!["voting".to_string()],
         protocol_version: "1.0.0".to_string(),
     };
-    
+
     // Create and start network node
     let mut network_node = match NetworkNode::new(node_config).await {
         Ok(node) => node,
-        Err(e) => return Err(AppError::Federation(format!("Failed to create network node: {}", e))),
+        Err(e) => {
+            return Err(AppError::Federation(format!(
+                "Failed to create network node: {}",
+                e
+            )))
+        }
     };
-    
+
     info!("Local peer ID: {}", network_node.local_peer_id());
-    
+
     // Start the network node
     if let Err(e) = network_node.start().await {
-        return Err(AppError::Federation(format!("Failed to start network node: {}", e)));
+        return Err(AppError::Federation(format!(
+            "Failed to start network node: {}",
+            e
+        )));
     }
-    
+
     // Get a storage backend
     let storage = create_storage_backend(storage_backend, storage_path)?;
-    
+
     // Get the proposal
     let federation_storage = network_node.federation_storage();
     let proposal = match federation_storage.get_proposal(&storage, proposal_id) {
         Ok(proposal) => proposal,
-        Err(e) => return Err(AppError::Federation(format!("Failed to get proposal: {}", e))),
+        Err(e) => {
+            return Err(AppError::Federation(format!(
+                "Failed to get proposal: {}",
+                e
+            )))
+        }
     };
-    
+
     // Check if the proposal has an expiry time
     if let Some(expires_at) = proposal.expires_at {
         let current_time = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
-            
+
         if current_time < expires_at && !force {
             // If the proposal hasn't expired yet and we're not forcing execution
             let remaining_seconds = expires_at - current_time;
             let remaining_minutes = remaining_seconds / 60;
             let remaining_hours = remaining_minutes / 60;
-            
+
             return Err(AppError::Federation(
                 format!("Proposal has not expired yet. {} hours {} minutes remaining. Use --force to override.", 
                     remaining_hours, remaining_minutes % 60)
@@ -1632,106 +1753,127 @@ async fn execute_proposal(
             info!("Proposal has expired, proceeding with execution");
         }
     }
-    
+
     // Get votes
     let votes = match federation_storage.get_votes(&storage, proposal_id) {
         Ok(v) => v,
         Err(e) => {
-            error!("Failed to retrieve votes for proposal {}: {}", proposal_id, e);
+            error!(
+                "Failed to retrieve votes for proposal {}: {}",
+                proposal_id, e
+            );
             return Ok(());
         }
     };
-    
+
     if votes.is_empty() {
         println!("No votes found for proposal {}", proposal_id);
         return Ok(());
     }
-    
+
     println!("Found {} votes for proposal {}", votes.len(), proposal_id);
-    
+
     // Create mock identities for voters
     let mut voter_identities = HashMap::new();
     for vote in &votes {
         // Create a mock identity with coop information based on the voter name
         // In a real implementation, these would be retrieved from the identity system
         let mut identity = Identity::new(&vote.voter, "member");
-        
+
         // For our test, we'll use the first part of the voter name as the cooperative ID
         // In a real implementation, this would be properly associated with the voter's identity
         if let Some(idx) = vote.voter.find('_') {
             let coop_id = vote.voter[0..idx].to_string();
             identity.add_metadata("coop_id", &coop_id);
         }
-        
+
         voter_identities.insert(vote.voter.clone(), identity);
     }
-    
+
     // Convert votes to a ranked ballots format
     let ballots = federation_storage.prepare_ranked_ballots(&votes, &proposal, &voter_identities);
-    
+
     // Print information about the voting model
     match proposal.voting_model {
         VotingModel::OneMemberOneVote => {
-            println!("Using 'One Member, One Vote' model with {} votes", ballots.len());
-        },
+            println!(
+                "Using 'One Member, One Vote' model with {} votes",
+                ballots.len()
+            );
+        }
         VotingModel::OneCoopOneVote => {
             // Count unique cooperatives
-            let unique_coops: HashSet<&String> = voter_identities.values()
+            let unique_coops: HashSet<&String> = voter_identities
+                .values()
                 .filter_map(|identity| identity.get_metadata("coop_id"))
                 .collect();
-            
-            println!("Using 'One Cooperative, One Vote' model with {} votes from {} cooperatives", 
-                     ballots.len(), unique_coops.len());
+
+            println!(
+                "Using 'One Cooperative, One Vote' model with {} votes from {} cooperatives",
+                ballots.len(),
+                unique_coops.len()
+            );
         }
     }
-    
+
     // Create and configure a VM to execute the ranked vote
     let mut vm = VM::new();
-    
+
     // Prepare the stack with ballot data
     for ballot in &ballots {
         for preference in ballot {
             vm.stack.push(*preference);
         }
     }
-    
+
     // Execute ranked vote operation
     let result = vm.execute(&[icn_covm::vm::Op::RankedVote {
         candidates: proposal.options.len(),
         ballots: ballots.len(),
     }]);
-    
+
     match result {
         Ok(_) => {
             // Get the winning option index
             if let Some(winner_index) = vm.top() {
                 let winner_index = winner_index as usize;
-                let winner_option = proposal.options.get(winner_index)
-                    .ok_or_else(|| AppError::Federation(format!("Invalid winner index: {}", winner_index)))?;
-                
+                let winner_option = proposal.options.get(winner_index).ok_or_else(|| {
+                    AppError::Federation(format!("Invalid winner index: {}", winner_index))
+                })?;
+
                 info!("Proposal voting complete!");
-                info!("Winning option ({}/{}): {}", winner_index + 1, proposal.options.len(), winner_option);
-                
+                info!(
+                    "Winning option ({}/{}): {}",
+                    winner_index + 1,
+                    proposal.options.len(),
+                    winner_option
+                );
+
                 // Print out all options and votes for clarity
                 for (i, option) in proposal.options.iter().enumerate() {
                     println!("Option {}: {}", i + 1, option);
                 }
-                
+
                 println!("\nTotal votes: {}", votes.len());
-                println!("Voting model: {}", match proposal.voting_model {
-                    VotingModel::OneMemberOneVote => "One Member, One Vote",
-                    VotingModel::OneCoopOneVote => "One Cooperative, One Vote",
-                });
+                println!(
+                    "Voting model: {}",
+                    match proposal.voting_model {
+                        VotingModel::OneMemberOneVote => "One Member, One Vote",
+                        VotingModel::OneCoopOneVote => "One Cooperative, One Vote",
+                    }
+                );
                 println!("Eligible votes counted: {}", ballots.len());
                 println!("WINNER: Option {} - {}", winner_index + 1, winner_option);
             } else {
-                return Err(AppError::Federation("No result from ranked vote".to_string()));
+                return Err(AppError::Federation(
+                    "No result from ranked vote".to_string(),
+                ));
             }
         }
         Err(e) => {
             return Err(AppError::VM(e));
         }
     }
-    
+
     Ok(())
 }

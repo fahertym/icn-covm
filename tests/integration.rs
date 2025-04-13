@@ -75,9 +75,9 @@ fn test_governance_operations() -> Result<(), Box<dyn std::error::Error>> {
         Op::Store("i".to_string()),
         Op::While {
             condition: vec![
-                Op::Load("i".to_string()), 
-                Op::Push(5.0), 
-                Op::Lt,  // i < 5, returns non-zero to continue loop
+                Op::Load("i".to_string()),
+                Op::Push(5.0),
+                Op::Lt, // i < 5, returns non-zero to continue loop
             ],
             body: vec![
                 Op::Load("i".to_string()),
@@ -114,11 +114,11 @@ fn test_governance_operations() -> Result<(), Box<dyn std::error::Error>> {
     let stack = vm.get_stack();
     println!("Stack: {:?}", stack);
     println!("Stack length: {}", stack.len());
-    
+
     // Check that the stack contains the expected values somewhere
     // We don't assert the exact stack length as it might change with implementation details
     assert!(stack.contains(&42.0)); // Result of Match operation
-    assert!(stack.contains(&5.0));  // Result of Break test
+    assert!(stack.contains(&5.0)); // Result of Break test
     assert!(stack.contains(&12.0)); // Result of Continue test (sum of 2+4+6)
 
     // Verify memory

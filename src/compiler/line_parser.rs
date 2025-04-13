@@ -1,4 +1,4 @@
-use super::{common, CompilerError, SourcePosition, macros::ProposalLifecycleMacro};
+use super::{common, macros::ProposalLifecycleMacro, CompilerError, SourcePosition};
 use crate::vm::Op;
 use chrono;
 
@@ -105,9 +105,9 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
         "return" => Ok(Op::Return),
         "increment_reputation" => {
             let identity_id = parts.next().ok_or(CompilerError::MissingParameter(
-                "increment_reputation".to_string(), 
+                "increment_reputation".to_string(),
                 pos.line,
-                pos.column
+                pos.column,
             ))?;
 
             // Parse optional parameters
@@ -121,7 +121,7 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
                         CompilerError::InvalidParameterValue(
                             "amount".to_string(),
                             pos.line,
-                            common::adjusted_position(pos, line, value_str).column
+                            common::adjusted_position(pos, line, value_str).column,
                         )
                     })?);
                 } else if param.starts_with("reason=") {
@@ -134,7 +134,7 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
                 amount,
                 reason,
             })
-        },
+        }
         "call" => {
             let fn_name = parts
                 .next()
@@ -154,7 +154,7 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
 
             let ballots_str = parts.next().ok_or(CompilerError::InvalidFunctionFormat(
                 "rankedvote requires 'ballots' parameter".to_string(),
-                pos.line, 
+                pos.line,
                 pos.column,
             ))?;
 
@@ -177,8 +177,11 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
             })?;
 
             // Create RankedVote operation
-            Ok(Op::RankedVote { candidates, ballots })
-        },
+            Ok(Op::RankedVote {
+                candidates,
+                ballots,
+            })
+        }
         "liquiddelegate" => {
             // Parse liquiddelegate command with required parameters: from and to
             let from_str = parts.next().ok_or(CompilerError::InvalidFunctionFormat(
@@ -189,16 +192,16 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
 
             let to_str = parts.next().ok_or(CompilerError::InvalidFunctionFormat(
                 "liquiddelegate requires 'to' parameter".to_string(),
-                pos.line, 
+                pos.line,
                 pos.column,
             ))?;
 
             // Create LiquidDelegate operation
-            Ok(Op::LiquidDelegate { 
-                from: from_str.to_string(), 
-                to: to_str.to_string() 
+            Ok(Op::LiquidDelegate {
+                from: from_str.to_string(),
+                to: to_str.to_string(),
             })
-        },
+        }
         "votethreshold" => {
             // Parse votethreshold command with required threshold parameter
             let threshold_str = parts.next().ok_or(CompilerError::InvalidFunctionFormat(
@@ -218,7 +221,7 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
 
             // Create VoteThreshold operation
             Ok(Op::VoteThreshold(threshold))
-        },
+        }
         "quorumthreshold" => {
             // Parse quorumthreshold command with required threshold parameter
             let threshold_str = parts.next().ok_or(CompilerError::InvalidFunctionFormat(
@@ -238,7 +241,7 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
 
             // Create QuorumThreshold operation
             Ok(Op::QuorumThreshold(threshold))
-        },
+        }
         "storep" => {
             let key = parts.next().ok_or(CompilerError::MissingVariable(
                 "storep".to_string(),
@@ -246,7 +249,7 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
                 pos.column,
             ))?;
             Ok(Op::StoreP(key.to_string()))
-        },
+        }
         "loadp" => {
             let key = parts.next().ok_or(CompilerError::MissingVariable(
                 "loadp".to_string(),
@@ -254,7 +257,7 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
                 pos.column,
             ))?;
             Ok(Op::LoadP(key.to_string()))
-        },
+        }
         "loadversionp" => {
             // Parse loadversionp command with key and version number
             let key = parts.next().ok_or(CompilerError::InvalidFunctionFormat(
@@ -262,13 +265,13 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
                 pos.line,
                 pos.column,
             ))?;
-            
+
             let version_str = parts.next().ok_or(CompilerError::InvalidFunctionFormat(
                 "loadversionp requires version parameter".to_string(),
                 pos.line,
                 pos.column,
             ))?;
-            
+
             let version = version_str.parse::<u64>().map_err(|_| {
                 CompilerError::InvalidFunctionFormat(
                     format!("Version must be a positive integer, got: {}", version_str),
@@ -276,12 +279,12 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
                     pos.column,
                 )
             })?;
-            
+
             Ok(Op::LoadVersionP {
                 key: key.to_string(),
                 version,
             })
-        },
+        }
         "listversionsP" => {
             // Parse listversionsP command with key parameter
             let key = parts.next().ok_or(CompilerError::InvalidFunctionFormat(
@@ -289,9 +292,9 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
                 pos.line,
                 pos.column,
             ))?;
-            
+
             Ok(Op::ListVersionsP(key.to_string()))
-        },
+        }
         "diffversionsp" => {
             // Parse diffversionsp command with key and two version numbers
             let key = parts.next().ok_or(CompilerError::InvalidFunctionFormat(
@@ -299,19 +302,19 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
                 pos.line,
                 pos.column,
             ))?;
-            
+
             let v1_str = parts.next().ok_or(CompilerError::InvalidFunctionFormat(
                 "diffversionsp requires first version parameter".to_string(),
                 pos.line,
                 pos.column,
             ))?;
-            
+
             let v2_str = parts.next().ok_or(CompilerError::InvalidFunctionFormat(
                 "diffversionsp requires second version parameter".to_string(),
                 pos.line,
                 pos.column,
             ))?;
-            
+
             let v1 = v1_str.parse::<u64>().map_err(|_| {
                 CompilerError::InvalidFunctionFormat(
                     format!("First version must be a positive integer, got: {}", v1_str),
@@ -319,7 +322,7 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
                     pos.column,
                 )
             })?;
-            
+
             let v2 = v2_str.parse::<u64>().map_err(|_| {
                 CompilerError::InvalidFunctionFormat(
                     format!("Second version must be a positive integer, got: {}", v2_str),
@@ -327,13 +330,13 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
                     pos.column,
                 )
             })?;
-            
+
             Ok(Op::DiffVersionsP {
                 key: key.to_string(),
                 v1,
                 v2,
             })
-        },
+        }
         "verifyidentity" => {
             // Parse verifyidentity command with required parameters
             let identity_id = parts.next().ok_or(CompilerError::InvalidFunctionFormat(
@@ -341,22 +344,22 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
                 pos.line,
                 pos.column,
             ))?;
-            
+
             // Extract message parameter from quoted string
             let rest_of_line = line[line.find(identity_id).unwrap() + identity_id.len()..].trim();
-            
+
             // Use a simple parser to extract two quoted strings
             if let Some(quote1_start) = rest_of_line.find('"') {
                 if let Some(quote1_end) = rest_of_line[quote1_start + 1..].find('"') {
                     let quote1_end = quote1_start + 1 + quote1_end;
                     let message = rest_of_line[quote1_start + 1..quote1_end].to_string();
-                    
+
                     if let Some(quote2_start) = rest_of_line[quote1_end + 1..].find('"') {
                         let quote2_start = quote1_end + 1 + quote2_start;
                         if let Some(quote2_end) = rest_of_line[quote2_start + 1..].find('"') {
                             let quote2_end = quote2_start + 1 + quote2_end;
                             let signature = rest_of_line[quote2_start + 1..quote2_end].to_string();
-                            
+
                             return Ok(Op::VerifyIdentity {
                                 identity_id: identity_id.to_string(),
                                 message,
@@ -366,13 +369,13 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
                     }
                 }
             }
-            
+
             Err(CompilerError::InvalidFunctionFormat(
                 "verifyidentity requires quoted message and signature parameters".to_string(),
                 pos.line,
                 pos.column,
             ))
-        },
+        }
         "checkmembership" => {
             // Parse checkmembership command with required parameters
             let identity_id = parts.next().ok_or(CompilerError::InvalidFunctionFormat(
@@ -380,18 +383,18 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
                 pos.line,
                 pos.column,
             ))?;
-            
+
             let namespace = parts.next().ok_or(CompilerError::InvalidFunctionFormat(
                 "checkmembership requires namespace parameter".to_string(),
                 pos.line,
                 pos.column,
             ))?;
-            
+
             Ok(Op::CheckMembership {
                 identity_id: identity_id.to_string(),
                 namespace: namespace.to_string(),
             })
-        },
+        }
         "checkdelegation" => {
             // Parse checkdelegation command with required parameters
             let delegator_id = parts.next().ok_or(CompilerError::InvalidFunctionFormat(
@@ -399,18 +402,18 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
                 pos.line,
                 pos.column,
             ))?;
-            
+
             let delegate_id = parts.next().ok_or(CompilerError::InvalidFunctionFormat(
                 "checkdelegation requires delegate_id parameter".to_string(),
                 pos.line,
                 pos.column,
             ))?;
-            
+
             Ok(Op::CheckDelegation {
                 delegator_id: delegator_id.to_string(),
                 delegate_id: delegate_id.to_string(),
             })
-        },
+        }
         "createresource" => {
             let resource_id = parts.next().ok_or(CompilerError::MissingVariable(
                 "createresource".to_string(),
@@ -418,26 +421,26 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
                 pos.column,
             ))?;
             Ok(Op::CreateResource(resource_id.to_string()))
-        },
+        }
         "mint" => {
             let resource = parts.next().ok_or(CompilerError::MissingVariable(
                 "mint (resource)".to_string(),
                 pos.line,
                 pos.column,
             ))?;
-            
+
             let account = parts.next().ok_or(CompilerError::MissingVariable(
                 "mint (account)".to_string(),
                 pos.line,
                 pos.column,
             ))?;
-            
+
             let amount_str = parts.next().ok_or(CompilerError::MissingVariable(
                 "mint (amount)".to_string(),
                 pos.line,
                 pos.column,
             ))?;
-            
+
             let amount = amount_str.parse::<f64>().map_err(|_| {
                 CompilerError::InvalidFunctionFormat(
                     format!("Invalid mint amount: {}", amount_str),
@@ -445,7 +448,7 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
                     pos.column,
                 )
             })?;
-            
+
             // Reason is optional
             let reason = if let Some(inner) = line.find('"') {
                 let inner = &line[inner + 1..line.rfind('"').unwrap_or(line.len())];
@@ -453,34 +456,39 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
             } else {
                 None
             };
-            
-            Ok(Op::Mint { resource: resource.to_string(), account: account.to_string(), amount, reason })
-        },
+
+            Ok(Op::Mint {
+                resource: resource.to_string(),
+                account: account.to_string(),
+                amount,
+                reason,
+            })
+        }
         "transfer" => {
             let resource = parts.next().ok_or(CompilerError::MissingVariable(
                 "transfer (resource)".to_string(),
                 pos.line,
                 pos.column,
             ))?;
-            
+
             let from = parts.next().ok_or(CompilerError::MissingVariable(
                 "transfer (from)".to_string(),
                 pos.line,
                 pos.column,
             ))?;
-            
+
             let to = parts.next().ok_or(CompilerError::MissingVariable(
                 "transfer (to)".to_string(),
                 pos.line,
                 pos.column,
             ))?;
-            
+
             let amount_str = parts.next().ok_or(CompilerError::MissingVariable(
                 "transfer (amount)".to_string(),
                 pos.line,
                 pos.column,
             ))?;
-            
+
             let amount = amount_str.parse::<f64>().map_err(|_| {
                 CompilerError::InvalidFunctionFormat(
                     format!("Invalid transfer amount: {}", amount_str),
@@ -488,7 +496,7 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
                     pos.column,
                 )
             })?;
-            
+
             // Reason is optional
             let reason = if let Some(inner) = line.find('"') {
                 let inner = &line[inner + 1..line.rfind('"').unwrap_or(line.len())];
@@ -496,34 +504,34 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
             } else {
                 None
             };
-            
-            Ok(Op::Transfer { 
-                resource: resource.to_string(), 
-                from: from.to_string(), 
-                to: to.to_string(), 
-                amount, 
-                reason 
+
+            Ok(Op::Transfer {
+                resource: resource.to_string(),
+                from: from.to_string(),
+                to: to.to_string(),
+                amount,
+                reason,
             })
-        },
+        }
         "burn" => {
             let resource = parts.next().ok_or(CompilerError::MissingVariable(
                 "burn (resource)".to_string(),
                 pos.line,
                 pos.column,
             ))?;
-            
+
             let account = parts.next().ok_or(CompilerError::MissingVariable(
                 "burn (account)".to_string(),
                 pos.line,
                 pos.column,
             ))?;
-            
+
             let amount_str = parts.next().ok_or(CompilerError::MissingVariable(
                 "burn (amount)".to_string(),
                 pos.line,
                 pos.column,
             ))?;
-            
+
             let amount = amount_str.parse::<f64>().map_err(|_| {
                 CompilerError::InvalidFunctionFormat(
                     format!("Invalid burn amount: {}", amount_str),
@@ -531,7 +539,7 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
                     pos.column,
                 )
             })?;
-            
+
             // Reason is optional
             let reason = if let Some(inner) = line.find('"') {
                 let inner = &line[inner + 1..line.rfind('"').unwrap_or(line.len())];
@@ -539,27 +547,36 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
             } else {
                 None
             };
-            
-            Ok(Op::Burn { resource: resource.to_string(), account: account.to_string(), amount, reason })
-        },
+
+            Ok(Op::Burn {
+                resource: resource.to_string(),
+                account: account.to_string(),
+                amount,
+                reason,
+            })
+        }
         "balance" => {
             let resource = parts.next().ok_or(CompilerError::MissingVariable(
                 "balance (resource)".to_string(),
                 pos.line,
                 pos.column,
             ))?;
-            
+
             let account = parts.next().ok_or(CompilerError::MissingVariable(
                 "balance (account)".to_string(),
                 pos.line,
                 pos.column,
             ))?;
-            
-            Ok(Op::Balance { resource: resource.to_string(), account: account.to_string() })
-        },
+
+            Ok(Op::Balance {
+                resource: resource.to_string(),
+                account: account.to_string(),
+            })
+        }
         "proposal_lifecycle" => {
             // Format: proposal_lifecycle "id" quorum=X threshold=Y title="Title" author="Author" { ... }
-            let proposal_id = parts.next()
+            let proposal_id = parts
+                .next()
                 .ok_or(CompilerError::MissingProposalId(pos.line, pos.column))?
                 .trim_matches('"')
                 .to_string();
@@ -573,19 +590,23 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
             // Parse optional parameters
             while let Some(param) = parts.next() {
                 if param.starts_with("quorum=") {
-                    quorum = param.trim_start_matches("quorum=")
+                    quorum = param
+                        .trim_start_matches("quorum=")
                         .parse::<f64>()
                         .map_err(|_| CompilerError::InvalidQuorumValue(pos.line, pos.column))?;
                 } else if param.starts_with("threshold=") {
-                    threshold = param.trim_start_matches("threshold=")
+                    threshold = param
+                        .trim_start_matches("threshold=")
                         .parse::<f64>()
                         .map_err(|_| CompilerError::InvalidThresholdValue(pos.line, pos.column))?;
                 } else if param.starts_with("title=") {
-                    title = param.trim_start_matches("title=")
+                    title = param
+                        .trim_start_matches("title=")
                         .trim_matches('"')
                         .to_string();
                 } else if param.starts_with("author=") {
-                    created_by = param.trim_start_matches("author=")
+                    created_by = param
+                        .trim_start_matches("author=")
                         .trim_matches('"')
                         .to_string();
                 }
@@ -601,12 +622,12 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
                 created_by,
                 created_at,
                 Vec::new(), // Passed block will be populated by parse_proposal_block
-                None, // Failed block will be populated by parse_proposal_block
+                None,       // Failed block will be populated by parse_proposal_block
             );
 
             // Return a special op that will be expanded later
             Ok(Op::Macro("proposal_lifecycle".to_string()))
-        },
+        }
         _ => Err(CompilerError::UnknownCommand(
             command.to_string(),
             pos.line,
@@ -658,46 +679,56 @@ pub fn parse_block(
                 // Handle if passed block
                 let mut if_passed_lines = Vec::new();
                 *start_line += 1;
-                
+
                 while *start_line < lines.len() {
                     let if_line = &lines[*start_line];
                     let if_indent = common::get_indent(if_line);
-                    
+
                     if !if_line.trim().is_empty() && if_indent <= base_indent {
                         break;
                     } else if if_line.trim().is_empty() {
                         *start_line += 1;
                         continue;
                     }
-                    
+
                     if_passed_lines.push(if_line.clone());
                     *start_line += 1;
                 }
-                
+
                 // Create a special op for if passed block
-                Op::IfPassed(parse_block(&if_passed_lines, &mut 0, base_indent + 1, current_pos)?)
+                Op::IfPassed(parse_block(
+                    &if_passed_lines,
+                    &mut 0,
+                    base_indent + 1,
+                    current_pos,
+                )?)
             } else if line.trim() == "else:" {
                 // Handle else block
                 let mut else_lines = Vec::new();
                 *start_line += 1;
-                
+
                 while *start_line < lines.len() {
                     let else_line = &lines[*start_line];
                     let else_indent = common::get_indent(else_line);
-                    
+
                     if !else_line.trim().is_empty() && else_indent <= base_indent {
                         break;
                     } else if else_line.trim().is_empty() {
                         *start_line += 1;
                         continue;
                     }
-                    
+
                     else_lines.push(else_line.clone());
                     *start_line += 1;
                 }
-                
+
                 // Create a special op for else block
-                Op::Else(parse_block(&else_lines, &mut 0, base_indent + 1, current_pos)?)
+                Op::Else(parse_block(
+                    &else_lines,
+                    &mut 0,
+                    base_indent + 1,
+                    current_pos,
+                )?)
             } else {
                 return Err(CompilerError::UnknownBlockType(
                     line.trim().to_string(),
@@ -728,11 +759,12 @@ pub fn parse_block(
 // Helper to parse quoted strings (handles both single and double quotes)
 fn parse_quoted_string(input: &str) -> Result<String, CompilerError> {
     let trimmed = input.trim();
-    
-    if (trimmed.starts_with('"') && trimmed.ends_with('"')) || 
-       (trimmed.starts_with('\'') && trimmed.ends_with('\'')) {
+
+    if (trimmed.starts_with('"') && trimmed.ends_with('"'))
+        || (trimmed.starts_with('\'') && trimmed.ends_with('\''))
+    {
         // Remove the quotes
-        let result = &trimmed[1..trimmed.len()-1];
+        let result = &trimmed[1..trimmed.len() - 1];
         Ok(result.to_string())
     } else {
         Err(CompilerError::SyntaxError {

@@ -1,16 +1,16 @@
+use crate::compiler::parse_dsl;
+use crate::identity::Identity;
+use crate::storage::auth::AuthContext;
+use crate::storage::errors::StorageError;
+use crate::storage::traits::{Storage, StorageBackend};
+use crate::vm::Op;
+use crate::vm::VM;
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
-use crate::storage::traits::{StorageBackend, Storage};
-use crate::storage::errors::StorageError;
-use crate::storage::auth::AuthContext;
-use std::collections::HashMap;
-use std::fmt::Debug;
-use crate::vm::VM;
-use crate::compiler::parse_dsl;
-use crate::vm::Op;
 use serde_json; // Import serde_json for serialization
-use crate::identity::Identity; // Import the actual Identity struct
-// Placeholder for attachment metadata, replace with actual type later
+use std::collections::HashMap;
+use std::fmt::Debug; // Import the actual Identity struct
+                     // Placeholder for attachment metadata, replace with actual type later
 type Attachment = String;
 // Use String for IDs
 type CommentId = String;
@@ -103,7 +103,7 @@ pub struct ProposalLifecycle {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Comment {
-    pub id: CommentId, // Now String
+    pub id: CommentId,           // Now String
     pub proposal_id: ProposalId, // Now String
     pub author: Identity,
     pub timestamp: DateTime<Utc>,
@@ -149,7 +149,7 @@ impl ProposalLifecycle {
     }
 
     pub fn start_voting(&mut self, voting_duration: Duration) {
-         // TODO: Add checks (e.g., required participants) before allowing transition
+        // TODO: Add checks (e.g., required participants) before allowing transition
         if self.state == ProposalState::OpenForFeedback {
             self.state = ProposalState::Voting;
             self.expires_at = Some(Utc::now() + voting_duration);
@@ -157,47 +157,54 @@ impl ProposalLifecycle {
         }
     }
 
-     pub fn execute(&mut self) {
-        if self.state == ProposalState::Voting { // Add logic for successful vote
-             self.state = ProposalState::Executed;
-             self.history.push((Utc::now(), self.state.clone()));
+    pub fn execute(&mut self) {
+        if self.state == ProposalState::Voting {
+            // Add logic for successful vote
+            self.state = ProposalState::Executed;
+            self.history.push((Utc::now(), self.state.clone()));
         }
-     }
+    }
 
-     pub fn reject(&mut self) {
-         if self.state == ProposalState::Voting { // Add logic for failed vote
-             self.state = ProposalState::Rejected;
-             self.history.push((Utc::now(), self.state.clone()));
-         }
-     }
+    pub fn reject(&mut self) {
+        if self.state == ProposalState::Voting {
+            // Add logic for failed vote
+            self.state = ProposalState::Rejected;
+            self.history.push((Utc::now(), self.state.clone()));
+        }
+    }
 
-     pub fn expire(&mut self) {
-         if self.state == ProposalState::Voting && self.expires_at.map_or(false, |exp| Utc::now() > exp) {
+    pub fn expire(&mut self) {
+        if self.state == ProposalState::Voting
+            && self.expires_at.map_or(false, |exp| Utc::now() > exp)
+        {
             self.state = ProposalState::Expired;
             self.history.push((Utc::now(), self.state.clone()));
-         }
-     }
+        }
+    }
 
-     pub fn update_version(&mut self) {
+    pub fn update_version(&mut self) {
         // Logic for handling updates, potentially resetting state or requiring new votes?
         self.current_version += 1;
         // Maybe move back to Draft or OpenForFeedback? Depends on governance rules.
         self.history.push((Utc::now(), self.state.clone()));
-     }
+    }
 
     // Tally votes from storage
     pub fn tally_votes<S>(
         &self,
         vm: &mut VM<S>,
-        auth_context: Option<&AuthContext>
+        auth_context: Option<&AuthContext>,
     ) -> Result<HashMap<String, Vote>, Box<dyn std::error::Error>>
     where
-        S: Storage + Send + Sync + Clone + Debug + 'static
+        S: Storage + Send + Sync + Clone + Debug + 'static,
     {
         if self.state != ProposalState::Voting {
             return Err(format!("Proposal {} is not in Voting state", self.id).into());
         }
-        let storage = vm.storage_backend.as_ref().ok_or("Storage backend not configured")?;
+        let storage = vm
+            .storage_backend
+            .as_ref()
+            .ok_or("Storage backend not configured")?;
         let auth_context = vm.auth_context.as_ref();
         let namespace = "governance";
         let prefix = format!("proposals/{}/votes/", self.id);
@@ -220,7 +227,10 @@ impl ProposalLifecycle {
                         Ok(VoteChoice::Yes) => yes_votes += 1,
                         Ok(VoteChoice::No) => no_votes += 1,
                         Ok(VoteChoice::Abstain) => abstain_votes += 1,
-                        Err(_) => eprintln!("Warning: Invalid vote choice string '{}' found in storage for key {}", vote_str, key),
+                        Err(_) => eprintln!(
+                            "Warning: Invalid vote choice string '{}' found in storage for key {}",
+                            vote_str, key
+                        ),
                     }
                 }
                 Err(e) => {
@@ -242,10 +252,10 @@ impl ProposalLifecycle {
         &self,
         vm: &mut VM<S>,
         auth_context: Option<&AuthContext>,
-        votes: &HashMap<String, Vote>
+        votes: &HashMap<String, Vote>,
     ) -> Result<bool, Box<dyn std::error::Error>>
     where
-        S: Storage + Send + Sync + Clone + Debug + 'static
+        S: Storage + Send + Sync + Clone + Debug + 'static,
     {
         // 1. Quorum Check: Total participating votes (yes + no) >= quorum
         let total_votes = votes.get("yes").unwrap_or(&0) + votes.get("no").unwrap_or(&0);
@@ -258,11 +268,17 @@ impl ProposalLifecycle {
         // TODO: Handle percentage thresholds (yes_votes as f64 / total_votes as f64 >= threshold_percentage)
         let yes_votes = votes.get("yes").unwrap_or(&0);
         if yes_votes < &self.threshold {
-            println!("Threshold not met: {} yes votes < {}", yes_votes, self.threshold);
+            println!(
+                "Threshold not met: {} yes votes < {}",
+                yes_votes, self.threshold
+            );
             return Ok(false);
         }
 
-        println!("Proposal passed: Quorum ({}/{}) and Threshold ({}/{}) met.", total_votes, self.quorum, yes_votes, self.threshold);
+        println!(
+            "Proposal passed: Quorum ({}/{}) and Threshold ({}/{}) met.",
+            total_votes, self.quorum, yes_votes, self.threshold
+        );
         Ok(true)
     }
 
@@ -272,25 +288,34 @@ impl ProposalLifecycle {
     fn execute_proposal_logic<S>(
         &self,
         vm: &mut VM<S>, // Pass original VM mutably to allow commit/rollback
-        auth_context: Option<&AuthContext>
+        auth_context: Option<&AuthContext>,
     ) -> Result<ExecutionStatus, Box<dyn std::error::Error>>
     where
-        S: Storage + Send + Sync + Clone + Debug + 'static
+        S: Storage + Send + Sync + Clone + Debug + 'static,
     {
-        println!("[EXEC] Preparing sandboxed execution for proposal {}", self.id);
+        println!(
+            "[EXEC] Preparing sandboxed execution for proposal {}",
+            self.id
+        );
 
-        // --- Create VM Fork --- 
+        // --- Create VM Fork ---
         let mut fork_vm = vm.fork()?; // fork() begins the transaction on original VM's storage
         println!("[EXEC] VM Fork created.");
 
-        // --- Logic Loading (using fork's context) --- 
+        // --- Logic Loading (using fork's context) ---
         let logic_dsl = {
-            let storage = fork_vm.storage_backend.as_ref().ok_or("Fork storage backend unavailable")?;
+            let storage = fork_vm
+                .storage_backend
+                .as_ref()
+                .ok_or("Fork storage backend unavailable")?;
             let auth_context = fork_vm.auth_context.as_ref();
             let namespace = "governance"; // Assuming logic is always in governance namespace
             let logic_key = format!("proposals/{}/attachments/logic", self.id);
-            println!("[EXEC] Loading logic from {}/{} within fork...", namespace, logic_key);
-            
+            println!(
+                "[EXEC] Loading logic from {}/{} within fork...",
+                namespace, logic_key
+            );
+
             match storage.get(auth_context, namespace, &logic_key) {
                 Ok(bytes) => {
                     let dsl = String::from_utf8(bytes)
@@ -304,18 +329,20 @@ impl ProposalLifecycle {
                     }
                 }
                 Err(StorageError::NotFound { .. }) => {
-                    println!("[EXEC] No logic attachment found at {}. Skipping execution.", logic_key);
+                    println!(
+                        "[EXEC] No logic attachment found at {}. Skipping execution.",
+                        logic_key
+                    );
                     None // Treat missing logic as skippable
                 }
                 Err(e) => return Err(format!("Failed to load logic attachment: {}", e).into()),
             }
         };
 
-        // --- Execution (within Fork) & Transaction Handling --- 
+        // --- Execution (within Fork) & Transaction Handling ---
         let execution_status = if let Some(dsl) = logic_dsl {
             println!("[EXEC] Parsing logic DSL within fork...");
-            let ops = parse_dsl(&dsl)
-                .map_err(|e| format!("Failed to parse logic DSL: {}", e))?;
+            let ops = parse_dsl(&dsl).map_err(|e| format!("Failed to parse logic DSL: {}", e))?;
             println!("[EXEC] Logic parsed into {} Ops within fork.", ops.len());
 
             println!("[EXEC] Executing parsed Ops within fork VM...");
@@ -328,14 +355,18 @@ impl ProposalLifecycle {
                 Err(e) => {
                     let error_message = format!("Runtime error during fork execution: {}", e);
                     eprintln!("[EXEC] {}", error_message);
-                    println!("[EXEC] Rolling back transaction on original VM due to fork failure...");
+                    println!(
+                        "[EXEC] Rolling back transaction on original VM due to fork failure..."
+                    );
                     vm.rollback_fork_transaction()?; // Rollback original VM's transaction
                     ExecutionStatus::Failure(error_message)
                 }
             }
         } else {
             // No logic to execute, commit the (empty) transaction
-            println!("[EXEC] No logic DSL found/loaded. Committing empty transaction on original VM.");
+            println!(
+                "[EXEC] No logic DSL found/loaded. Committing empty transaction on original VM."
+            );
             vm.commit_fork_transaction()?;
             ExecutionStatus::Success
         };
@@ -343,15 +374,15 @@ impl ProposalLifecycle {
         Ok(execution_status)
     }
 
-     // Updated state transition for execution
-     pub fn transition_to_executed<S>(
-         &mut self,
-         vm: &mut VM<S>,
-         auth_context: Option<&AuthContext>
-     ) -> Result<bool, Box<dyn std::error::Error>>
-     where
-         S: Storage + Send + Sync + Clone + Debug + 'static
-     {
+    // Updated state transition for execution
+    pub fn transition_to_executed<S>(
+        &mut self,
+        vm: &mut VM<S>,
+        auth_context: Option<&AuthContext>,
+    ) -> Result<bool, Box<dyn std::error::Error>>
+    where
+        S: Storage + Send + Sync + Clone + Debug + 'static,
+    {
         if self.state == ProposalState::Voting {
             let votes = self.tally_votes(vm, auth_context)?;
             let passed = self.check_passed(vm, auth_context, &votes)?;
@@ -367,33 +398,39 @@ impl ProposalLifecycle {
                 match exec_result {
                     Ok(_) => {
                         println!("Proposal {} execution completed successfully.", self.id);
-                    },
+                    }
                     Err(e) => {
                         println!("Proposal {} execution failed: {}", self.id, e);
                         // TODO: Set execution_status to Failed
                     }
                 }
-                
+
                 Ok(true)
             } else {
-                println!("Proposal {} did not meet the voting requirements to execute.", self.id);
+                println!(
+                    "Proposal {} did not meet the voting requirements to execute.",
+                    self.id
+                );
                 Ok(false)
             }
         } else {
-            println!("Proposal {} not in Voting state, cannot transition to Executed.", self.id);
+            println!(
+                "Proposal {} not in Voting state, cannot transition to Executed.",
+                self.id
+            );
             Ok(false)
         }
-     }
+    }
 
-     // Updated state transition for rejection
-     pub fn transition_to_rejected<S>(
-         &mut self,
-         vm: &mut VM<S>,
-         auth_context: Option<&AuthContext>
-     ) -> Result<bool, Box<dyn std::error::Error>>
-     where
-         S: Storage + Send + Sync + Clone + Debug + 'static
-     {
+    // Updated state transition for rejection
+    pub fn transition_to_rejected<S>(
+        &mut self,
+        vm: &mut VM<S>,
+        auth_context: Option<&AuthContext>,
+    ) -> Result<bool, Box<dyn std::error::Error>>
+    where
+        S: Storage + Send + Sync + Clone + Debug + 'static,
+    {
         if self.state == ProposalState::Voting {
             let votes = self.tally_votes(vm, auth_context)?;
             let passed = self.check_passed(vm, auth_context, &votes)?;
@@ -403,42 +440,56 @@ impl ProposalLifecycle {
                 println!("Proposal {} state transitioning to Rejected.", self.id);
                 Ok(true)
             } else {
-                println!("Proposal {} met the voting requirements to execute, cannot reject.", self.id);
+                println!(
+                    "Proposal {} met the voting requirements to execute, cannot reject.",
+                    self.id
+                );
                 Ok(false)
             }
         } else {
-            println!("Proposal {} not in Voting state, cannot transition to Rejected.", self.id);
+            println!(
+                "Proposal {} not in Voting state, cannot transition to Rejected.",
+                self.id
+            );
             Ok(false)
         }
-     }
+    }
 
-      // Updated state transition for expiration
-     pub fn transition_to_expired<S>(
-         &mut self,
-         vm: &mut VM<S>,
-         auth_context: Option<&AuthContext>
-     ) -> Result<bool, Box<dyn std::error::Error>>
-     where
-         S: Storage + Send + Sync + Clone + Debug + 'static
-     {
-         if self.state == ProposalState::Voting && self.expires_at.map_or(false, |exp| Utc::now() > exp) {
+    // Updated state transition for expiration
+    pub fn transition_to_expired<S>(
+        &mut self,
+        vm: &mut VM<S>,
+        auth_context: Option<&AuthContext>,
+    ) -> Result<bool, Box<dyn std::error::Error>>
+    where
+        S: Storage + Send + Sync + Clone + Debug + 'static,
+    {
+        if self.state == ProposalState::Voting
+            && self.expires_at.map_or(false, |exp| Utc::now() > exp)
+        {
             let votes = self.tally_votes(vm, auth_context)?;
             let passed = self.check_passed(vm, auth_context, &votes)?;
             if passed {
                 println!("Proposal {} passed but expired before execution.", self.id);
                 // Leave execution_status as None or set to Failure("Expired")?
             } else {
-                println!("Proposal {} did not have enough votes before expiry.", self.id);
+                println!(
+                    "Proposal {} did not have enough votes before expiry.",
+                    self.id
+                );
             }
             self.state = ProposalState::Expired;
             self.history.push((Utc::now(), self.state.clone()));
             println!("Proposal {} state transitioning to Expired.", self.id);
             Ok(true)
         } else {
-            println!("Proposal {} not in Voting state, cannot transition to Expired.", self.id);
+            println!(
+                "Proposal {} not in Voting state, cannot transition to Expired.",
+                self.id
+            );
             Ok(false)
         }
-     }
+    }
 }
 
 #[cfg(test)]
@@ -459,10 +510,10 @@ mod tests {
             "prop-123".to_string(),
             creator_id,
             "Test Proposal".to_string(),
-            10, // quorum
-            5,  // threshold
+            10,                      // quorum
+            5,                       // threshold
             Some(Duration::days(7)), // discussion_duration
-            None, // required_participants
+            None,                    // required_participants
         )
     }
 
@@ -505,7 +556,10 @@ mod tests {
         assert_eq!(proposal.history[2].1, ProposalState::Voting);
         assert!(proposal.expires_at.is_some());
         let expires_at = proposal.expires_at.unwrap();
-        assert!(expires_at > expected_expiry_min && expires_at < expected_expiry_max, "Expiry time not within expected range");
+        assert!(
+            expires_at > expected_expiry_min && expires_at < expected_expiry_max,
+            "Expiry time not within expected range"
+        );
     }
 
     #[test]
@@ -535,4 +589,4 @@ mod tests {
 
     // TODO: Add tests for tally_votes and check_passed (might require mocking storage or VM)
     // TODO: Add tests for execute/reject/expire transitions (likely better in integration tests)
-} 
+}

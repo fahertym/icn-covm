@@ -1,7 +1,6 @@
-use serde::{Serialize, Deserialize};
-use did_key::{generate, Ed25519KeyPair, CONFIG_LD_PUBLIC};
-use ed25519_dalek::{SigningKey, Signature, VerifyingKey, Signer, Verifier};
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use rand::rngs::OsRng;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 // Error type for identity operations
@@ -19,8 +18,8 @@ pub enum IdentityError {
     InvalidKeyMaterial,
     #[error("Serialization error: {0}")]
     Serialization(String),
-    #[error("DID-Key error: {0}")]
-    DidKeyError(String),
+    #[error("Multibase error: {0}")]
+    MultibaseError(String),
     #[error("Profile field missing: {0}")]
     ProfileFieldMissing(String),
 }
@@ -37,16 +36,19 @@ pub struct Profile {
     pub other_fields: HashMap<String, serde_json::Value>,
 }
 
-/// Represents a digital identity based on did:key with associated profile.
+/// Represents a digital identity with associated profile.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Identity {
     /// The decentralized identifier (did:key:...). Required.
     pub did: String,
-    /// The keypair (keep private key secret!). Required.
-    keypair: Ed25519KeyPair, 
+    /// Public key bytes (stored for verification).
+    #[serde(with = "serde_bytes")]
+    pub public_key_bytes: Vec<u8>,
+    /// Private key bytes (should be kept secret).
+    #[serde(with = "serde_bytes", skip_serializing_if = "Option::is_none")]
+    pub private_key_bytes: Option<Vec<u8>>,
     /// Public key in multibase format
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub public_key_multibase: Option<String>,
+    pub public_key_multibase: String,
     /// Associated profile information. Required.
     pub profile: Profile,
     /// Type of identity (e.g., "member", "cooperative", "service"). Required.
@@ -56,23 +58,25 @@ pub struct Identity {
 impl Identity {
     /// Creates a new Identity with a generated Ed25519 keypair and did:key.
     pub fn new(
-        public_username: String, 
+        public_username: String,
         full_name: Option<String>,
         identity_type: String,
         other_profile_fields: Option<HashMap<String, serde_json::Value>>,
     ) -> Result<Self, IdentityError> {
-        let mut csprng = OsRng{};
-        let signing_key: SigningKey = SigningKey::generate(&mut csprng);
-        let verifying_key: VerifyingKey = signing_key.verifying_key();
+        // Generate new Ed25519 keypair
+        let mut csprng = OsRng {};
+        let signing_key = SigningKey::generate(&mut csprng);
+        let verifying_key = signing_key.verifying_key();
 
-        let keypair = Ed25519KeyPair {
-            public_key: verifying_key.to_bytes().to_vec(),
-            private_key: Some(signing_key.to_bytes().to_vec()),
-        };
+        let public_key_bytes = verifying_key.to_bytes().to_vec();
+        let private_key_bytes = Some(signing_key.to_bytes().to_vec());
 
-        let did_key = generate::<Ed25519KeyPair>(&keypair);
-        let did = did_key.to_string();
-        let public_key_multibase = Some(multibase::encode(multibase::Base::Base58Btc, &keypair.public_key));
+        // Create multibase encoded public key
+        let public_key_multibase = multibase::encode(multibase::Base::Base58Btc, &public_key_bytes);
+
+        // Generate did:key identifier
+        // Format: did:key:z + multibase encoded public key
+        let did = format!("did:key:{}", public_key_multibase);
 
         let profile = Profile {
             public_username,
@@ -82,7 +86,8 @@ impl Identity {
 
         Ok(Self {
             did,
-            keypair,
+            public_key_bytes,
+            private_key_bytes,
             public_key_multibase,
             profile,
             identity_type,
@@ -94,42 +99,54 @@ impl Identity {
         &self.did
     }
 
-    /// Returns the public key bytes.
-    pub fn public_key_bytes(&self) -> &[u8] {
-        &self.keypair.public_key
-    }
-
     /// Signs a message using the identity's private key.
     /// Returns the signature as a multibase encoded string.
     pub fn sign(&self, message: &[u8]) -> Result<String, IdentityError> {
-        let private_bytes = self.keypair.private_key.as_ref()
+        let private_bytes = self
+            .private_key_bytes
+            .as_ref()
             .ok_or(IdentityError::InvalidKeyMaterial)?;
-        
+
         let signing_key = SigningKey::from_bytes(
-            private_bytes.as_slice().try_into().map_err(|_| IdentityError::InvalidKeyMaterial)?
+            private_bytes
+                .as_slice()
+                .try_into()
+                .map_err(|_| IdentityError::InvalidKeyMaterial)?,
         );
-        
+
         let signature = signing_key.sign(message);
-        Ok(multibase::encode(multibase::Base::Base58Btc, signature.to_bytes()))
+        Ok(multibase::encode(
+            multibase::Base::Base58Btc,
+            signature.to_bytes(),
+        ))
     }
 
     /// Verifies a multibase-encoded signature against the identity's public key.
     pub fn verify(&self, message: &[u8], signature_multibase: &str) -> Result<(), IdentityError> {
         let verifying_key = VerifyingKey::from_bytes(
-            &self.keypair.public_key.as_slice().try_into().map_err(|_| IdentityError::InvalidKeyMaterial)?
-        ).map_err(|e| IdentityError::VerificationError(e.to_string()))?;
-        
+            &self
+                .public_key_bytes
+                .as_slice()
+                .try_into()
+                .map_err(|_| IdentityError::InvalidKeyMaterial)?,
+        )
+        .map_err(|e| IdentityError::VerificationError(e.to_string()))?;
+
         // Decode the multibase signature
-        let (_, sig_bytes) = multibase::decode(signature_multibase)
-            .map_err(|e| IdentityError::DidKeyError(format!("Invalid signature format: {}", e)))?;
-        
+        let (_, sig_bytes) = multibase::decode(signature_multibase).map_err(|e| {
+            IdentityError::MultibaseError(format!("Invalid signature format: {}", e))
+        })?;
+
         // Convert to ed25519 Signature
         let signature = Signature::from_bytes(
-            &sig_bytes.try_into().map_err(|_| IdentityError::DidKeyError("Invalid signature length".to_string()))?
+            &sig_bytes
+                .try_into()
+                .map_err(|_| IdentityError::InvalidKeyMaterial)?,
         );
-        
-        verifying_key.verify(message, &signature)
-            .map_err(|e| IdentityError::DidKeyError(e.to_string()))
+
+        verifying_key
+            .verify(message, &signature)
+            .map_err(|e| IdentityError::VerificationError(e.to_string()))
     }
 
     /// Returns the public username.
@@ -142,17 +159,14 @@ impl Identity {
         #[derive(Serialize)]
         struct PublicIdentity<'a> {
             did: &'a str,
-            public_key_multibase: String,
+            public_key_multibase: &'a str,
             profile: &'a Profile,
             identity_type: &'a str,
         }
 
-        let public_key_multibase = self.public_key_multibase.clone()
-            .unwrap_or_else(|| multibase::encode(multibase::Base::Base58Btc, &self.keypair.public_key));
-
         let public_id = PublicIdentity {
             did: &self.did,
-            public_key_multibase,
+            public_key_multibase: &self.public_key_multibase,
             profile: &self.profile,
             identity_type: &self.identity_type,
         };
@@ -168,15 +182,17 @@ mod tests {
 
     #[test]
     fn test_create_identity() {
-        let identity = Identity::new("test_user".to_string(), None, "member".to_string(), None).unwrap();
+        let identity =
+            Identity::new("test_user".to_string(), None, "member".to_string(), None).unwrap();
         assert_eq!(identity.profile.public_username, "test_user");
-        assert!(identity.did.starts_with("did:key:"));
-        assert!(identity.public_key_multibase.as_ref().unwrap().starts_with("z")); // z is the prefix for base58btc multibase
+        assert!(identity.did.starts_with("did:key:z")); // z is the prefix for base58btc multibase
+        assert!(identity.public_key_multibase.starts_with("z")); // z is the prefix for base58btc multibase
     }
 
     #[test]
     fn test_sign_verify_ok() {
-        let identity = Identity::new("signer".to_string(), None, "member".to_string(), None).unwrap();
+        let identity =
+            Identity::new("signer".to_string(), None, "member".to_string(), None).unwrap();
         let message = b"This is a test message";
 
         let signature_multibase = identity.sign(message).unwrap();
@@ -189,11 +205,13 @@ mod tests {
 
     #[test]
     fn test_verify_bad_signature() {
-        let identity = Identity::new("verifier".to_string(), None, "member".to_string(), None).unwrap();
+        let identity =
+            Identity::new("verifier".to_string(), None, "member".to_string(), None).unwrap();
         let message = b"Another test message";
 
         // Create a signature from a *different* identity
-        let other_identity = Identity::new("bad_signer".to_string(), None, "member".to_string(), None).unwrap();
+        let other_identity =
+            Identity::new("bad_signer".to_string(), None, "member".to_string(), None).unwrap();
         let bad_signature = other_identity.sign(message).unwrap();
 
         // Verification should fail with the wrong signature
@@ -201,14 +219,18 @@ mod tests {
         assert!(verification_result.is_err());
         // Check the error type
         match verification_result.unwrap_err() {
-            IdentityError::DidKeyError(_) => {}, // Expected error type
-            err => panic!("Expected DidKeyError for bad signature verification, got: {:?}", err),
+            IdentityError::VerificationError(_) => {} // Expected error type
+            err => panic!(
+                "Expected VerificationError for bad signature verification, got: {:?}",
+                err
+            ),
         }
     }
 
     #[test]
     fn test_verify_wrong_message() {
-        let identity = Identity::new("msg_verifier".to_string(), None, "member".to_string(), None).unwrap();
+        let identity =
+            Identity::new("msg_verifier".to_string(), None, "member".to_string(), None).unwrap();
         let message1 = b"Original message";
         let message2 = b"Tampered message";
 
@@ -218,21 +240,33 @@ mod tests {
         let verification_result = identity.verify(message2, &signature);
         assert!(verification_result.is_err());
         match verification_result.unwrap_err() {
-            IdentityError::DidKeyError(_) => {}, // Expected error type
-            err => panic!("Expected DidKeyError for wrong message verification, got: {:?}", err),
+            IdentityError::VerificationError(_) => {} // Expected error type
+            err => panic!(
+                "Expected VerificationError for wrong message verification, got: {:?}",
+                err
+            ),
         }
     }
 
     #[test]
     fn test_to_public_json() {
-        let identity = Identity::new("json_user".to_string(), Some("Full Name".to_string()), "member".to_string(), None).unwrap();
+        let identity = Identity::new(
+            "json_user".to_string(),
+            Some("Full Name".to_string()),
+            "member".to_string(),
+            None,
+        )
+        .unwrap();
         let json = identity.to_public_json().unwrap();
-        
+
         // Basic validation that the JSON contains expected fields
         assert!(json.contains(&identity.did));
-        assert!(json.contains("public_key_multibase"));
+        assert!(json.contains(&identity.public_key_multibase));
         assert!(json.contains("json_user"));
         assert!(json.contains("Full Name"));
         assert!(json.contains("member"));
+
+        // Ensure private key is not included
+        assert!(!json.contains("private_key"));
     }
-} 
+}

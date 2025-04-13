@@ -6,16 +6,16 @@ use std::time::Duration;
 pub enum NetworkMessage {
     /// Announcement of a node joining the network
     NodeAnnouncement(NodeAnnouncement),
-    
+
     /// Ping message to verify node connectivity
     Ping(Ping),
-    
+
     /// Pong response to a ping message
     Pong(Pong),
-    
+
     /// Broadcast a proposal to the federation network
     ProposalBroadcast(FederatedProposal),
-    
+
     /// Submit a vote for a federated proposal
     VoteSubmission(FederatedVote),
 }
@@ -25,13 +25,13 @@ pub enum NetworkMessage {
 pub struct NodeAnnouncement {
     /// Unique identifier for the node
     pub node_id: String,
-    
+
     /// List of capabilities supported by this node
     pub capabilities: Vec<String>,
-    
+
     /// Version information for the node software
     pub version: String,
-    
+
     /// Optional human-readable name for this node
     pub name: Option<String>,
 }
@@ -41,7 +41,7 @@ pub struct NodeAnnouncement {
 pub struct Ping {
     /// Random nonce value used to correlate ping/pong pairs
     pub nonce: u64,
-    
+
     /// Timestamp when ping was sent (useful for latency calculation)
     pub timestamp_ms: u64,
 }
@@ -51,10 +51,10 @@ pub struct Ping {
 pub struct Pong {
     /// Nonce from the original ping message (for correlation)
     pub nonce: u64,
-    
+
     /// Timestamp when the pong was sent
     pub timestamp_ms: u64,
-    
+
     /// Optional time-to-live for this node's connection
     pub ttl: Option<Duration>,
 }
@@ -64,10 +64,10 @@ pub struct Pong {
 pub enum ProposalScope {
     /// Only members of the specified cooperative can vote
     SingleCoop(String),
-    
+
     /// Only members of the listed cooperatives can vote
     MultiCoop(Vec<String>),
-    
+
     /// All federation members can vote regardless of cooperative
     GlobalFederation,
 }
@@ -77,7 +77,7 @@ pub enum ProposalScope {
 pub enum VotingModel {
     /// Each member gets one vote (traditional direct democracy)
     OneMemberOneVote,
-    
+
     /// Each cooperative gets one vote (federated representation)
     OneCoopOneVote,
 }
@@ -87,25 +87,25 @@ pub enum VotingModel {
 pub struct FederatedProposal {
     /// Unique identifier of the proposal
     pub proposal_id: String,
-    
+
     /// Namespace for categorizing proposals
     pub namespace: String,
-    
+
     /// List of options that can be voted on
     pub options: Vec<String>,
-    
+
     /// Identifier of the proposal creator
     pub creator: String,
-    
+
     /// Timestamp when the proposal was created
     pub created_at: i64,
-    
+
     /// Scope determining which cooperatives can vote
     pub scope: ProposalScope,
-    
+
     /// Model determining how votes are counted
     pub voting_model: VotingModel,
-    
+
     /// Optional expiration timestamp (Unix seconds)
     pub expires_at: Option<i64>,
 }
@@ -115,16 +115,16 @@ pub struct FederatedProposal {
 pub struct FederatedVote {
     /// Unique identifier of the proposal being voted on
     pub proposal_id: String,
-    
+
     /// Identifier of the voter
     pub voter: String,
-    
+
     /// Ranked preferences for each option (preference values)
     pub ranked_choices: Vec<f64>,
-    
+
     /// The canonical message that was signed
     pub message: String,
-    
+
     /// Signature to verify the vote's authenticity
     pub signature: String,
-} 
+}

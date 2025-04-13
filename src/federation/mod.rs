@@ -1,22 +1,24 @@
 //! Federation module for ICN-COVM networking.
-//! 
+//!
 //! This module provides the networking layer for communication between ICN-COVM nodes,
 //! allowing them to discover each other and exchange messages.
 
-mod node;
-pub mod messages;
-mod error;
 mod behaviour;
+mod error;
 mod events;
+pub mod messages;
+mod node;
 mod storage;
 #[cfg(test)]
 mod tests;
 
-pub use node::{NetworkNode, NodeConfig};
-pub use messages::{NetworkMessage, NodeAnnouncement, Ping, Pong, FederatedProposal, FederatedVote};
 pub use error::FederationError;
 pub use events::NetworkEvent;
+pub use messages::{
+    FederatedProposal, FederatedVote, NetworkMessage, NodeAnnouncement, Ping, Pong,
+};
+pub use node::{NetworkNode, NodeConfig};
 pub use storage::{FederationStorage, VoteTallyResult};
 
 /// Protocol name/ID used for ICN-COVM federation
-pub const PROTOCOL_ID: &str = "/icn-covm/federation/1.0.0"; 
+pub const PROTOCOL_ID: &str = "/icn-covm/federation/1.0.0";

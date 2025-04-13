@@ -1,6 +1,6 @@
-use serde::{Serialize, Deserialize};
 use crate::storage::errors::StorageError;
-use crate::storage::utils::{Timestamp, now};
+use crate::storage::utils::{now, Timestamp};
+use serde::{Deserialize, Serialize};
 
 // Resource accounting
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -32,7 +32,9 @@ impl ResourceAccount {
             return Err(StorageError::QuotaExceeded {
                 account_id: self.owner_id.clone(),
                 requested: bytes,
-                available: self.storage_quota_bytes.saturating_sub(self.storage_used_bytes),
+                available: self
+                    .storage_quota_bytes
+                    .saturating_sub(self.storage_used_bytes),
             });
         }
         self.storage_used_bytes = self.storage_used_bytes.saturating_add(bytes);

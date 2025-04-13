@@ -19,7 +19,7 @@ pub fn parse_proposal_block(
     while *current_line < lines.len() {
         let line = &lines[*current_line];
         let indent = common::get_indent(line);
-        
+
         // If we've hit a non-empty line that is dedented, we're done with this block
         if !line.trim().is_empty() && indent <= current_indent {
             break;
@@ -33,64 +33,73 @@ pub fn parse_proposal_block(
         // Check for if passed block
         if line.trim() == "if passed:" {
             if found_if_passed {
-                return Err(CompilerError::DuplicateIfPassedBlock(current_pos.line, current_pos.column));
+                return Err(CompilerError::DuplicateIfPassedBlock(
+                    current_pos.line,
+                    current_pos.column,
+                ));
             }
             found_if_passed = true;
             *current_line += 1;
-            
+
             // Parse the if passed block
             let mut if_passed_lines = Vec::new();
             while *current_line < lines.len() {
                 let if_line = &lines[*current_line];
                 let if_indent = common::get_indent(if_line);
-                
+
                 if !if_line.trim().is_empty() && if_indent <= current_indent {
                     break;
                 } else if if_line.trim().is_empty() {
                     *current_line += 1;
                     continue;
                 }
-                
+
                 if_passed_lines.push(if_line.clone());
                 *current_line += 1;
             }
-            
+
             passed_block = if_passed_lines;
             continue;
         }
-        
+
         // Check for else block
         if line.trim() == "else:" {
             if found_else {
-                return Err(CompilerError::DuplicateElseBlock(current_pos.line, current_pos.column));
+                return Err(CompilerError::DuplicateElseBlock(
+                    current_pos.line,
+                    current_pos.column,
+                ));
             }
             if !found_if_passed {
-                return Err(CompilerError::ElseWithoutIfPassed(current_pos.line, current_pos.column));
+                return Err(CompilerError::ElseWithoutIfPassed(
+                    current_pos.line,
+                    current_pos.column,
+                ));
             }
             found_else = true;
             *current_line += 1;
-            
+
             // Parse the else block
             let mut else_lines = Vec::new();
             while *current_line < lines.len() {
                 let else_line = &lines[*current_line];
                 let else_indent = common::get_indent(else_line);
-                
+
                 if !else_line.trim().is_empty() && else_indent <= current_indent {
                     break;
                 } else if else_line.trim().is_empty() {
                     *current_line += 1;
                     continue;
                 }
-                
+
                 else_lines.push(else_line.clone());
                 *current_line += 1;
             }
-            
+
             failed_block = Some(else_lines);
             continue;
         }
-        
+
         // Regular line in the execution block
         execution_block.push(line.clone());
         *current_line += 1;
@@ -119,7 +128,8 @@ mod tests {
         let mut current_line = 0;
         let pos = SourcePosition::new(1, 1);
 
-        let (execution_block, passed_block, failed_block) = parse_proposal_block(&source, &mut current_line, pos).unwrap();
+        let (execution_block, passed_block, failed_block) =
+            parse_proposal_block(&source, &mut current_line, pos).unwrap();
 
         assert_eq!(execution_block.len(), 1);
         assert_eq!(passed_block.len(), 2);
@@ -139,10 +149,11 @@ mod tests {
         let mut current_line = 0;
         let pos = SourcePosition::new(1, 1);
 
-        let (execution_block, passed_block, failed_block) = parse_proposal_block(&source, &mut current_line, pos).unwrap();
+        let (execution_block, passed_block, failed_block) =
+            parse_proposal_block(&source, &mut current_line, pos).unwrap();
 
         assert_eq!(execution_block.len(), 2);
         assert_eq!(passed_block.len(), 0);
         assert!(failed_block.is_none());
     }
-} 
+}
