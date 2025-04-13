@@ -526,6 +526,34 @@ pub fn proposal_command() -> Command {
                         .required(true)
                 )
         )
+        .subcommand(
+            Command::new("execute")
+                .about("Execute an approved proposal")
+                .arg(
+                    Arg::new("id")
+                        .long("id")
+                        .value_name("PROPOSAL_ID")
+                        .help("ID of the proposal to execute")
+                        .required(true)
+                )
+        )
+        .subcommand(
+            Command::new("retry-execution")
+                .about("Retry execution of a failed proposal")
+                .arg(
+                    Arg::new("id")
+                        .long("id")
+                        .value_name("PROPOSAL_ID")
+                        .help("ID of the proposal to retry execution")
+                        .required(true)
+                )
+                .arg(
+                    Arg::new("verbose")
+                        .long("verbose")
+                        .help("Show detailed execution information")
+                        .action(ArgAction::SetTrue)
+                )
+        )
 }
 
 /// Helper function to load a proposal from storage
@@ -1471,6 +1499,88 @@ where
 
             return handle_comment_history_command(vm, comment_id, proposal_id, Some(auth_context));
         }
+        Some(("execute", execute_matches)) => {
+            let proposal_id = execute_matches.get_one::<String>("id").unwrap();
+            return handle_execute_command(vm, proposal_id, auth_context);
+        }
+        Some(("retry-execution", retry_matches)) => {
+            let proposal_id = retry_matches.get_one::<String>("id").unwrap();
+            let verbose = retry_matches.get_flag("verbose");
+            
+            println!("Retrying execution for proposal {}...", proposal_id);
+            
+            // Load the proposal lifecycle
+            let mut proposal = load_proposal(vm, proposal_id)?;
+            
+            // Check proposal state
+            if proposal.state != ProposalState::Executed {
+                return Err(format!("Cannot retry execution: Proposal must be in Executed state. Current state: {:?}", proposal.state).into());
+            }
+            
+            // Check execution status
+            match &proposal.execution_status {
+                Some(ExecutionStatus::Failure(_)) => {
+                    // Valid for retry
+                    if verbose {
+                        println!("Found failed execution, attempting retry...");
+                    }
+                },
+                Some(ExecutionStatus::Success) => {
+                    return Err("Cannot retry execution: Proposal already executed successfully.".into());
+                },
+                None => {
+                    return Err("Cannot retry execution: Proposal has no execution status.".into());
+                }
+            }
+            
+            // Attempt to retry execution
+            match proposal.retry_execution(vm, Some(auth_context)) {
+                Ok(status) => {
+                    println!("Execution retry completed with status: {:?}", status);
+                    
+                    // Get execution metadata if available
+                    if let Some(meta) = proposal.execution_metadata {
+                        println!("Execution details:");
+                        println!("  Version: {}", meta.version);
+                        println!("  Timestamp: {}", meta.executed_at);
+                        println!("  Success: {}", meta.success);
+                        println!("  Summary: {}", meta.summary);
+                    }
+                    
+                    if verbose {
+                        // Try to display the execution result
+                        let storage = vm.storage_backend.as_ref()
+                            .ok_or("Storage backend not configured")?;
+                        
+                        match storage.get_latest_execution_result(proposal_id) {
+                            Ok(result) => {
+                                println!("\nExecution result:");
+                                
+                                // Try to parse as JSON for pretty printing
+                                match serde_json::from_str::<serde_json::Value>(&result) {
+                                    Ok(json_result) => {
+                                        println!("{}", serde_json::to_string_pretty(&json_result).unwrap_or(result));
+                                    },
+                                    Err(_) => {
+                                        // Not valid JSON, print as is
+                                        println!("{}", result);
+                                    }
+                                }
+                            },
+                            Err(e) => {
+                                println!("Could not retrieve execution result: {}", e);
+                            }
+                        }
+                    }
+                    
+                    Ok(())
+                },
+                Err(e) => {
+                    println!("❌ Execution retry failed: {}", e);
+                    Err(format!("Failed to retry execution: {}", e).into())
+                }
+            }
+        },
         _ => unreachable!("Subcommand should be required"),
     }
     Ok(())
@@ -2333,6 +2443,53 @@ where
     }
 
     Ok(())
+}
+
+/// Handle the execute command for a proposal
+pub fn handle_execute_command<S>(
+    vm: &mut VM<S>,
+    proposal_id: &str,
+    auth_context: &AuthContext,
+) -> Result<(), Box<dyn Error>>
+where
+    S: Storage + Send + Sync + Clone + Debug + 'static,
+{
+    println!("Executing proposal {}...", proposal_id);
+    
+    // Load the proposal lifecycle
+    let mut proposal = load_proposal(vm, proposal_id)?;
+    
+    // Check if the proposal is in the right state for execution
+    // This will depend on your specific workflow
+    // For now, we'll just call the transition_to_executed method
+    
+    match proposal.transition_to_executed(vm, Some(auth_context)) {
+        Ok(executed) => {
+            if executed {
+                println!("✅ Proposal executed successfully.");
+                
+                // Get execution status
+                if let Some(status) = &proposal.execution_status {
+                    match status {
+                        ExecutionStatus::Success => {
+                            println!("Execution succeeded.");
+                        },
+                        ExecutionStatus::Failure(reason) => {
+                            println!("⚠️ Execution failed: {}", reason);
+                        }
+                    }
+                }
+                
+                Ok(())
+            } else {
+                Err("Failed to execute proposal - it may not meet voting requirements.".into())
+            }
+        },
+        Err(e) => {
+            println!("❌ Execution failed: {}", e);
+            Err(format!("Failed to execute proposal: {}", e).into())
+        }
+    }
 }
 
 #[cfg(test)]

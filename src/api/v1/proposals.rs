@@ -53,7 +53,7 @@ where
         .and(warp::body::json())
         .and(with_storage(storage.clone()))
         .and(with_auth())
-        .and(require_role("proposals:create".to_string()))
+        .and(require_role("proposals:create"))
         .and_then(create_proposal_handler);
     
     let update_proposal_status = base
@@ -63,7 +63,7 @@ where
         .and(warp::body::json())
         .and(with_storage(storage.clone()))
         .and(with_auth())
-        .and(require_role("proposals:update".to_string()))
+        .and(require_role("proposals:update"))
         .and_then(update_proposal_status_handler);
     
     let vote_on_proposal = base
@@ -73,7 +73,7 @@ where
         .and(warp::body::json())
         .and(with_storage(storage.clone()))
         .and(with_auth())
-        .and(require_role("proposals:vote".to_string()))
+        .and(require_role("proposals:vote"))
         .and_then(vote_on_proposal_handler);
     
     let get_proposal_comments = base
@@ -91,7 +91,7 @@ where
         .and(warp::body::json())
         .and(with_storage(storage.clone()))
         .and(with_auth())
-        .and(require_role("proposals:comment".to_string()))
+        .and(require_role("proposals:comment"))
         .and_then(add_proposal_comment_handler);
     
     let execute_proposal = base
@@ -101,8 +101,19 @@ where
         .and(with_storage(storage.clone()))
         .and(with_vm(vm.clone()))
         .and(with_auth())
-        .and(require_role("proposals:execute".to_string()))
+        .and(require_role("proposals:execute"))
         .and_then(execute_proposal_handler);
+    
+    let retry_execution = base
+        .and(warp::path::param::<String>())
+        .and(warp::path("execute"))
+        .and(warp::path("retry"))
+        .and(warp::post())
+        .and(with_storage(storage.clone()))
+        .and(with_vm(vm.clone()))
+        .and(with_auth())
+        .and(require_role("proposals:execute"))
+        .and_then(retry_execution_handler);
     
     list_proposals
         .or(get_proposal)
@@ -112,6 +123,7 @@ where
         .or(get_proposal_comments)
         .or(add_proposal_comment)
         .or(execute_proposal)
+        .or(retry_execution)
 }
 
 /// Filter helper for storage dependency injection
@@ -642,4 +654,103 @@ where
         })),
         warp::http::StatusCode::OK,
     ))
+}
+
+// New handler to retry execution of a failed proposal
+async fn retry_execution_handler<S>(
+    id: String,
+    storage: Arc<Storage>,
+    vm: Arc<VM<S>>,
+    auth: AuthInfo,
+    _has_role: (),
+) -> Result<impl Reply, Rejection>
+where
+    S: Storage + StorageExtensions + Send + Sync + Clone + Debug + 'static,
+{
+    info!("Retrying execution for proposal {}", id);
+    
+    // Get the proposal lifecycle from storage
+    let proposal_lifecycle_key = format!("governance/proposals/{}/lifecycle", id);
+    let mut lifecycle = storage.get_json::<ProposalLifecycle>(None, "governance", &proposal_lifecycle_key)
+        .map_err(|e| {
+            error!("Failed to load proposal lifecycle for {}: {}", id, e);
+            match e {
+                StorageError::KeyNotFound { .. } => not_found(format!("Proposal with id {} not found", id)),
+                _ => internal_error(format!("Error loading proposal: {}", e))
+            }
+        })?;
+    
+    // Try to load execution metadata if necessary
+    if lifecycle.execution_status.is_some() && lifecycle.execution_metadata.is_none() {
+        if let Err(e) = lifecycle.load_execution_metadata(&*storage) {
+            warn!("Failed to load execution metadata for proposal {}: {}", id, e);
+            // Continue anyway, it's not critical
+        }
+    }
+    
+    // Get existing proposal for API response
+    let mut proposal = storage.get_proposal(&id).await
+        .map_err(|_| {
+            error!("Proposal with id {} not found", id);
+            not_found(format!("Proposal with id {} not found", id))
+        })?;
+    
+    // Create a mutable VM to work with
+    let mut mutable_vm = (*vm).clone();
+    
+    // Attempt to retry execution
+    match lifecycle.retry_execution(&mut mutable_vm, None) {
+        Ok(result) => {
+            info!("Successfully retried execution for proposal {}", id);
+            
+            // Update API proposal model with new execution status
+            proposal.status = "EXECUTED".to_string(); // Status remains EXECUTED
+            proposal.updated_at = Utc::now().to_rfc3339();
+            
+            // Save the updated API proposal model
+            storage.save_proposal(&proposal).await
+                .map_err(|e| {
+                    error!("Failed to update proposal {} after execution retry: {}", id, e);
+                    internal_error(format!("Failed to update proposal after execution retry: {}", e))
+                })?;
+            
+            // Get any execution logs if available
+            let execution_logs = match storage.get_proposal_execution_logs(&id).await {
+                Ok(logs) => Some(logs),
+                Err(_) => None,
+            };
+            
+            // Get the latest execution result
+            let execution_result = match storage.get_latest_execution_result(&id).await {
+                Ok(result_str) => serde_json::from_str(&result_str)
+                    .unwrap_or_else(|_| json!({"error": "Failed to parse execution result"})),
+                Err(_) => json!({"error": "Failed to retrieve execution result"}),
+            };
+            
+            // Return success response
+            let response_data = json!({
+                "proposal_id": id,
+                "status": "EXECUTED",
+                "execution_result": execution_result,
+                "execution_logs": execution_logs,
+                "execution_status": format!("{:?}", result),
+                "execution_metadata": lifecycle.execution_metadata
+            });
+            
+            Ok(warp::reply::with_status(
+                warp::reply::json(&json!({
+                    "status": "success",
+                    "message": "Proposal execution retry completed",
+                    "data": response_data
+                })),
+                warp::http::StatusCode::OK,
+            ))
+        },
+        Err(e) => {
+            error!("Failed to retry execution for proposal {}: {}", id, e);
+            
+            // Return error response
+            Err(bad_request(format!("Failed to retry execution: {}", e)).into())
+        }
+    }
 } 
