@@ -13,7 +13,7 @@ use warp::{Filter, Rejection, Reply};
 
 /// Represents a proposal with all of its metadata for API responses
 #[derive(Debug, Serialize, Deserialize)]
-struct ProposalResponse {
+pub struct ProposalResponse {
     id: String,
     title: String,
     creator: String,
@@ -27,7 +27,7 @@ struct ProposalResponse {
 
 /// Vote count information
 #[derive(Debug, Serialize, Deserialize)]
-struct VoteCounts {
+pub struct VoteCounts {
     yes: u32,
     no: u32,
     abstain: u32,
@@ -36,7 +36,7 @@ struct VoteCounts {
 
 /// Comment metadata for API responses
 #[derive(Debug, Serialize, Deserialize)]
-struct CommentResponse {
+pub struct CommentResponse {
     id: String,
     author: String,
     timestamp: String,
@@ -50,14 +50,14 @@ struct CommentResponse {
 
 /// Comment version history for API
 #[derive(Debug, Serialize, Deserialize)]
-struct CommentVersionResponse {
+pub struct CommentVersionResponse {
     content: String,
     timestamp: String,
 }
 
 /// Proposal summary for API responses
 #[derive(Debug, Serialize, Deserialize)]
-struct ProposalSummary {
+pub struct ProposalSummary {
     id: String,
     title: String,
     status: String,
@@ -70,25 +70,25 @@ struct ProposalSummary {
 
 /// Participant information for summaries
 #[derive(Debug, Serialize, Deserialize)]
-struct Participant {
+pub struct Participant {
     id: String,
     comment_count: u32,
 }
 
 /// API error response
 #[derive(Debug, Serialize)]
-struct ErrorResponse {
-    message: String,
+pub struct ErrorResponse {
+    pub message: String,
 }
 
 /// Query parameters for filtering hidden comments
 #[derive(Debug, Serialize, Deserialize)]
-struct ShowHiddenQuery {
+pub struct ShowHiddenQuery {
     show_hidden: Option<bool>,
 }
 
-/// Initialize and start the API server with the given VM
-pub async fn start_api<S>(vm: VM<S>, port: u16) -> Result<(), Box<dyn std::error::Error>>
+/// Returns all the proposal API routes
+pub fn get_routes<S>(vm: VM<S>) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone
 where
     S: Storage + StorageExtensions + Send + Sync + Clone + Debug + 'static,
 {
@@ -108,17 +108,10 @@ where
         .and(with_vm(vm.clone()))
         .and_then(get_proposal_summary);
 
-    // Combine all routes
-    let routes = proposals_route
+    // Combine all proposal routes
+    proposals_route
         .or(comments_route)
         .or(summary_route)
-        .with(warp::cors().allow_any_origin())
-        .recover(handle_rejection);
-
-    println!("Starting API server on port {}", port);
-    warp::serve(routes).run(([0, 0, 0, 0], port)).await;
-
-    Ok(())
 }
 
 /// Dependency injection helper for the VM

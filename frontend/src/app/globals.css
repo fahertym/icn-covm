@@ -1,0 +1,51 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --foreground-rgb: 0, 0, 0;
+  --background-rgb: 249, 250, 251;
+}
+
+body {
+  color: rgb(var(--foreground-rgb));
+  background: rgb(var(--background-rgb));
+}
+
+@layer components {
+  .btn {
+    @apply px-4 py-2 rounded font-medium transition-colors;
+  }
+  
+  .btn-primary {
+    @apply bg-primary text-white hover:bg-blue-600;
+  }
+  
+  .btn-secondary {
+    @apply bg-secondary text-white hover:bg-green-600;
+  }
+
+  .card {
+    @apply bg-white rounded-lg shadow-md p-6;
+  }
+
+  .flow-node {
+    @apply rounded-md border-2 p-2 shadow-sm;
+  }
+
+  .flow-node-dsl {
+    @apply border-primary bg-blue-50;
+  }
+
+  .flow-node-macro {
+    @apply border-accent bg-purple-50;
+  }
+
+  .flow-node-action {
+    @apply border-secondary bg-green-50;
+  }
+
+  .flow-edge {
+    @apply stroke-gray-400 stroke-[2px];
+  }
+} 
