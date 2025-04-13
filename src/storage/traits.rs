@@ -188,6 +188,9 @@ pub trait StorageExtensions: StorageBackend {
     /// Gets the execution logs of a proposal
     fn get_proposal_execution_logs(&self, proposal_id: &str) -> StorageResult<String>;
     
+    /// Appends to the execution logs of a proposal
+    fn append_proposal_execution_log(&mut self, proposal_id: &str, log_entry: &str) -> StorageResult<()>;
+    
     /// Saves a versioned execution result of a proposal
     fn save_proposal_execution_result_versioned(&mut self, proposal_id: &str, result: &str, success: bool, summary: &str) -> StorageResult<u64>;
     
@@ -202,6 +205,9 @@ pub trait StorageExtensions: StorageBackend {
     
     /// Lists all execution version metadata for a proposal
     fn list_execution_versions(&self, proposal_id: &str) -> StorageResult<Vec<ExecutionVersionMeta>>;
+    
+    /// Gets the retry history for a proposal by parsing execution logs
+    fn get_proposal_retry_history(&self, proposal_id: &str) -> StorageResult<Vec<RetryHistoryRecord>>;
 }
 
 /// Metadata about a proposal execution version
@@ -211,6 +217,16 @@ pub struct ExecutionVersionMeta {
     pub executed_at: String,
     pub success: bool,
     pub summary: String,
+}
+
+/// Record of a proposal execution retry attempt
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct RetryHistoryRecord {
+    pub timestamp: String,
+    pub user: String,
+    pub status: String,
+    pub retry_count: Option<u64>,
+    pub reason: Option<String>,
 }
 
 // Blanket impl for all types implementing StorageBackend
@@ -348,9 +364,35 @@ impl<S: StorageBackend> StorageExtensions for S {
                     details: format!("Invalid UTF-8 in execution logs: {}", e),
                 }
             }),
-            Err(crate::storage::errors::StorageError::NotFound { .. }) => Ok(String::new()),
+            Err(crate::storage::errors::StorageError::KeyNotFound { .. }) => Ok(String::new()),
             Err(e) => Err(e),
         }
+    }
+    
+    fn append_proposal_execution_log(&mut self, proposal_id: &str, log_entry: &str) -> StorageResult<()> {
+        // Create the key for execution logs
+        let logs_key = format!("proposals/{}/execution_logs", proposal_id);
+        
+        // Get existing logs, if any
+        let existing_logs = match self.get(None, "governance", &logs_key) {
+            Ok(bytes) => String::from_utf8(bytes).map_err(|e| {
+                crate::storage::errors::StorageError::SerializationError {
+                    details: format!("Invalid UTF-8 in execution logs: {}", e),
+                }
+            })?,
+            Err(crate::storage::errors::StorageError::KeyNotFound { .. }) => String::new(),
+            Err(e) => return Err(e),
+        };
+        
+        // Append the new log entry to existing logs
+        let updated_logs = if existing_logs.is_empty() {
+            log_entry.to_string()
+        } else {
+            format!("{}\n{}", existing_logs, log_entry)
+        };
+        
+        // Save the updated logs
+        self.set(None, "governance", &logs_key, updated_logs.as_bytes().to_vec())
     }
     
     fn save_proposal_execution_result_versioned(&mut self, proposal_id: &str, result: &str, success: bool, summary: &str) -> StorageResult<u64> {
@@ -489,6 +531,86 @@ impl<S: StorageBackend> StorageExtensions for S {
         versions.sort_by(|a, b| b.version.cmp(&a.version));
         
         Ok(versions)
+    }
+    
+    fn get_proposal_retry_history(&self, proposal_id: &str) -> StorageResult<Vec<RetryHistoryRecord>> {
+        // Get the execution logs
+        let logs = self.get_proposal_execution_logs(proposal_id)?;
+        let mut records = Vec::new();
+
+        // Parse each log line that contains RETRY information
+        for line in logs.lines() {
+            // Retry log entries follow this format:
+            // [timestamp] RETRY by user:username | status: success/failed | retry_count: N
+            // or for failures with reason:
+            // [timestamp] RETRY by user:username | status: failed | reason: reason_text
+            
+            if line.contains("RETRY by user:") {
+                // Extract timestamp, which is enclosed in square brackets
+                let timestamp = if let Some(end_idx) = line.find(']') {
+                    if line.starts_with('[') {
+                        line[1..end_idx].to_string()
+                    } else {
+                        continue; // Invalid format, skip this line
+                    }
+                } else {
+                    continue; // No closing bracket, skip this line
+                };
+                
+                // Extract user
+                let user_start = line.find("user:").map(|idx| idx + 5).unwrap_or(0);
+                let user_end = line[user_start..].find(" |").map(|idx| user_start + idx).unwrap_or(line.len());
+                let user = if user_start > 0 && user_end > user_start {
+                    line[user_start..user_end].to_string()
+                } else {
+                    "unknown".to_string()
+                };
+                
+                // Extract status
+                let status = if line.contains("status: success") {
+                    "success".to_string()
+                } else if line.contains("status: failed") {
+                    "failed".to_string()
+                } else {
+                    "unknown".to_string()
+                };
+                
+                // Extract retry count if present
+                let retry_count = if let Some(count_idx) = line.find("retry_count: ") {
+                    let count_start = count_idx + 13; // "retry_count: ".len()
+                    let count_end = line[count_start..].find(" |").map(|idx| count_start + idx).unwrap_or(line.len());
+                    line[count_start..count_end].parse::<u64>().ok()
+                } else {
+                    None
+                };
+                
+                // Extract reason for failures
+                let reason = if status == "failed" && line.contains("reason: ") {
+                    let reason_start = line.find("reason: ").map(|idx| idx + 8).unwrap_or(0);
+                    if reason_start > 0 {
+                        Some(line[reason_start..].to_string())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                
+                // Add to records
+                records.push(RetryHistoryRecord {
+                    timestamp,
+                    user,
+                    status,
+                    retry_count,
+                    reason,
+                });
+            }
+        }
+        
+        // Sort by timestamp descending (newest first)
+        records.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        
+        Ok(records)
     }
 }
 

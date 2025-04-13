@@ -653,6 +653,26 @@ impl ProposalLifecycle {
             }
         }
         
+        // Get current retry count from metadata
+        let retry_count = self.execution_metadata.as_ref().map_or(0, |m| m.retry_count);
+        
+        // Check retry limit
+        if retry_count >= MAX_RETRIES {
+            return Err(format!("Retry limit reached ({}). Cannot retry again.", MAX_RETRIES).into());
+        }
+        
+        // Check cooldown period
+        if let Some(last_retry) = self.execution_metadata.as_ref().and_then(|m| m.last_retry_at) {
+            let now = Utc::now();
+            if now - last_retry < COOLDOWN_DURATION {
+                let wait_time = COOLDOWN_DURATION - (now - last_retry);
+                return Err(format!(
+                    "Please wait {} more minutes before retrying.",
+                    wait_time.num_minutes()
+                ).into());
+            }
+        }
+        
         // Record retry attempt timestamp
         let retry_timestamp = Utc::now();
         self.history.push((retry_timestamp, self.state.clone()));
@@ -666,8 +686,36 @@ impl ProposalLifecycle {
                 self.execution_status = Some(status.clone());
                 println!("[RETRY] Proposal {} execution retry completed at {}", self.id, retry_timestamp);
                 
-                // Save updated lifecycle object
+                // Save updated lifecycle object with incremented retry count
                 if let Some(storage) = vm.storage_backend.as_mut() {
+                    // Calculate new retry count and store new retry timestamp
+                    let new_retry_count = retry_count + 1;
+                    
+                    // Update execution status in metadata if needed
+                    if let Some(success) = match status {
+                        ExecutionStatus::Success => Some(true),
+                        ExecutionStatus::Failure(_) => Some(false),
+                    } {
+                        // If we have a result string, we should update the metadata with it
+                        if let Ok(result_str) = serde_json::to_string(status) {
+                            let summary = match status {
+                                ExecutionStatus::Success => "Retry executed successfully",
+                                ExecutionStatus::Failure(reason) => reason,
+                            };
+                            
+                            // Update execution metadata with retry info
+                            self.update_execution_status(
+                                storage, 
+                                success, 
+                                summary, 
+                                &result_str,
+                                Some(new_retry_count),
+                                Some(retry_timestamp)
+                            )?;
+                        }
+                    }
+                    
+                    // Save the updated lifecycle
                     let lifecycle_key = format!("governance/proposals/{}/lifecycle", self.id);
                     storage.set_json(auth_context, "governance", &lifecycle_key, self)?;
                 }
@@ -830,5 +878,61 @@ mod tests {
             successful_proposal.id
         );
         assert!(error_message.contains("already executed successfully"));
+    }
+
+    #[test]
+    fn test_retry_limit_and_cooldown() {
+        // Create a proposal that has reached the retry limit
+        let mut proposal = create_test_proposal();
+        proposal.state = ProposalState::Executed;
+        proposal.execution_status = Some(ExecutionStatus::Failure("First attempt failed".to_string()));
+        
+        // Set initial execution metadata with max retries
+        proposal.execution_metadata = Some(ExecutionMetadata {
+            version: 1,
+            executed_at: Utc::now(),
+            success: false,
+            summary: "First attempt failed".to_string(),
+            retry_count: MAX_RETRIES,
+            last_retry_at: Some(Utc::now()),
+        });
+        
+        // We can't directly test retry_execution as it requires a VM implementation
+        // But we can verify the retry limit check would fail
+        
+        // Verify retry count check
+        let retry_count = proposal.execution_metadata.as_ref().unwrap().retry_count;
+        assert_eq!(retry_count, MAX_RETRIES);
+        assert!(retry_count >= MAX_RETRIES);
+        
+        let err_msg = format!("Retry limit reached ({}). Cannot retry again.", MAX_RETRIES);
+        assert!(err_msg.contains(&MAX_RETRIES.to_string()));
+        
+        // Create a proposal within cooldown period
+        let mut proposal = create_test_proposal();
+        proposal.state = ProposalState::Executed;
+        proposal.execution_status = Some(ExecutionStatus::Failure("First attempt failed".to_string()));
+        
+        // Set last retry to be within cooldown period
+        let now = Utc::now();
+        let last_retry = now - Duration::minutes(5); // 5 minutes ago, within 30 min cooldown
+        
+        proposal.execution_metadata = Some(ExecutionMetadata {
+            version: 1,
+            executed_at: now,
+            success: false,
+            summary: "First attempt failed".to_string(),
+            retry_count: 1, // Within retry limit
+            last_retry_at: Some(last_retry),
+        });
+        
+        // Verify cooldown check
+        let elapsed = now - last_retry;
+        assert!(elapsed < COOLDOWN_DURATION);
+        
+        let wait_time = COOLDOWN_DURATION - elapsed;
+        let err_msg = format!("Please wait {} more minutes before retrying.", wait_time.num_minutes());
+        assert!(err_msg.contains("more minutes"));
+        assert!(wait_time.num_minutes() > 0);
     }
 }

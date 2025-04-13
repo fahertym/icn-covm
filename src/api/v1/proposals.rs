@@ -112,7 +112,7 @@ where
         .and(with_storage(storage.clone()))
         .and(with_vm(vm.clone()))
         .and(with_auth())
-        .and(require_role("proposals:execute"))
+        .and(require_role("proposals:retry"))
         .and_then(retry_execution_handler);
     
     list_proposals
@@ -669,6 +669,9 @@ where
 {
     info!("Retrying execution for proposal {}", id);
     
+    // Get user identity for logging
+    let user_identity = auth.user_id.clone().unwrap_or_else(|| "anonymous".to_string());
+    
     // Get the proposal lifecycle from storage
     let proposal_lifecycle_key = format!("governance/proposals/{}/lifecycle", id);
     let mut lifecycle = storage.get_json::<ProposalLifecycle>(None, "governance", &proposal_lifecycle_key)
@@ -698,10 +701,35 @@ where
     // Create a mutable VM to work with
     let mut mutable_vm = (*vm).clone();
     
+    // Log the retry attempt
+    let timestamp = Utc::now();
+    let timestamp_str = timestamp.to_rfc3339();
+    let retry_count = lifecycle.execution_metadata.as_ref().map_or(0, |m| m.retry_count);
+    
+    // Create a log entry for the attempt
+    let log_attempt = format!(
+        "[{}] RETRY by user:{} | attempting retry #{}", 
+        timestamp_str, 
+        user_identity,
+        retry_count + 1
+    );
+    
+    // Append to execution logs
+    let _ = storage.append_proposal_execution_log(&id, &log_attempt).await;
+    
     // Attempt to retry execution
     match lifecycle.retry_execution(&mut mutable_vm, None) {
         Ok(result) => {
             info!("Successfully retried execution for proposal {}", id);
+            
+            // Log successful retry
+            let success_log = format!(
+                "[{}] RETRY by user:{} | status: success | retry_count: {}", 
+                timestamp_str, 
+                user_identity,
+                retry_count + 1
+            );
+            let _ = storage.append_proposal_execution_log(&id, &success_log).await;
             
             // Update API proposal model with new execution status
             proposal.status = "EXECUTED".to_string(); // Status remains EXECUTED
@@ -714,8 +742,8 @@ where
                     internal_error(format!("Failed to update proposal after execution retry: {}", e))
                 })?;
             
-            // Get any execution logs if available
-            let execution_logs = match storage.get_proposal_execution_logs(&id).await {
+            // Get execution logs (most recent 5) if available
+            let execution_logs = match storage.get_proposal_execution_logs(&id, Some(5)).await {
                 Ok(logs) => Some(logs),
                 Err(_) => None,
             };
@@ -734,7 +762,14 @@ where
                 "execution_result": execution_result,
                 "execution_logs": execution_logs,
                 "execution_status": format!("{:?}", result),
-                "execution_metadata": lifecycle.execution_metadata
+                "execution_metadata": lifecycle.execution_metadata,
+                "retry_info": {
+                    "retry_count": lifecycle.execution_metadata.as_ref().map_or(0, |m| m.retry_count),
+                    "last_retry_at": lifecycle.execution_metadata.as_ref().and_then(|m| m.last_retry_at.map(|t| t.to_rfc3339())),
+                    "max_retries": crate::governance::proposal_lifecycle::MAX_RETRIES,
+                    "cooldown_minutes": crate::governance::proposal_lifecycle::COOLDOWN_DURATION.num_minutes(),
+                    "recent_logs": execution_logs
+                }
             });
             
             Ok(warp::reply::with_status(
@@ -749,8 +784,35 @@ where
         Err(e) => {
             error!("Failed to retry execution for proposal {}: {}", id, e);
             
+            // Log failed retry with reason
+            let failure_log = format!(
+                "[{}] RETRY by user:{} | status: failed | reason: {}", 
+                timestamp_str, 
+                user_identity,
+                e
+            );
+            let _ = storage.append_proposal_execution_log(&id, &failure_log).await;
+            
+            // Return error response with last few logs
+            let execution_logs = match storage.get_proposal_execution_logs(&id, Some(5)).await {
+                Ok(logs) => Some(logs),
+                Err(_) => None,
+            };
+            
+            let error_response = json!({
+                "status": "error",
+                "message": format!("Failed to retry execution: {}", e),
+                "retry_info": {
+                    "retry_count": lifecycle.execution_metadata.as_ref().map_or(0, |m| m.retry_count),
+                    "last_retry_at": lifecycle.execution_metadata.as_ref().and_then(|m| m.last_retry_at.map(|t| t.to_rfc3339())),
+                    "max_retries": crate::governance::proposal_lifecycle::MAX_RETRIES,
+                    "cooldown_minutes": crate::governance::proposal_lifecycle::COOLDOWN_DURATION.num_minutes(),
+                    "recent_logs": execution_logs
+                }
+            });
+            
             // Return error response
-            Err(bad_request(format!("Failed to retry execution: {}", e)).into())
+            Err(warp::reject::custom(bad_request(format!("Failed to retry execution: {}", e))))
         }
     }
 } 
