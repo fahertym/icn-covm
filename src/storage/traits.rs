@@ -172,6 +172,18 @@ pub trait StorageExtensions: StorageBackend {
         key: &str,
         version: u64,
     ) -> StorageResult<Option<T>>;
+    
+    /// Gets the logic path for a proposal
+    fn get_proposal_logic_path(&self, proposal_id: &str) -> StorageResult<String>;
+    
+    /// Gets the DSL logic code for a proposal
+    fn get_proposal_logic(&self, logic_path: &str) -> StorageResult<String>;
+    
+    /// Saves the execution result of a proposal
+    fn save_proposal_execution_result(&mut self, proposal_id: &str, result: &str) -> StorageResult<()>;
+    
+    /// Gets the execution logs of a proposal
+    fn get_proposal_execution_logs(&self, proposal_id: &str) -> StorageResult<String>;
 }
 
 // Blanket impl for all types implementing StorageBackend
@@ -222,13 +234,79 @@ impl<S: StorageBackend> StorageExtensions for S {
         key: &str,
         version: u64,
     ) -> StorageResult<Option<T>> {
+        // Try to get the version, handle "not found" gracefully
         match self.get_version(auth, namespace, key, version) {
-            Ok((bytes, _)) => serde_json::from_slice(&bytes).map(Some).map_err(|e| {
+            Ok((bytes, _)) => {
+                let value = serde_json::from_slice(&bytes).map_err(|e| {
+                    crate::storage::errors::StorageError::SerializationError {
+                        details: e.to_string(),
+                    }
+                })?;
+                Ok(Some(value))
+            }
+            Err(crate::storage::errors::StorageError::KeyNotFound { .. }) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+    
+    fn get_proposal_logic_path(&self, proposal_id: &str) -> StorageResult<String> {
+        // Get the logic path from the proposal metadata
+        let meta_key = format!("proposals/{}/metadata", proposal_id);
+        let bytes = self.get(None, "governance", &meta_key)?;
+        
+        // Parse metadata to extract logic_path
+        let metadata: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| {
+            crate::storage::errors::StorageError::SerializationError {
+                details: format!("Failed to parse proposal metadata: {}", e),
+            }
+        })?;
+        
+        // Extract logic path from metadata
+        match metadata.get("logic_path") {
+            Some(path) => match path.as_str() {
+                Some(path_str) => Ok(path_str.to_string()),
+                None => Err(crate::storage::errors::StorageError::InvalidValue {
+                    details: "logic_path is not a string".to_string(),
+                }),
+            },
+            None => Err(crate::storage::errors::StorageError::KeyNotFound {
+                key: "logic_path".to_string(),
+            }),
+        }
+    }
+    
+    fn get_proposal_logic(&self, logic_path: &str) -> StorageResult<String> {
+        // Get the DSL code from the specified path
+        let bytes = self.get(None, "governance", logic_path)?;
+        
+        // Convert bytes to string
+        String::from_utf8(bytes).map_err(|e| {
+            crate::storage::errors::StorageError::SerializationError {
+                details: format!("Invalid UTF-8 in DSL code: {}", e),
+            }
+        })
+    }
+    
+    fn save_proposal_execution_result(&mut self, proposal_id: &str, result: &str) -> StorageResult<()> {
+        // Create the key for storing execution result
+        let result_key = format!("proposals/{}/execution_result", proposal_id);
+        
+        // Save the result as a string
+        self.set(None, "governance", &result_key, result.as_bytes().to_vec())
+    }
+    
+    fn get_proposal_execution_logs(&self, proposal_id: &str) -> StorageResult<String> {
+        // Create the key for retrieving execution logs
+        let logs_key = format!("proposals/{}/execution_logs", proposal_id);
+        
+        // Try to get logs, return empty string if not found
+        match self.get(None, "governance", &logs_key) {
+            Ok(bytes) => String::from_utf8(bytes).map_err(|e| {
                 crate::storage::errors::StorageError::SerializationError {
-                    details: e.to_string(),
+                    details: format!("Invalid UTF-8 in execution logs: {}", e),
                 }
             }),
-            Err(crate::storage::errors::StorageError::NotFound { .. }) => Ok(None),
+            Err(crate::storage::errors::StorageError::KeyNotFound { .. }) => Ok(String::new()),
             Err(e) => Err(e),
         }
     }
