@@ -1764,10 +1764,23 @@ where
     let (yes_votes, no_votes, abstain_votes) = count_votes(vm, &proposal_id_string)?;
     let total_votes = yes_votes + no_votes + abstain_votes;
 
+    // Try to load the proposal lifecycle to get additional details
+    let mut lifecycle = match load_proposal(vm, &proposal_id_string) {
+        Ok(lc) => Some(lc),
+        Err(_) => None,
+    };
+    
+    // If we loaded the lifecycle successfully, try to load execution metadata
+    if let Some(ref mut lc) = lifecycle {
+        if let Some(storage) = vm.storage_backend.as_ref() {
+            let _ = lc.load_execution_metadata(storage);
+        }
+    }
+
     // Calculate participation percentage for quorum
-    let quorum_percentage = if let Ok(lifecycle) = load_proposal(vm, &proposal_id_string) {
-        if lifecycle.quorum > 0 {
-            let quorum_percentage = (total_votes as f64 / lifecycle.quorum as f64) * 100.0;
+    let quorum_percentage = if let Some(ref lc) = lifecycle {
+        if lc.quorum > 0 {
+            let quorum_percentage = (total_votes as f64 / lc.quorum as f64) * 100.0;
             format!("{:.1}%", quorum_percentage)
         } else {
             "N/A".to_string()
@@ -1777,8 +1790,8 @@ where
     };
 
     // Calculate threshold percentage
-    let threshold_percentage = if let Ok(lifecycle) = load_proposal(vm, &proposal_id_string) {
-        if lifecycle.threshold > 0 && total_votes > 0 {
+    let threshold_percentage = if let Some(ref lc) = lifecycle {
+        if lc.threshold > 0 && total_votes > 0 {
             let threshold_percentage = (yes_votes as f64 / total_votes as f64) * 100.0;
             format!("{:.1}%", threshold_percentage)
         } else {
@@ -1790,39 +1803,179 @@ where
 
     // Print formatted output
     println!("\n=== Proposal Details: {} ===", proposal_id);
-    println!(
-        "Title:     {}",
-        load_proposal(vm, &proposal_id_string)
-            .map(|p| p.title)
-            .unwrap_or_else(|_| "N/A".to_string())
+    println!("Title:    {}", proposal.title.as_ref().unwrap_or(&String::new()));
+    println!("Status:   {:?}", proposal.status);
+    println!("Created:  {}", proposal.created_at.format("%Y-%m-%d %H:%M:%S UTC"));
+    
+    // Print execution info if available
+    if proposal.status == crate::governance::proposal::ProposalStatus::Executed {
+        // Try to get execution info from storage if available
+        let execution_result = match vm.storage_backend.as_ref() {
+            Some(storage) => {
+                match storage.get_latest_execution_result(&proposal_id_string) {
+                    Ok(result) => Some(result),
+                    Err(_) => proposal.execution_result.clone(),
+                }
+            },
+            None => proposal.execution_result.clone(),
+        };
+        
+        // Display lifecycle execution metadata if available
+        if let Some(ref lc) = lifecycle {
+            if let Some(ref meta) = lc.execution_metadata {
+                println!("\n=== Execution Details ===");
+                println!("Version:     {}", meta.version);
+                println!("Executed at: {}", meta.executed_at.format("%Y-%m-%d %H:%M:%S UTC"));
+                println!("Status:      {}", if meta.success { "Success" } else { "Failed" });
+                println!("Summary:     {}", meta.summary);
+            } else if let Some(ref status) = lc.execution_status {
+                println!("\n=== Execution Status ===");
+                match status {
+                    crate::governance::proposal_lifecycle::ExecutionStatus::Success => {
+                        println!("Status: Success");
+                    },
+                    crate::governance::proposal_lifecycle::ExecutionStatus::Failure(reason) => {
+                        println!("Status: Failed");
+                        println!("Reason: {}", reason);
+                    },
+                }
+            }
+        }
+        
+        // Display the execution result if available
+        if let Some(result) = execution_result {
+            println!("\n=== Execution Result ===");
+            // Try to pretty print the result if it's JSON
+            match serde_json::from_str::<serde_json::Value>(&result) {
+                Ok(json_value) => {
+                    if let Ok(pretty) = serde_json::to_string_pretty(&json_value) {
+                        println!("{}", pretty);
+                    } else {
+                        println!("{}", result);
+                    }
+                },
+                Err(_) => println!("{}", result),
+            }
+        }
+        
+        // Try to get execution logs
+        if let Some(storage) = vm.storage_backend.as_ref() {
+            if let Ok(logs) = storage.get_proposal_execution_logs(&proposal_id_string) {
+                if !logs.is_empty() {
+                    println!("\n=== Execution Logs ===");
+                    println!("{}", logs);
+                }
+            }
+        }
+    }
+    
+    // Print expiration if available
+    if let Some(expires_at) = proposal.expires_at {
+        println!("Expires:  {}", expires_at.format("%Y-%m-%d %H:%M:%S UTC"));
+        
+        // Show time left until expiration if not expired yet
+        let now = Utc::now();
+        if expires_at > now {
+            let duration = expires_at - now;
+            let days = duration.num_days();
+            let hours = duration.num_hours() % 24;
+            let minutes = duration.num_minutes() % 60;
+            
+            println!(
+                "Time left: {} days, {} hours, {} minutes",
+                days, hours, minutes
+            );
+        } else {
+            println!("Status:   Expired");
+        }
+    }
+    
+    // Show lifecycle state history if available
+    if let Some(ref lc) = lifecycle {
+        if !lc.history.is_empty() {
+            println!("\n=== State History ===");
+            for (timestamp, state) in &lc.history {
+                println!(
+                    "{}: {:?}",
+                    timestamp.format("%Y-%m-%d %H:%M:%S UTC"),
+                    state
+                );
+            }
+        }
+    }
+    
+    println!("\n=== Voting Details ===");
+    println!("Quorum:   {} ({})", 
+        lifecycle.as_ref().map(|lc| lc.quorum.to_string()).unwrap_or_else(|| "Unknown".to_string()),
+        quorum_percentage
     );
-    println!("Creator:   {}", proposal.creator);
-    println!("Status:    {:?}", proposal.status);
-    println!("Created:   {}", proposal.created_at);
-
-    // Print vote counts
-    println!("\n=== Voting Information ===");
-    println!("Yes votes:      {}", yes_votes);
-    println!("No votes:       {}", no_votes);
-    println!("Abstain votes:  {}", abstain_votes);
-    println!("Total votes:    {}", total_votes);
-    println!("Quorum:         {}", quorum_percentage);
-    println!("Threshold:      {}", threshold_percentage);
-
-    // Print execution result if any
-    if let Some(result) = &proposal.execution_result {
-        println!("\n=== Execution Result ===");
-        println!("{}", result);
+    println!("Threshold: {} ({})", 
+        lifecycle.as_ref().map(|lc| lc.threshold.to_string()).unwrap_or_else(|| "Unknown".to_string()),
+        threshold_percentage
+    );
+    
+    // Get comments for summary
+    let mut comment_count = 0;
+    let mut top_commenters: HashMap<String, usize> = HashMap::new();
+    
+    // Try to load comments if available
+    if let Some(storage) = vm.storage_backend.as_ref() {
+        // Namespace and prefix for comments
+        let namespace = "governance";
+        let comments_prefix = format!("governance/proposals/{}/comments/", proposal_id);
+        
+        // List comment keys
+        if let Ok(comment_keys) = storage.list_keys(None, namespace, Some(&comments_prefix)) {
+            comment_count = comment_keys.len();
+            
+            // Load each comment to count per author
+            for key in comment_keys {
+                if let Ok(comment) = storage.get_json::<ProposalComment>(None, namespace, &key) {
+                    *top_commenters.entry(comment.author).or_insert(0) += 1;
+                }
+            }
+        }
     }
+    
+    println!("\n=== Vote Summary ===");
+    println!(
+        "Yes:     {} ({:.1}%)",
+        yes_votes,
+        if total_votes > 0 {
+            (yes_votes as f64 / total_votes as f64) * 100.0
+        } else {
+            0.0
+        }
+    );
+    println!(
+        "No:      {} ({:.1}%)",
+        no_votes,
+        if total_votes > 0 {
+            (no_votes as f64 / total_votes as f64) * 100.0
+        } else {
+            0.0
+        }
+    );
+    println!(
+        "Abstain: {} ({:.1}%)",
+        abstain_votes,
+        if total_votes > 0 {
+            (abstain_votes as f64 / total_votes as f64) * 100.0
+        } else {
+            0.0
+        }
+    );
+    println!("Total:   {}", total_votes);
 
-    // Print other metadata
-    println!("\n=== Additional Information ===");
-    if let Some(expires) = &proposal.expires_at {
-        println!("Expires at: {}", expires);
-    }
+    // Print comment summary
+    println!("\n=== Comment Summary ===");
+    println!("Total comments: {}", comment_count);
 
-    if let Some(logic_path) = &proposal.logic_path {
-        println!("Logic path: {}", logic_path);
+    if !top_commenters.is_empty() {
+        println!("\nTop commenters:");
+        for (author, count) in top_commenters.iter().take(5) {
+            println!("  {}: {} comments", author, count);
+        }
     }
 
     Ok(())

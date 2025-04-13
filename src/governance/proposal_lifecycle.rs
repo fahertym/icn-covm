@@ -81,6 +81,19 @@ impl FromStr for VoteChoice {
 // Or maybe store as string directly is better for simplicity/flexibility?
 // Let's stick to storing the string for now, less migration hassle.
 
+/// Metadata about the execution of a proposal
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ExecutionMetadata {
+    /// Latest execution version number
+    pub version: u64,
+    /// Timestamp when the proposal was executed
+    pub executed_at: DateTime<Utc>,
+    /// Whether the execution was successful
+    pub success: bool,
+    /// Summary description of the execution outcome
+    pub summary: String,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ProposalLifecycle {
     pub id: ProposalId,
@@ -99,6 +112,8 @@ pub struct ProposalLifecycle {
     // comments: Vec<CommentId>, // Store comment IDs? Store in storage layer.
     pub history: Vec<(DateTime<Utc>, ProposalState)>, // Track state transitions
     pub execution_status: Option<ExecutionStatus>,
+    /// Detailed metadata about the latest execution
+    pub execution_metadata: Option<ExecutionMetadata>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -136,6 +151,7 @@ impl ProposalLifecycle {
             current_version: 1,
             history: vec![(now, ProposalState::Draft)],
             execution_status: None,
+            execution_metadata: None,
         }
     }
 
@@ -282,11 +298,80 @@ impl ProposalLifecycle {
         Ok(true)
     }
 
-    // Execute the proposal's logic attachment within the given VM context
-    // Returns Ok(ExecutionStatus) on completion (success or failure)
-    // Returns Err only if loading/parsing fails before execution starts
+    /// Update the execution status and metadata based on execution results
+    pub fn update_execution_status<S>(
+        &mut self,
+        storage: &mut S,
+        success: bool,
+        summary: &str,
+        result: &str,
+    ) -> Result<u64, Box<dyn std::error::Error>>
+    where
+        S: StorageExtensions + Send + Sync + Clone + Debug + 'static,
+    {
+        // Save execution result with versioning in storage
+        let version = storage.save_proposal_execution_result_versioned(
+            &self.id,
+            result,
+            success,
+            summary,
+        )?;
+        
+        // Update the execution status
+        self.execution_status = if success {
+            Some(ExecutionStatus::Success)
+        } else {
+            Some(ExecutionStatus::Failure(summary.to_string()))
+        };
+        
+        // Update the execution metadata
+        self.execution_metadata = Some(ExecutionMetadata {
+            version,
+            executed_at: Utc::now(),
+            success,
+            summary: summary.to_string(),
+        });
+        
+        Ok(version)
+    }
+
+    /// Get execution metadata from storage if available
+    pub fn load_execution_metadata<S>(
+        &mut self,
+        storage: &S,
+    ) -> Result<(), Box<dyn std::error::Error>>
+    where
+        S: StorageExtensions + Send + Sync + Clone + Debug + 'static,
+    {
+        // If execution status is set but metadata isn't, try to load it
+        if self.execution_status.is_some() && self.execution_metadata.is_none() {
+            // Try to get the latest version
+            match storage.get_latest_execution_result_version(&self.id) {
+                Ok(version) => {
+                    // Get version metadata
+                    let versions = storage.list_execution_versions(&self.id)?;
+                    if let Some(meta) = versions.iter().find(|v| v.version == version) {
+                        self.execution_metadata = Some(ExecutionMetadata {
+                            version,
+                            executed_at: DateTime::parse_from_rfc3339(&meta.executed_at)
+                                .map_err(|e| format!("Invalid execution timestamp: {}", e))?
+                                .with_timezone(&Utc),
+                            success: meta.success,
+                            summary: meta.summary.clone(),
+                        });
+                    }
+                }
+                Err(_) => {
+                    // No execution results found, nothing to do
+                }
+            }
+        }
+        
+        Ok(())
+    }
+
     fn execute_proposal_logic<S>(
-        &self,
+        &mut self,
         vm: &mut VM<S>, // Pass original VM mutably to allow commit/rollback
         auth_context: Option<&AuthContext>,
     ) -> Result<ExecutionStatus, Box<dyn std::error::Error>>
@@ -316,65 +401,82 @@ impl ProposalLifecycle {
                 namespace, logic_key
             );
 
-            match storage.get(auth_context, namespace, &logic_key) {
-                Ok(bytes) => {
-                    let dsl = String::from_utf8(bytes)
-                        .map_err(|e| format!("Logic attachment is not valid UTF-8: {}", e))?;
-                    if dsl.trim().is_empty() {
-                        println!("[EXEC] Logic attachment is empty. Skipping execution.");
-                        None // Treat empty DSL as skippable
-                    } else {
-                        println!("[EXEC] Logic DSL loaded ({} bytes) within fork.", dsl.len());
-                        Some(dsl)
-                    }
+            let logic_bytes = storage.get(auth_context, namespace, &logic_key).map_err(|e| {
+                println!("[EXEC] Error loading logic: {}", e);
+                format!("Failed to load proposal logic: {}", e)
+            })?;
+
+            String::from_utf8(logic_bytes).map_err(|e| {
+                println!("[EXEC] Logic data isn't valid UTF-8: {}", e);
+                format!("Proposal logic contains invalid UTF-8: {}", e)
+            })?
+        };
+
+        // --- DSL Parsing ---
+        let ops = match parse_dsl(&logic_dsl) {
+            Ok(ops) => {
+                println!("[EXEC] Successfully parsed DSL with {} operations", ops.len());
+                ops
+            }
+            Err(e) => {
+                println!("[EXEC] Failed to parse DSL: {}", e);
+                // Set execution failed status in storage
+                if let Some(storage) = vm.storage_backend.as_mut() {
+                    let summary = format!("Failed to parse DSL: {}", e);
+                    let result = serde_json::to_string(&serde_json::json!({
+                        "error": "parse_error",
+                        "message": e.to_string(),
+                    })).unwrap_or_else(|_| e.to_string());
+                    
+                    // Update execution status and metadata
+                    self.update_execution_status(storage, false, &summary, &result)?;
                 }
-                Err(StorageError::NotFound { .. }) => {
-                    println!(
-                        "[EXEC] No logic attachment found at {}. Skipping execution.",
-                        logic_key
-                    );
-                    None // Treat missing logic as skippable
-                }
-                Err(e) => return Err(format!("Failed to load logic attachment: {}", e).into()),
+                return Err(format!("Failed to parse proposal DSL: {}", e).into());
             }
         };
 
-        // --- Execution (within Fork) & Transaction Handling ---
-        let execution_status = if let Some(dsl) = logic_dsl {
-            println!("[EXEC] Parsing logic DSL within fork...");
-            let ops = parse_dsl(&dsl).map_err(|e| format!("Failed to parse logic DSL: {}", e))?;
-            println!("[EXEC] Logic parsed into {} Ops within fork.", ops.len());
-
-            println!("[EXEC] Executing parsed Ops within fork VM...");
-            match fork_vm.execute(&ops) {
-                Ok(_) => {
-                    println!("[EXEC] Fork execution successful. Committing transaction on original VM...");
-                    vm.commit_fork_transaction()?;
-                    ExecutionStatus::Success
+        // --- Execute logic ---
+        let execution_result = match fork_vm.execute(&ops) {
+            Ok(result) => {
+                println!("[EXEC] Execution successful: {:?}", result);
+                println!("[EXEC] Committing transaction...");
+                vm.commit_transaction()?; // Commit to original VM's storage
+                
+                // Convert result to string for storage
+                let result_str = serde_json::to_string(&result)
+                    .unwrap_or_else(|e| format!("{{\"error\":\"serialize_error\",\"message\":\"{}\"}}", e));
+                
+                // Update execution status in storage
+                if let Some(storage) = vm.storage_backend.as_mut() {
+                    let summary = "Proposal executed successfully";
+                    self.update_execution_status(storage, true, summary, &result_str)?;
                 }
-                Err(e) => {
-                    let error_message = format!("Runtime error during fork execution: {}", e);
-                    eprintln!("[EXEC] {}", error_message);
-                    println!(
-                        "[EXEC] Rolling back transaction on original VM due to fork failure..."
-                    );
-                    vm.rollback_fork_transaction()?; // Rollback original VM's transaction
-                    ExecutionStatus::Failure(error_message)
-                }
+                
+                ExecutionStatus::Success
             }
-        } else {
-            // No logic to execute, commit the (empty) transaction
-            println!(
-                "[EXEC] No logic DSL found/loaded. Committing empty transaction on original VM."
-            );
-            vm.commit_fork_transaction()?;
-            ExecutionStatus::Success
+            Err(e) => {
+                println!("[EXEC] Execution failed: {}", e);
+                println!("[EXEC] Rolling back transaction...");
+                vm.rollback_transaction()?; // Rollback original VM's storage
+                
+                // Save failure info to storage
+                if let Some(storage) = vm.storage_backend.as_mut() {
+                    let summary = format!("Execution failed: {}", e);
+                    let result = serde_json::to_string(&serde_json::json!({
+                        "error": "execution_error",
+                        "message": e.to_string(),
+                    })).unwrap_or_else(|_| e.to_string());
+                    
+                    self.update_execution_status(storage, false, &summary, &result)?;
+                }
+                
+                ExecutionStatus::Failure(e.to_string())
+            }
         };
 
-        Ok(execution_status)
+        Ok(execution_result)
     }
 
-    // Updated state transition for execution
     pub fn transition_to_executed<S>(
         &mut self,
         vm: &mut VM<S>,
@@ -396,13 +498,32 @@ impl ProposalLifecycle {
 
                 // Update status based on execution result
                 match exec_result {
-                    Ok(_) => {
-                        println!("Proposal {} execution completed successfully.", self.id);
+                    Ok(status) => {
+                        self.execution_status = Some(status);
+                        println!("Proposal {} execution completed.", self.id);
                     }
                     Err(e) => {
-                        println!("Proposal {} execution failed: {}", self.id, e);
-                        // TODO: Set execution_status to Failed
+                        let error_msg = e.to_string();
+                        self.execution_status = Some(ExecutionStatus::Failure(error_msg.clone()));
+                        println!("Proposal {} execution failed: {}", self.id, error_msg);
+                        
+                        // Save the failure to storage
+                        if let Some(storage) = vm.storage_backend.as_mut() {
+                            let summary = format!("Execution failed: {}", error_msg);
+                            let result = serde_json::to_string(&serde_json::json!({
+                                "error": "execution_error",
+                                "message": error_msg
+                            })).unwrap_or_else(|_| format!("{{\"error\":\"unknown\",\"message\":\"{}\"}}", error_msg));
+                            
+                            self.update_execution_status(storage, false, &summary, &result)?;
+                        }
                     }
+                }
+
+                // Save updated lifecycle object
+                if let Some(storage) = vm.storage_backend.as_mut() {
+                    let lifecycle_key = format!("governance/proposals/{}/lifecycle", self.id);
+                    storage.set_json(auth_context, "governance", &lifecycle_key, self)?;
                 }
 
                 Ok(true)

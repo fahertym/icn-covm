@@ -1,8 +1,12 @@
-pub mod dsl;
+pub mod auth;
+pub mod errors;
 pub mod governance;
-pub mod models;
-pub mod proposals;
 pub mod handlers;
+pub mod models;
+pub mod policies;
+pub mod proposals;
+pub mod users;
+pub mod voting;
 
 use crate::storage::traits::{Storage, StorageExtensions};
 use crate::vm::VM;
