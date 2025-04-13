@@ -528,6 +528,17 @@ pub enum Op {
     Macro(String),
 }
 
+impl std::fmt::Display for Op {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            // ... other Display arms ...
+            Op::EmitEvent { category, message } => write!(f, "EmitEvent Category: {}, Message: {}", category, message),
+            Op::IncrementReputation { target_did, reason } => write!(f, "IncrementReputation Target: {}, Reason: {}", target_did, reason),
+            // ... other Display arms ...
+        }
+    }
+}
+
 #[derive(Debug)]
 struct CallFrame {
     // Local memory for function scope
@@ -1686,6 +1697,58 @@ impl VM {
         
         // Finally check global memory
         self.memory.get(key).copied()
+    }
+
+    /// Creates a new VM state that shares the same storage backend and auth context.
+    /// This is intended for sandboxed execution contexts, like running proposal logic.
+    /// It automatically begins a storage transaction on the shared backend.
+    /// The caller is responsible for committing or rolling back the transaction
+    /// on the *original* VM's storage backend based on the fork's execution result.
+    pub fn fork(&mut self) -> Result<VM, VMError> {
+        // Ensure storage backend exists and supports transactions
+        let storage = self.storage_backend.as_mut().ok_or(VMError::StorageUnavailable)?;
+        
+        println!("[VM] Forking VM and beginning storage transaction...");
+        storage.begin_transaction()
+            .map_err(|e| VMError::StorageError(format!("Failed to begin transaction for fork: {}", e)))?;
+
+        // Create a new VM instance, cloning necessary context
+        // Stack, memory, functions, call_stack, output, events start fresh
+        // Storage backend and auth context are shared (cloned reference/value)
+        Ok(VM {
+            stack: Vec::new(),
+            memory: HashMap::new(),
+            functions: HashMap::new(), // Functions are not inherited in fork
+            call_stack: Vec::new(),
+            call_frames: Vec::new(),
+            output: String::new(),
+            events: Vec::new(), // Events are isolated to the fork
+            // Clone auth context if available
+            auth_context: self.auth_context.clone(), 
+            // Clone storage backend reference (assuming Box<dyn...> handles this correctly)
+            // IMPORTANT: This shares the *same* storage backend instance.
+            storage_backend: self.storage_backend.clone(), 
+            // Inherit namespace
+            namespace: self.namespace.clone(), 
+        })
+    }
+
+    /// Commits the storage transaction associated with this VM instance.
+    /// Should typically be called on the *original* VM after a successful fork execution.
+    pub fn commit_fork_transaction(&mut self) -> Result<(), VMError> {
+        let storage = self.storage_backend.as_mut().ok_or(VMError::StorageUnavailable)?;
+        println!("[VM] Committing storage transaction...");
+        storage.commit_transaction()
+             .map_err(|e| VMError::StorageError(format!("Failed to commit transaction: {}", e)))
+    }
+
+    /// Rolls back the storage transaction associated with this VM instance.
+    /// Should typically be called on the *original* VM after a failed/rejected fork execution.
+    pub fn rollback_fork_transaction(&mut self) -> Result<(), VMError> {
+         let storage = self.storage_backend.as_mut().ok_or(VMError::StorageUnavailable)?;
+         println!("[VM] Rolling back storage transaction...");
+         storage.rollback_transaction()
+              .map_err(|e| VMError::StorageError(format!("Failed to rollback transaction: {}", e)))
     }
 }
 

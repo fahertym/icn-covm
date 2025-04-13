@@ -31,9 +31,10 @@ pub struct AuthContext {
 }
 
 impl AuthContext {
-    pub fn new(user_id: &str) -> Self {
+    /// Create a new AuthContext for a given DID.
+    pub fn new(user_did: &str) -> Self {
         Self {
-            user_id: user_id.to_string(),
+            user_id: user_did.to_string(),
             roles: HashMap::new(),
             delegations: HashMap::new(),
             current_identity: None,
@@ -72,19 +73,13 @@ impl AuthContext {
         auth
     }
     
-    /// Set the current identity
-    pub fn set_identity(&mut self, identity: Identity) -> &mut Self {
-        self.current_identity = Some(identity);
-        
-        // Update the user ID to match the identity ID for consistency
-        self.user_id = self.current_identity.as_ref().unwrap().id.clone();
-        
-        // Update cooperative ID if available
-        if let Some(coop_id) = self.current_identity.as_ref().and_then(|id| id.get_metadata("coop_id")) {
-            self.executing_cooperative_id = Some(coop_id.clone());
+    /// Sets the fully loaded Identity object for the authenticated user.
+    pub fn set_identity(&mut self, identity: Identity) -> Result<(), String> {
+        if self.user_id != identity.did {
+            return Err(format!("Mismatch between AuthContext user_id ({}) and Identity DID ({})", self.user_id, identity.did));
         }
-        
-        self
+        self.current_identity = Some(identity);
+        Ok(())
     }
     
     /// Set the executing cooperative ID
@@ -321,5 +316,34 @@ impl AuthContext {
     // Get delegations for this user
     pub fn get_delegations(&self) -> Vec<(&String, &String)> {
         self.delegations.iter().collect()
+    }
+
+    /// Returns the DID of the authenticated user.
+    pub fn identity_did(&self) -> &str {
+        &self.user_id
+    }
+
+    /// Returns a reference to the loaded Identity object, if available.
+    pub fn identity(&self) -> Option<&Identity> {
+        self.current_identity.as_ref()
+    }
+
+    // Method to create a demo context (replace old create_admin_auth_context if exists)
+    pub fn demo_context(user_did: &str, public_username: &str) -> Self {
+        let identity = Identity::new(public_username.to_string(), None, "member".to_string(), None).unwrap();
+        // Ensure the created identity's DID matches the requested user_did
+        // In a real system, we'd load the identity matching user_did
+        let mut ctx = AuthContext::new(user_did); // Create context with the DID
+        // If we want to simulate loading the identity:
+        if identity.did == user_did { // This check might fail if DID generation isn't deterministic based on username alone
+             ctx.set_identity(identity).unwrap();
+        } else {
+             // Handle case where generated DID doesn't match expected, maybe create context without full identity?
+             println!("Warning: Demo identity DID {} does not match context DID {}. AuthContext may be incomplete.", identity.did, user_did);
+        }
+        ctx.add_role("governance", "creator");
+        ctx.add_role("governance", "voter");
+        ctx.add_role("deliberation", "commenter");
+        ctx
     }
 }

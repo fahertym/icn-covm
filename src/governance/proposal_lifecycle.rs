@@ -8,14 +8,12 @@ use crate::vm::VM;
 use crate::compiler::parse_dsl;
 use crate::vm::Op;
 use serde_json; // Import serde_json for serialization
-// Placeholder for identity type, replace with actual type later
-type Identity = String;
+use crate::identity::Identity; // Import the actual Identity struct
 // Placeholder for attachment metadata, replace with actual type later
 type Attachment = String;
-// Placeholder for comment ID, replace with actual type later
-type CommentId = u64;
-// Placeholder for proposal ID, replace with actual type later
-type ProposalId = u64;
+// Use String for IDs
+type CommentId = String;
+type ProposalId = String;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub enum ProposalState {
@@ -32,6 +30,41 @@ pub enum ExecutionStatus {
     Success,
     Failure(String),
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub enum VoteChoice {
+    Yes,
+    No,
+    Abstain,
+}
+
+// Implement FromStr to parse from CLI string input
+use std::str::FromStr;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParseVoteChoiceError;
+impl std::fmt::Display for ParseVoteChoiceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Invalid vote choice. Must be 'yes', 'no', or 'abstain'.")
+    }
+}
+impl std::error::Error for ParseVoteChoiceError {}
+
+impl FromStr for VoteChoice {
+    type Err = ParseVoteChoiceError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "yes" => Ok(VoteChoice::Yes),
+            "no" => Ok(VoteChoice::No),
+            "abstain" => Ok(VoteChoice::Abstain),
+            _ => Err(ParseVoteChoiceError),
+        }
+    }
+}
+
+// Implement Display to serialize for storage?
+// Or maybe store as string directly is better for simplicity/flexibility?
+// Let's stick to storing the string for now, less migration hassle.
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ProposalLifecycle {
@@ -55,12 +88,12 @@ pub struct ProposalLifecycle {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Comment {
-    pub id: CommentId, // Unique ID for this comment
-    pub proposal_id: ProposalId,
+    pub id: CommentId, // Now String
+    pub proposal_id: ProposalId, // Now String
     pub author: Identity,
     pub timestamp: DateTime<Utc>,
     pub content: String,
-    pub reply_to: Option<CommentId>, // ID of the comment being replied to
+    pub reply_to: Option<CommentId>, // Now Option<String>
 }
 
 impl ProposalLifecycle {
@@ -163,11 +196,12 @@ impl ProposalLifecycle {
             match storage.get(auth_context, namespace, &key) {
                 Ok(vote_bytes) => {
                     let vote_str = String::from_utf8(vote_bytes).unwrap_or_default();
-                    match vote_str.to_lowercase().as_str() {
-                        "yes" => yes_votes += 1,
-                        "no" => no_votes += 1,
-                        "abstain" => abstain_votes += 1,
-                        _ => eprintln!("Warning: Invalid vote choice '{}' found for key {}", vote_str, key),
+                    // Parse the stored string into VoteChoice
+                    match VoteChoice::from_str(&vote_str) {
+                        Ok(VoteChoice::Yes) => yes_votes += 1,
+                        Ok(VoteChoice::No) => no_votes += 1,
+                        Ok(VoteChoice::Abstain) => abstain_votes += 1,
+                        Err(_) => eprintln!("Warning: Invalid vote choice string '{}' found in storage for key {}", vote_str, key),
                     }
                 }
                 Err(e) => {
@@ -204,51 +238,72 @@ impl ProposalLifecycle {
     // Returns Err only if loading/parsing fails before execution starts
     fn execute_proposal_logic(
         &self,
-        vm: &mut VM,
+        vm: &mut VM, // Pass original VM mutably to allow commit/rollback
     ) -> Result<ExecutionStatus, Box<dyn std::error::Error>> {
-        println!("[EXEC] Attempting to execute logic for proposal {}", self.id);
+        println!("[EXEC] Preparing sandboxed execution for proposal {}", self.id);
 
-        let storage = vm.storage_backend.as_ref().ok_or("Storage backend unavailable for execution")?;
-        let auth_context = vm.auth_context.as_ref();
-        let namespace = "governance";
-        let logic_key = format!("proposals/{}/attachments/logic", self.id);
+        // --- Create VM Fork --- 
+        let mut fork_vm = vm.fork()?; // fork() begins the transaction on original VM's storage
+        println!("[EXEC] VM Fork created.");
 
-        println!("[EXEC] Loading logic from {}/{}...", namespace, logic_key);
-        let logic_bytes = match storage.get(auth_context, namespace, &logic_key) {
-            Ok(bytes) => bytes,
-            Err(StorageError::NotFound { .. }) => {
-                println!("[EXEC] No logic attachment found at {}. Skipping execution.", logic_key);
-                return Ok(ExecutionStatus::Success); // No logic is considered success
+        // --- Logic Loading (using fork's context) --- 
+        let logic_dsl = {
+            let storage = fork_vm.storage_backend.as_ref().ok_or("Fork storage backend unavailable")?;
+            let auth_context = fork_vm.auth_context.as_ref();
+            let namespace = "governance"; // Assuming logic is always in governance namespace
+            let logic_key = format!("proposals/{}/attachments/logic", self.id);
+            println!("[EXEC] Loading logic from {}/{} within fork...", namespace, logic_key);
+            
+            match storage.get(auth_context, namespace, &logic_key) {
+                Ok(bytes) => {
+                    let dsl = String::from_utf8(bytes)
+                        .map_err(|e| format!("Logic attachment is not valid UTF-8: {}", e))?;
+                    if dsl.trim().is_empty() {
+                        println!("[EXEC] Logic attachment is empty. Skipping execution.");
+                        None // Treat empty DSL as skippable
+                    } else {
+                        println!("[EXEC] Logic DSL loaded ({} bytes) within fork.", dsl.len());
+                        Some(dsl)
+                    }
+                }
+                Err(StorageError::NotFound { .. }) => {
+                    println!("[EXEC] No logic attachment found at {}. Skipping execution.", logic_key);
+                    None // Treat missing logic as skippable
+                }
+                Err(e) => return Err(format!("Failed to load logic attachment: {}", e).into()),
             }
-            Err(e) => return Err(format!("Failed to load logic attachment: {}", e).into()),
         };
 
-        let logic_dsl = String::from_utf8(logic_bytes)
-            .map_err(|e| format!("Logic attachment is not valid UTF-8: {}", e))?;
-        println!("[EXEC] Logic DSL loaded ({} bytes).", logic_dsl.len());
-        if logic_dsl.trim().is_empty() {
-             println!("[EXEC] Logic attachment is empty. Skipping execution.");
-             return Ok(ExecutionStatus::Success); // Empty logic is success
-        }
+        // --- Execution (within Fork) & Transaction Handling --- 
+        let execution_status = if let Some(dsl) = logic_dsl {
+            println!("[EXEC] Parsing logic DSL within fork...");
+            let ops = parse_dsl(&dsl)
+                .map_err(|e| format!("Failed to parse logic DSL: {}", e))?;
+            println!("[EXEC] Logic parsed into {} Ops within fork.", ops.len());
 
-        println!("[EXEC] Parsing logic DSL...");
-        let ops = parse_dsl(&logic_dsl)
-            .map_err(|e| format!("Failed to parse logic DSL: {}", e))?;
-        println!("[EXEC] Logic parsed into {} Ops.", ops.len());
+            println!("[EXEC] Executing parsed Ops within fork VM...");
+            match fork_vm.execute(&ops) {
+                Ok(_) => {
+                    println!("[EXEC] Fork execution successful. Committing transaction on original VM...");
+                    vm.commit_fork_transaction()?;
+                    ExecutionStatus::Success
+                }
+                Err(e) => {
+                    let error_message = format!("Runtime error during fork execution: {}", e);
+                    eprintln!("[EXEC] {}", error_message);
+                    println!("[EXEC] Rolling back transaction on original VM due to fork failure...");
+                    vm.rollback_fork_transaction()?; // Rollback original VM's transaction
+                    ExecutionStatus::Failure(error_message)
+                }
+            }
+        } else {
+            // No logic to execute, commit the (empty) transaction
+            println!("[EXEC] No logic DSL found/loaded. Committing empty transaction on original VM.");
+            vm.commit_fork_transaction()?;
+            ExecutionStatus::Success
+        };
 
-        // Execute Ops in the provided VM
-        println!("[EXEC] Executing parsed Ops...");
-        match vm.execute(&ops) {
-            Ok(_) => {
-                println!("[EXEC] Proposal logic execution finished successfully.");
-                Ok(ExecutionStatus::Success)
-            }
-            Err(e) => {
-                let error_message = format!("Runtime error executing proposal logic: {}", e);
-                eprintln!("[EXEC] {}", error_message);
-                Ok(ExecutionStatus::Failure(error_message))
-            }
-        }
+        Ok(execution_status)
     }
 
      // Updated state transition for execution
@@ -388,4 +443,100 @@ impl ProposalLifecycle {
          }
          Ok(())
      }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*; // Import parent module content
+    use crate::identity::Identity;
+    use chrono::Duration;
+
+    // Helper to create a dummy Identity for testing
+    fn test_identity(username: &str) -> Identity {
+        Identity::new(username.to_string(), None, "test_member".to_string(), None).unwrap()
+    }
+
+    // Helper to create a basic proposal for tests
+    fn create_test_proposal() -> ProposalLifecycle {
+        let creator_id = test_identity("test_creator");
+        ProposalLifecycle::new(
+            "prop-123".to_string(),
+            creator_id,
+            "Test Proposal".to_string(),
+            10, // quorum
+            5,  // threshold
+            Some(Duration::days(7)), // discussion_duration
+            None, // required_participants
+        )
+    }
+
+    #[test]
+    fn test_proposal_creation_state() {
+        let proposal = create_test_proposal();
+        assert_eq!(proposal.state, ProposalState::Draft);
+        assert_eq!(proposal.current_version, 1);
+        assert_eq!(proposal.history.len(), 1);
+        assert_eq!(proposal.history[0].1, ProposalState::Draft);
+    }
+
+    #[test]
+    fn test_open_for_feedback_transition() {
+        let mut proposal = create_test_proposal();
+        assert_eq!(proposal.state, ProposalState::Draft);
+
+        proposal.open_for_feedback();
+
+        assert_eq!(proposal.state, ProposalState::OpenForFeedback);
+        assert_eq!(proposal.history.len(), 2);
+        assert_eq!(proposal.history[1].1, ProposalState::OpenForFeedback);
+    }
+
+    #[test]
+    fn test_start_voting_transition() {
+        let mut proposal = create_test_proposal();
+        proposal.open_for_feedback(); // Must be in OpenForFeedback first
+        assert_eq!(proposal.state, ProposalState::OpenForFeedback);
+        assert!(proposal.expires_at.is_none());
+
+        let voting_duration = Duration::days(3);
+        let expected_expiry_min = Utc::now() + voting_duration - Duration::seconds(1);
+        let expected_expiry_max = Utc::now() + voting_duration + Duration::seconds(1);
+
+        proposal.start_voting(voting_duration);
+
+        assert_eq!(proposal.state, ProposalState::Voting);
+        assert_eq!(proposal.history.len(), 3);
+        assert_eq!(proposal.history[2].1, ProposalState::Voting);
+        assert!(proposal.expires_at.is_some());
+        let expires_at = proposal.expires_at.unwrap();
+        assert!(expires_at > expected_expiry_min && expires_at < expected_expiry_max, "Expiry time not within expected range");
+    }
+
+    #[test]
+    fn test_invalid_transitions() {
+        let mut proposal = create_test_proposal();
+
+        // Can't start voting from Draft
+        let initial_state = proposal.state.clone();
+        let initial_history_len = proposal.history.len();
+        proposal.start_voting(Duration::days(1));
+        assert_eq!(proposal.state, initial_state); // State should not change
+        assert_eq!(proposal.history.len(), initial_history_len); // History should not change
+        assert!(proposal.expires_at.is_none());
+
+        // Can't open for feedback from Voting
+        proposal.open_for_feedback(); // Move to OpenForFeedback
+        proposal.start_voting(Duration::days(1)); // Move to Voting
+        assert_eq!(proposal.state, ProposalState::Voting);
+        let state_before_invalid = proposal.state.clone();
+        let history_len_before_invalid = proposal.history.len();
+
+        proposal.open_for_feedback(); // Attempt invalid transition
+
+        assert_eq!(proposal.state, state_before_invalid); // State should not change
+        assert_eq!(proposal.history.len(), history_len_before_invalid); // History should not change
+    }
+
+    // TODO: Add tests for tally_votes and check_passed (might require mocking storage or VM)
+    // TODO: Add tests for execute/reject/expire transitions (likely better in integration tests)
 } 
