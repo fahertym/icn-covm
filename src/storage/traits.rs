@@ -71,15 +71,38 @@ pub trait StorageBackend {
     fn get_usage(&self, auth: Option<&AuthContext>, namespace: &str) -> StorageResult<u64>;
 }
 
-// Convenience extension trait for serializing/deserializing values
+// Convenience extension trait - NOW OBJECT SAFE (methods moved to blanket impl)
 pub trait StorageExtensions: StorageBackend {
-    fn get_json<T: DeserializeOwned>(&self, auth: Option<&AuthContext>, namespace: &str, key: &str) -> StorageResult<T>;
-    fn set_json<T: Serialize>(&mut self, auth: Option<&AuthContext>, namespace: &str, key: &str, value: &T) -> StorageResult<()>;
+    // get_json<T: DeserializeOwned>(&self, auth: Option<&AuthContext>, namespace: &str, key: &str) -> StorageResult<T>;
+    // set_json<T: Serialize>(&mut self, auth: Option<&AuthContext>, namespace: &str, key: &str, value: &T) -> StorageResult<()>;
     fn get_identity(&self, identity_id: &str) -> StorageResult<crate::identity::Identity>;
+    // get_version_json<T: DeserializeOwned>(&self, auth: Option<&AuthContext>, namespace: &str, key: &str, version: u64) -> StorageResult<Option<T>>;
 }
 
-// Blanket implementation for the extension trait
+// Blanket implementation providing the convenience methods
+// We add a helper trait internally to define the methods, so the blanket impl still works.
+// This is a bit complex, maybe just defining standalone functions is better?
+// Let's simplify: Keep the blanket impl but the trait itself has no methods anymore (except get_identity).
+
+// --- Revised StorageExtensions --- 
+pub trait StorageExtensions: StorageBackend {
+     // Marker trait combined with StorageBackend. 
+     // get_identity remains as it's not generic.
+     fn get_identity(&self, identity_id: &str) -> StorageResult<crate::identity::Identity>;
+}
+
+// Blanket impl still provides the convenience methods, but they are not part of the dyn Trait vtable.
 impl<S: StorageBackend> StorageExtensions for S {
+    fn get_identity(&self, identity_id: &str) -> StorageResult<crate::identity::Identity> {
+        let key = format!("identities/{}", identity_id);
+        // Need to do manual get + deserialize here, as get_json is not in the trait
+        let bytes = self.get(None, "identity", &key)?;
+        serde_json::from_slice(&bytes)
+             .map_err(|e| crate::storage::errors::StorageError::SerializationError { details: e.to_string() })
+    }
+
+    // Define the generic helpers outside the trait, associated with the impl block
+    // These won't be available via `dyn StorageExtensions`
     fn get_json<T: DeserializeOwned>(&self, auth: Option<&AuthContext>, namespace: &str, key: &str) -> StorageResult<T> {
         let bytes = self.get(auth, namespace, key)?;
         serde_json::from_slice(&bytes)
@@ -91,14 +114,17 @@ impl<S: StorageBackend> StorageExtensions for S {
             .map_err(|e| crate::storage::errors::StorageError::SerializationError { details: e.to_string() })?;
         self.set(auth, namespace, key, bytes)
     }
-    
-    fn get_identity(&self, identity_id: &str) -> StorageResult<crate::identity::Identity> {
-        // Identity storage key convention: identities/{id}
-        let key = format!("identities/{}", identity_id);
-        self.get_json(None, "identity", &key)
-            .map_err(|_| crate::storage::errors::StorageError::Other { 
-                details: format!("Identity not found: {}", identity_id)
-            })
+
+    fn get_version_json<T: DeserializeOwned>(&self, auth: Option<&AuthContext>, namespace: &str, key: &str, version: u64) -> StorageResult<Option<T>> {
+        match self.get_version(auth, namespace, key, version) {
+            Ok((bytes, _)) => {
+                 serde_json::from_slice(&bytes)
+                    .map(Some)
+                    .map_err(|e| crate::storage::errors::StorageError::SerializationError { details: e.to_string() })
+            },
+            Err(crate::storage::errors::StorageError::NotFound { .. }) => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 }
 
@@ -107,3 +133,9 @@ impl<S: StorageBackend> StorageExtensions for S {
 //     fn push(&self, remote_target: &str, namespace: &str) -> StorageResult<()>;
 //     fn pull(&mut self, remote_source: &str, namespace: &str) -> StorageResult<()>;
 // }
+
+/// Supertrait combining StorageBackend and StorageExtensions for use in trait objects.
+pub trait Storage: StorageBackend + StorageExtensions {}
+
+/// Blanket implementation for the Storage supertrait.
+impl<T: StorageBackend + StorageExtensions> Storage for T {}

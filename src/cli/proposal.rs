@@ -374,154 +374,142 @@ pub fn handle_proposal_command(
         Some(("view", view_matches)) => {
             println!("Handling proposal view...");
             let proposal_id = view_matches.get_one::<ProposalId>("id").unwrap().clone();
-            let specific_version_num = view_matches.get_one::<u64>("version").copied(); // Get Option<u64>
+            let specific_version = view_matches.get_one::<u64>("version").copied();
             let show_comments = view_matches.get_flag("comments");
             let show_history = view_matches.get_flag("history");
 
-            let proposal: ProposalLifecycle;
-            let mut version_loaded: Option<u64> = None;
-
-            // --- Load Proposal Data (latest or specific version) --- 
             let storage = vm.storage_backend.as_ref()
-                .ok_or_else(|| "Storage backend not configured for view")?;
+                .ok_or_else(|| "Storage backend not configured for proposal view")?;
             let namespace = "governance";
-            let lifecycle_key = format!("proposals/{}/lifecycle", proposal_id);
-            let auth_ctx_ref = vm.auth_context.as_ref(); // Borrow checker helper
 
-            if let Some(v_num) = specific_version_num {
-                println!("Attempting to load version {} for proposal {}", v_num, proposal_id);
-                match storage.get_version(auth_ctx_ref, namespace, &lifecycle_key, v_num) {
-                    Ok((bytes, version_info)) => {
-                        proposal = serde_json::from_slice(&bytes)
-                            .map_err(|e| format!("Failed to deserialize proposal version {}: {}", v_num, e))?;
-                        version_loaded = Some(version_info.version); // Store which version we actually loaded
-                         println!("Successfully loaded version {} (created by {} at {}).", 
-                                version_info.version, version_info.created_by, version_info.timestamp);
+            // --- Load Proposal Lifecycle (specific version or latest) ---
+            let proposal: ProposalLifecycle =
+                if let Some(version) = specific_version {
+                    let key = format!("proposals/{}/lifecycle", proposal_id);
+                     storage.get_version_json(vm.auth_context.as_ref(), namespace, &key, version)
+                         .map_err(|e| format!("Failed to load version {} of proposal {}: {}", version, proposal_id, e))?
+                         .ok_or_else(|| format!("Version {} not found for proposal {}", version, proposal_id))?
+                } else {
+                     // Use existing helper for latest version
+                     load_proposal(vm, &proposal_id)?
+                };
+
+            // --- Print Core Details ---
+            println!("--- Proposal Details ---");
+            println!("ID:          {}", proposal.id);
+            println!("Title:       {}", proposal.title);
+            println!("Creator:     {}", proposal.creator); // Displaying DID
+            println!("State:       {:?}", proposal.state);
+            println!("Version:     {}", proposal.current_version);
+            println!("Created At:  {}", proposal.created_at.to_rfc3339());
+            if let Some(expires) = proposal.expires_at {
+                println!("Expires At:  {}", expires.to_rfc3339());
+            } else {
+                println!("Expires At:  N/A");
+            }
+            println!("Quorum:      {}", proposal.quorum);
+            println!("Threshold:   {}", proposal.threshold);
+
+            // --- Vote Tally (if Voting) ---
+            if proposal.state == ProposalState::Voting {
+                match proposal.tally_votes(vm) {
+                    Ok((yes, no, abstain)) => {
+                        println!("--- Current Votes ---");
+                        println!("  Yes:       {}", yes);
+                        println!("  No:        {}", no);
+                        println!("  Abstain:   {}", abstain);
+                        let total = yes + no;
+                        let quorum_met = total >= proposal.quorum;
+                        let threshold_met = yes >= proposal.threshold;
+                        println!("  Quorum:    {} / {} (Met: {})", total, proposal.quorum, quorum_met);
+                        println!("  Threshold: {} / {} (Met: {})", yes, proposal.threshold, threshold_met);
                     }
                     Err(e) => {
-                        return Err(format!("Failed to load version {} for proposal {}: {}", v_num, proposal_id, e).into());
+                        println!("Error tallying votes: {}", e);
                     }
                 }
-            } else {
-                println!("Loading latest version for proposal {}", proposal_id);
-                // Use existing helper which calls get_json (loads latest)
-                proposal = load_proposal(vm, &proposal_id)?;
-                version_loaded = Some(proposal.current_version); // Assume helper loads the current version
             }
 
-            // --- Display Proposal Info --- 
-            println!("--- Proposal {} (Version: {}) ---", proposal_id, version_loaded.map_or_else(|| "Unknown".to_string(), |v| v.to_string()));
-            println!("Title: {}", proposal.title);
-            println!("Creator: {}", proposal.creator);
-            println!("Created: {}", proposal.created_at); // Note: This timestamp is from initial creation
-            println!("State (at this version): {:?}", proposal.state);
-            println!("Quorum: {}", proposal.quorum);
-            println!("Threshold: {}", proposal.threshold);
-            // Display execution status if it exists *in this loaded version*
+            // --- List Attachments ---
+            let attachment_prefix = format!("proposals/{}/attachments/", proposal.id);
+            match storage.list_keys(vm.auth_context.as_ref(), namespace, Some(&attachment_prefix)) {
+                Ok(keys) if !keys.is_empty() => {
+                    println!("--- Attachments ---");
+                    for key in keys {
+                        if let Some(name) = key.split('/').last() {
+                            println!("  - {}", name);
+                        }
+                    }
+                }
+                Ok(_) => { /* No attachments found */ }
+                Err(e) => {
+                     println!("Error listing attachments: {}", e);
+                }
+            }
+
+            // --- Execution Status ---
             if let Some(status) = &proposal.execution_status {
+                println!("--- Execution Status ---");
                 match status {
-                    ExecutionStatus::Success => println!("Execution Status: Success"),
-                    ExecutionStatus::Failure(reason) => println!("Execution Status: Failure ({})", reason),
-                }
-            } else if proposal.state == ProposalState::Executed {
-                // If state is Executed but status is None (older version?), indicate maybe
-                 println!("Execution Status: Not recorded in this version (or execution pending)");
-            }
-
-            // --- Display History (from the loaded version's perspective) --- 
-            if show_history {
-                println!("\n--- History (up to this version) ---");
-                for (timestamp, state) in &proposal.history {
-                    // Only show history relevant up to this version's creation time?
-                    // Or just show all history recorded in this version's snapshot?
-                    // Showing snapshot is simpler for now.
-                    println!("- {}: {:?}", timestamp, state);
+                    ExecutionStatus::Success => println!("  Status: Success"),
+                    ExecutionStatus::Failure(reason) => println!("  Status: Failure - {}", reason),
                 }
             }
 
-            // --- Display Comments (always shows latest comments, not versioned) --- 
+            // --- History ---
+             if show_history {
+                 println!("--- History ---");
+                 for (timestamp, state) in &proposal.history {
+                     println!("  [{}] -> {:?}", timestamp.to_rfc3339(), state);
+                 }
+             }
+
+            // --- Comments ---
             if show_comments {
-                 println!("\n--- Comments ---");
-                 let storage = vm.storage_backend.as_ref()
-                    .ok_or_else(|| "Storage backend not configured")?;
-                 let namespace = "deliberation";
-                 let prefix = format!("comments/{}/", proposal_id);
-                 let auth_ctx_ref = vm.auth_context.as_ref();
+                println!("--- Comments ---");
+                let comment_prefix = format!("proposals/{}/comments/", proposal.id);
+                 match storage.list_keys(vm.auth_context.as_ref(), namespace, Some(&comment_prefix)) {
+                     Ok(comment_keys) if !comment_keys.is_empty() => {
+                         let mut all_comments = HashMap::new();
+                         let mut root_comments = Vec::new();
+                         let mut replies_map: HashMap<Option<CommentId>, Vec<CommentId>> = HashMap::new();
 
-                 match storage.list_keys(auth_ctx_ref, namespace, Some(&prefix)) {
-                     Ok(mut comment_keys) => {
-                         if comment_keys.is_empty() {
+                         for key in comment_keys {
+                              match storage.get_json::<Comment>(vm.auth_context.as_ref(), namespace, &key) {
+                                 Ok(comment) => {
+                                     let comment_id = comment.id.clone();
+                                     let reply_to = comment.reply_to.clone();
+                                     all_comments.insert(comment_id.clone(), comment);
+                                     replies_map.entry(reply_to).or_default().push(comment_id);
+                                 }
+                                 Err(e) => println!("Error loading comment {}: {}", key, e),
+                              }
+                         }
+
+                         // Find root comments (those not replying to anything)
+                         if let Some(roots) = replies_map.get(&None) {
+                             root_comments = roots.clone();
+                             // Sort root comments by timestamp
+                             root_comments.sort_by_key(|id| all_comments.get(id).map(|c| c.timestamp));
+                         }
+
+                         if root_comments.is_empty() {
                              println!("No comments found.");
                          } else {
-                            let mut comments_map: HashMap<CommentId, Comment> = HashMap::new();
-                            let mut replies_map: HashMap<Option<CommentId>, Vec<CommentId>> = HashMap::new();
-
-                             comment_keys.retain(|k| k.starts_with(&prefix) && k.split('/').count() == 3);
-
-                             for comment_key in comment_keys {
-                                 match storage.get_json::<Comment>(auth_ctx_ref, namespace, &comment_key) {
-                                     Ok(comment) => {
-                                         // Store comment by its ID
-                                         let id = comment.id.clone();
-                                         replies_map.entry(comment.reply_to.clone()).or_default().push(id.clone());
-                                         comments_map.insert(id, comment);
-                                     }
-                                     Err(e) => {
-                                         eprintln!("Warning: Failed to load or deserialize comment {}: {}", comment_key, e);
-                                     }
-                                 }
+                             for root_id in root_comments {
+                                 print_threaded_comments(&root_id, &all_comments, &replies_map, 0);
                              }
-
-                             // Sort root comments and replies by timestamp
-                             if let Some(root_ids) = replies_map.get_mut(&None) {
-                                 root_ids.sort_by_key(|id| comments_map.get(id).map(|c| c.timestamp).unwrap_or(Utc::now()));
-                             }
-                             for reply_list in replies_map.values_mut() {
-                                  reply_list.sort_by_key(|id| comments_map.get(id).map(|c| c.timestamp).unwrap_or(Utc::now()));
-                             }
-
-                            // Recursive function to print threaded comments
-                            fn print_threaded_comments(
-                                comment_id: &CommentId, 
-                                comments_map: &HashMap<CommentId, Comment>, 
-                                replies_map: &HashMap<Option<CommentId>, Vec<CommentId>>, 
-                                depth: usize
-                            ) {
-                                if let Some(comment) = comments_map.get(comment_id) {
-                                    let indent = "  ".repeat(depth);
-                                    println!("{}- [{}] ({}) {}: {}", 
-                                        indent,
-                                        comment.timestamp.format("%Y-%m-%d %H:%M:%S UTC"),
-                                        comment.id, // Display comment ID for context
-                                        comment.author, 
-                                        comment.content);
-
-                                    // Print replies recursively
-                                    if let Some(reply_ids) = replies_map.get(&Some(comment_id.clone())) {
-                                        for reply_id in reply_ids {
-                                            print_threaded_comments(reply_id, comments_map, replies_map, depth + 1);
-                                        }
-                                    }
-                                }
-                            }
-
-                            // Print root comments
-                            if let Some(root_ids) = replies_map.get(&None) {
-                                for root_id in root_ids {
-                                    print_threaded_comments(root_id, &comments_map, &replies_map, 0);
-                                }
-                            } else {
-                                println!("(No root comments found, check data)");
-                            }
                          }
                      }
-                     Err(e) => {
-                         eprintln!("Error listing comments: {}", e);
+                     Ok(_) => {
+                          println!("No comments found.");
                      }
-                 }
+                     Err(e) => {
+                         println!("Error listing comments: {}", e);
+                     }
+                }
             }
-            // Note: Attachments are also not explicitly loaded by version here.
-            // Viewing attachments would likely always show the latest unless specific attachment versioning is added.
+            println!("-----------------------");
         }
         Some(("edit", edit_matches)) => {
             println!("Handling proposal edit...");
@@ -658,5 +646,32 @@ fn parse_duration_string(duration_str: &str) -> Result<Duration, String> {
         minutes.parse::<i64>().map(Duration::minutes).map_err(|_| "Invalid minute value".to_string())
     } else {
         Err(format!("Invalid duration format: {}. Use d, h, or m suffix.", duration_str))
+    }
+}
+
+// Helper function to print comments in a threaded manner
+// (Keep this function as it was previously defined)
+fn print_threaded_comments(
+    comment_id: &CommentId,
+    comments_map: &HashMap<CommentId, Comment>,
+    replies_map: &HashMap<Option<CommentId>, Vec<CommentId>>,
+    depth: usize
+) {
+     if let Some(comment) = comments_map.get(comment_id) {
+        let indent = "  ".repeat(depth);
+        println!("{}[{}] by {}:", indent, &comment.id, &comment.author.did);
+        println!("{}  {}", indent, &comment.content);
+        println!("{}  @{}", indent, comment.timestamp.to_rfc3339());
+
+        if let Some(replies) = replies_map.get(&Some(comment.id.clone())) {
+             // Sort replies by timestamp before printing
+             let mut sorted_replies = replies.clone();
+             sorted_replies.sort_by_key(|id| comments_map.get(id).map(|c| c.timestamp));
+            for reply_id in sorted_replies {
+                print_threaded_comments(reply_id, comments_map, replies_map, depth + 1);
+            }
+        }
+    } else {
+         println!("Error: Comment {} not found in map.", comment_id);
     }
 }
