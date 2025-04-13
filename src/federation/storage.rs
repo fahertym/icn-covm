@@ -1,4 +1,4 @@
-use crate::federation::messages::{FederatedProposal, FederatedVote, ProposalScope, VotingModel};
+use crate::federation::messages::{FederatedProposal, FederatedVote, ProposalScope, ProposalStatus, VotingModel};
 use crate::identity::Identity;
 use crate::storage::auth::AuthContext;
 use crate::storage::errors::{StorageError, StorageResult};
@@ -97,62 +97,62 @@ impl FederationStorage {
         Ok(())
     }
 
-    /// Add a vote to a proposal
+    /// Load an identity from storage
+    fn load_identity_from_storage<S: StorageExtensions>(
+        &self,
+        storage: &S,
+        identity_id: &str
+    ) -> StorageResult<Identity> {
+        storage.get_identity(identity_id)
+    }
+
+    /// Save a vote to storage, checking eligibility first
     pub fn save_vote<S: StorageExtensions>(
         &self,
         storage: &mut S,
         vote: FederatedVote,
         voter_identity: Option<&Identity>,
     ) -> StorageResult<()> {
-        // First, get the proposal to check scope-based eligibility
+        // First, get the proposal to check eligibility
         let proposal = self.get_proposal(storage, &vote.proposal_id)?;
 
-        // Check if the proposal has expired
-        if let Some(expires_at) = proposal.expires_at {
-            let current_time = current_timestamp();
-            if current_time > expires_at {
-                warn!(
-                    "Vote rejected: Proposal {} has expired at timestamp {}",
-                    vote.proposal_id, expires_at
-                );
-                return Err(StorageError::Other {
-                    details: format!("Proposal has expired at {}", expires_at),
-                });
-            }
+        // Check if voting is still open
+        if proposal.status != ProposalStatus::Open {
+            warn!(
+                "Vote rejected: Proposal {} is not open for voting",
+                vote.proposal_id
+            );
+            return Err(StorageError::Other {
+                details: format!("Proposal {} is not open for voting", vote.proposal_id),
+            });
         }
 
-        // Load the voter identity from storage if not provided
-        let loaded_identity;
-        let identity = if let Some(ident) = voter_identity {
-            ident
+        // Get the identity for verification
+        let identity = if let Some(id) = voter_identity {
+            id.clone()
         } else {
-            // Try to load the identity from storage
-            loaded_identity = match storage.get_identity(&vote.voter) {
-                Ok(ident) => ident,
-                Err(_) => {
-                    // If we can't load the identity, we can't enforce eligibility
-                    warn!(
-                        "Vote verification failed: Could not load identity for voter {}",
-                        vote.voter
-                    );
-                    return Err(StorageError::Other {
-                        details: format!("Could not load identity for voter {}", vote.voter),
+            // Need to load the identity
+            match self.load_identity_from_storage(storage, &vote.voter) {
+                Ok(loaded_identity) => loaded_identity,
+                Err(e) => {
+                    warn!("Failed to load identity for voter {}: {}", vote.voter, e);
+                    return Err(StorageError::NotFound {
+                        key: format!("Identity for voter {} not found", vote.voter),
                     });
                 }
-            };
-            &loaded_identity
+            }
         };
 
         // Verify the signature if the identity has a public key
-        if let Some(pub_key) = &identity.public_key {
+        if let Some(pub_key) = identity.public_key() {
             // Only verify if we have a crypto scheme
-            if let Some(scheme) = &identity.crypto_scheme {
+            if let Some(scheme) = identity.crypto_scheme() {
                 // For now, we'll use a simple verification - in production, use proper crypto
                 if !self.verify_signature(
                     &vote.voter,
                     &vote.message,
                     &vote.signature,
-                    scheme,
+                    &scheme,
                     pub_key,
                 ) {
                     warn!("Vote rejected: Invalid signature from voter {}", vote.voter);
@@ -365,14 +365,16 @@ impl FederationStorage {
                     if let Some(identity) = voter_identities.get(&vote.voter) {
                         if let Some(coop_id) = identity.get_metadata("coop_id") {
                             // Either insert this vote or replace an existing one for this coop
-                            if let Some((_, existing_idx)) = coop_votes.get(coop_id) {
+                            // Convert &str to String for the HashMap key
+                            let coop_id_string = coop_id.to_string();
+                            if let Some((_, existing_idx)) = coop_votes.get(&coop_id_string) {
                                 if idx > *existing_idx {
                                     // This vote is more recent, replace the existing one
-                                    coop_votes.insert(coop_id.clone(), (vote.clone(), idx));
+                                    coop_votes.insert(coop_id_string, (vote.clone(), idx));
                                 }
                             } else {
                                 // First vote from this coop
-                                coop_votes.insert(coop_id.clone(), (vote.clone(), idx));
+                                coop_votes.insert(coop_id_string, (vote.clone(), idx));
                             }
                         } else {
                             // If we can't determine the coop, still include the vote

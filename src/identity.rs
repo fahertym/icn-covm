@@ -173,6 +173,37 @@ impl Identity {
         serde_json::to_string(&public_id).map_err(|e| IdentityError::Serialization(e.to_string()))
     }
 
+    /// Checks if this identity belongs to a specific cooperative
+    /// Looks for a "coop_id" field in the profile
+    pub fn belongs_to(&self, coop_id: &str) -> bool {
+        self.get_metadata("coop_id")
+            .map(|id| id == coop_id)
+            .unwrap_or(false)
+    }
+
+    /// Gets metadata from the profile's other fields
+    pub fn get_metadata(&self, key: &str) -> Option<&str> {
+        self.profile.other_fields.get(key).and_then(|v| {
+            if let serde_json::Value::String(s) = v {
+                Some(s.as_str())
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Returns the crypto scheme being used
+    /// Currently hardcoded to ed25519, but could be extended to support multiple schemes
+    pub fn crypto_scheme(&self) -> Option<String> {
+        Some("ed25519".to_string())
+    }
+
+    /// Compatibility method to access public key as a field
+    /// Returns Some(public_key_bytes) for code that expects an Option
+    pub fn public_key(&self) -> Option<&[u8]> {
+        Some(&self.public_key_bytes)
+    }
+
     // Add methods to load from storage, update profile etc. as needed
 }
 

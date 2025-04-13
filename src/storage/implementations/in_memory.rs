@@ -64,7 +64,7 @@ impl InMemoryStorage {
         // TODO: Consider making event emission configurable or optional
         self.audit_log.push(StorageEvent {
             event_type: event_type.to_string(),
-            user_id: auth.user_id().clone(),
+            user_id: auth.user_id_cloneable(),
             namespace: namespace.to_string(),
             key: key.to_string(),
             timestamp: now(),
@@ -186,16 +186,16 @@ impl StorageBackend for InMemoryStorage {
             let additional_bytes = value_size - existing_size;
             let account = self
                 .accounts
-                .get_mut(&auth_context.user_id())
+                .get_mut(&auth_context.user_id_cloneable())
                 .ok_or_else(|| StorageError::PermissionDenied {
-                    user_id: auth_context.user_id().clone(),
+                    user_id: auth_context.user_id_cloneable(),
                     action: "write (no account)".to_string(), // Better error?
                     key: internal_key.clone(),
                 })?;
             account.add_usage(additional_bytes)?;
         } else if value_size < existing_size {
             let reduced_bytes = existing_size - value_size;
-            if let Some(account) = self.accounts.get_mut(&auth_context.user_id()) {
+            if let Some(account) = self.accounts.get_mut(&auth_context.user_id_cloneable()) {
                 account.reduce_usage(reduced_bytes);
             } // else: Ignore if user has no account? Or error?
         }
@@ -208,8 +208,8 @@ impl StorageBackend for InMemoryStorage {
         let ns_versions = self.versions.entry(namespace.to_string()).or_default();
         let current_version = ns_versions.get(key);
         let next_version = match current_version {
-            Some(v) => v.next_version(&auth_context.user_id()),
-            None => VersionInfo::new(&auth_context.user_id()),
+            Some(v) => v.next_version(&auth_context.user_id_cloneable()),
+            None => VersionInfo::new(&auth_context.user_id_cloneable()),
         };
         ns_versions.insert(key.to_string(), next_version);
 
@@ -247,7 +247,7 @@ impl StorageBackend for InMemoryStorage {
 
         if !auth_context.has_role("global", "admin") {
             return Err(StorageError::PermissionDenied {
-                user_id: auth_context.user_id().clone(),
+                user_id: auth_context.user_id_cloneable(),
                 action: "create_account".to_string(),
                 key: user_id.to_string(),
             });
@@ -312,7 +312,7 @@ impl StorageBackend for InMemoryStorage {
             _ => {
                 return Err(StorageError::PermissionDenied {
                     // Unknown action
-                    user_id: auth.user_id().clone(),
+                    user_id: auth.user_id_cloneable(),
                     action: format!("unknown action: {}", action),
                     key: namespace.to_string(),
                 })
@@ -326,7 +326,7 @@ impl StorageBackend for InMemoryStorage {
             Ok(())
         } else {
             Err(StorageError::PermissionDenied {
-                user_id: auth.user_id().clone(),
+                user_id: auth.user_id_cloneable(),
                 action: action.to_string(),
                 key: namespace.to_string(),
             })
@@ -391,7 +391,7 @@ impl StorageBackend for InMemoryStorage {
             && !auth.unwrap().has_role(effective_ns, "admin")
         {
             return Err(StorageError::PermissionDenied {
-                user_id: auth.unwrap().user_id().clone(),
+                user_id: auth.unwrap().user_id_cloneable(),
                 action: "view_audit_log".to_string(),
                 key: effective_ns.to_string(),
             });
@@ -584,7 +584,7 @@ impl StorageBackend for InMemoryStorage {
                 let metadata = NamespaceMetadata {
                     path: ns.clone(),
                     owner: auth
-                        .map(|a| a.user_id().clone())
+                        .map(|a| a.user_id_cloneable())
                         .unwrap_or_else(|| "system".to_string()),
                     quota_bytes: 1_000_000, // Dummy quota
                     used_bytes: 0,          // We don't track this in the demo
@@ -608,7 +608,7 @@ impl StorageBackend for InMemoryStorage {
         // Check admin permission
         if !auth.unwrap().has_role("global", "admin") {
             return Err(StorageError::PermissionDenied {
-                user_id: auth.unwrap().user_id().clone(),
+                user_id: auth.unwrap().user_id_cloneable(),
                 action: "create_namespace".to_string(),
                 key: namespace.to_string(),
             });
@@ -670,7 +670,7 @@ impl StorageBackend for InMemoryStorage {
         // Reduce quota usage
         if let Some(value) = existing_value {
             let size = value.len() as u64;
-            if let Some(account) = self.accounts.get_mut(&auth.unwrap().user_id()) {
+            if let Some(account) = self.accounts.get_mut(&auth.unwrap().user_id_cloneable()) {
                 account.reduce_usage(size);
             }
         }

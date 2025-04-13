@@ -49,6 +49,18 @@ struct FileResourceAccount {
     last_updated: Timestamp,
 }
 
+impl FileResourceAccount {
+    /// Return a reference to the user ID
+    fn user_id(&self) -> &str {
+        &self.user_id
+    }
+    
+    /// Return a cloned copy of the user ID
+    fn user_id_cloneable(&self) -> String {
+        self.user_id.clone()
+    }
+}
+
 /// Serialization helpers for Timestamp
 mod timestamp_serde {
     use super::*;
@@ -259,7 +271,7 @@ impl FileStorage {
                     })?;
 
                 // Add to cache
-                self.account_cache.insert(account.user_id().clone(), account);
+                self.account_cache.insert(account.user_id_cloneable(), account);
             }
         }
 
@@ -561,7 +573,7 @@ impl FileStorage {
 
         let log_entry = AuditLogEntry {
             timestamp: now,
-            user_id: auth.user_id().clone(),
+            user_id: auth.user_id_cloneable(),
             action: action.to_string(),
             namespace: namespace.to_string(),
             key: key.map(String::from),
@@ -641,7 +653,7 @@ impl FileStorage {
             // Add other actions like "delete", "administer"?
             _ => {
                 return Err(StorageError::PermissionDenied {
-                    user_id: auth.user_id().clone(),
+                    user_id: auth.user_id_cloneable(),
                     action: format!("unknown action: {}", action),
                     key: namespace.to_string(),
                 })
@@ -655,7 +667,7 @@ impl FileStorage {
             Ok(())
         } else {
             Err(StorageError::PermissionDenied {
-                user_id: auth.user_id().clone(),
+                user_id: auth.user_id_cloneable(),
                 action: action.to_string(),
                 key: namespace.to_string(),
             })
@@ -810,7 +822,7 @@ impl StorageBackend for FileStorage {
 
             // Get the user's account
             let user_id = auth
-                .map(|a| a.user_id().clone())
+                .map(|a| a.user_id_cloneable())
                 .unwrap_or_else(|| "system".to_string());
             if let Some(account) = self.account_cache.get_mut(&user_id) {
                 if account.used_bytes + additional_bytes > account.quota_bytes {
@@ -858,7 +870,7 @@ impl StorageBackend for FileStorage {
 
         // Get the user ID for the version info
         let user_id = auth
-            .map(|a| a.user_id().clone())
+            .map(|a| a.user_id_cloneable())
             .unwrap_or_else(|| "system".to_string());
 
         // Get the new version number
@@ -1274,7 +1286,7 @@ impl StorageBackend for FileStorage {
 
         // Create a user ID for the diff creator
         let user_id = auth
-            .map(|a| a.user_id().clone())
+            .map(|a| a.user_id_cloneable())
             .unwrap_or_else(|| "system".to_string());
 
         // Return the diff
@@ -1302,7 +1314,7 @@ impl StorageBackend for FileStorage {
 
         if !can_create {
             return Err(StorageError::PermissionDenied {
-                user_id: auth.map_or("anonymous".to_string(), |a| a.user_id().clone()),
+                user_id: auth.map_or("anonymous".to_string(), |a| a.user_id_cloneable()),
                 action: "create_namespace".to_string(),
                 key: namespace.to_string(),
             });
@@ -1335,7 +1347,7 @@ impl StorageBackend for FileStorage {
         // Create namespace metadata
         let metadata = NamespaceMetadata {
             path: namespace.to_string(),
-            owner: auth.map_or("SYSTEM".to_string(), |a| a.user_id().clone()),
+            owner: auth.map_or("SYSTEM".to_string(), |a| a.user_id_cloneable()),
             quota_bytes,
             used_bytes: 0,
             parent: parent_namespace.map(String::from),
@@ -1532,7 +1544,7 @@ impl StorageBackend for FileStorage {
             && !auth.unwrap().has_role(effective_ns, "admin")
         {
             return Err(StorageError::PermissionDenied {
-                user_id: auth.unwrap().user_id().clone(),
+                user_id: auth.unwrap().user_id_cloneable(),
                 action: "view_audit_log".to_string(),
                 key: effective_ns.to_string(),
             });

@@ -322,6 +322,7 @@ impl ProposalLifecycleMacro {
         lines.push(format!("title {}", self.title));
         lines.push(format!("quorum {}", self.quorum));
         lines.push(format!("threshold {}", self.threshold));
+        lines.push(format!("author {}", self.created_by));
         
         // Add the execution block lines
         for line in &self.execution_block {
@@ -332,7 +333,7 @@ impl ProposalLifecycleMacro {
         if !self.passed_block.is_empty() {
             lines.push("if passed:".to_string());
             for line in &self.passed_block {
-                lines.push(line.clone());
+                lines.push(format!("    {}", line)); // Add indentation
             }
         }
         
@@ -341,7 +342,7 @@ impl ProposalLifecycleMacro {
             if !failed_lines.is_empty() {
                 lines.push("else:".to_string());
                 for line in failed_lines {
-                    lines.push(line.clone());
+                    lines.push(format!("    {}", line)); // Add indentation
                 }
             }
         }

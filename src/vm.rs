@@ -818,9 +818,11 @@ where
         self.events.push(event);
     }
 
-    // Fork implementation - now clones S
+    // Create a fork of this VM for isolated execution
     pub fn fork(&mut self) -> Result<Self, VMError> {
-        // Create a new VM instance with the same storage backend
+        println!("Creating fork of VM...");
+        
+        // Create a new VM with same auth context
         let mut new_vm = Self {
             stack: Vec::new(),
             memory: HashMap::new(),
@@ -835,18 +837,18 @@ where
             transaction_active: false,
         };
 
-        // Copy the storage backend if available
-        if let Some(storage) = &self.storage_backend {
-            // Begin a transaction in the storage backend
-            self.storage_operation("begin_transaction", |s, auth_ctx, namespace| {
-                // Get the user ID for the transaction
-                let user_id = auth_ctx.map(|a| a.identity_did()).unwrap_or("system");
-                s.begin_transaction(auth_ctx, namespace, user_id)?;
-                Ok(((), None))
-            })?;
-
-            // Set the new VM's storage backend to the same one
-            new_vm.storage_backend = Some(storage.clone());
+        // Begin transaction in storage backend if available
+        if self.storage_backend.is_some() {
+            // Clone the storage backend first
+            let storage_clone = self.storage_backend.as_ref().unwrap().clone();
+            
+            // Start transaction in the cloned storage
+            let mut transactional_storage = storage_clone.clone();
+            transactional_storage.begin_transaction()
+                .map_err(|e| VMError::StorageError(format!("Failed to begin transaction: {}", e)))?;
+                
+            // Set the storage backend with transaction started
+            new_vm.storage_backend = Some(transactional_storage);
             new_vm.transaction_active = true;
         }
 

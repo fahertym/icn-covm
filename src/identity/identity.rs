@@ -88,6 +88,16 @@ impl Identity {
             _ => format!("identities/{}/{}", self.identity_type, self.id),
         }
     }
+    
+    /// Get the public key for this identity
+    pub fn public_key(&self) -> Option<&Vec<u8>> {
+        self.public_key.as_ref()
+    }
+    
+    /// Get the crypto scheme for this identity
+    pub fn crypto_scheme(&self) -> Option<&String> {
+        self.crypto_scheme.as_ref()
+    }
 }
 
 /// Registry for managing identities

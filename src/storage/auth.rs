@@ -170,11 +170,20 @@ impl AuthContext {
     }
     
     /// For backwards compatibility, alias to current_identity_did
+    /// Returns the user ID as a string reference
     pub fn user_id(&self) -> &str {
         &self.current_identity_did
     }
 
+    /// For backwards compatibility, returns the user ID as a cloned String
+    /// Use this when you need to own the string for storage or other operations
     pub fn user_id_string(&self) -> String {
+        self.current_identity_did.clone()
+    }
+    
+    /// For backwards compatibility with code that expects to call .clone() on the result
+    /// of user_id() to get a String
+    pub fn user_id_cloneable(&self) -> String {
         self.current_identity_did.clone()
     }
 }
