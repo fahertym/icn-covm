@@ -406,7 +406,7 @@ where
         .as_ref()
         .ok_or_else(|| "Storage backend not configured for load_proposal")?;
     let namespace = "governance";
-    let key = format!("proposals/{}/lifecycle", proposal_id);
+    let key = format!("governance/proposals/{}/lifecycle", proposal_id);
     // Need to handle potential deserialization issues if ProposalLifecycle still expects u64 ID
     storage
         .get_json::<ProposalLifecycle>(vm.auth_context.as_ref(), namespace, &key)
@@ -613,7 +613,7 @@ where
             // 5. Store lifecycle object
             // Assuming lifecycle is stored in "governance" namespace
             let namespace = "governance";
-            let key = format!("proposals/{}/lifecycle", proposal_id);
+            let key = format!("governance/proposals/{}/lifecycle", proposal_id);
             storage.set_json(Some(auth_context), namespace, &key, &proposal)?;
             println!("Proposal {} lifecycle stored.", proposal_id);
 
@@ -661,7 +661,7 @@ where
             // Assuming attachments stored in "governance" namespace
             let namespace = "governance";
             let key = format!(
-                "proposals/{}/attachments/{}",
+                "governance/proposals/{}/attachments/{}",
                 proposal_id, sanitized_attachment_name
             );
 
@@ -712,7 +712,7 @@ where
                 .map_err(|_| format!("Proposal with ID {} not found", proposal_id))?;
             
             // Store the comment
-            let comment_key = format!("comments/{}/{}", proposal_id, comment_id);
+            let comment_key = format!("governance/proposals/{}/comments/{}", proposal_id, comment_id);
             storage.set_json(
                 Some(auth_context),
                 namespace,
@@ -745,7 +745,7 @@ where
 
             // --- Load Proposal Lifecycle (specific version or latest) ---
             let proposal: ProposalLifecycle = if let Some(version) = specific_version {
-                let key = format!("proposals/{}/lifecycle", proposal_id);
+                let key = format!("governance/proposals/{}/lifecycle", proposal_id);
                 storage
                     .get_version_json(vm.auth_context.as_ref(), namespace, &key, version)
                     .map_err(|e| {
@@ -787,7 +787,7 @@ where
                     .ok_or_else(|| "Storage backend not configured for tallying votes")?;
 
                 // Build a list of keys for votes
-                let vote_prefix = format!("proposals/{}/votes/", proposal_id);
+                let vote_prefix = format!("governance/proposals/{}/votes/", proposal_id);
                 let mut yes_votes = 0;
                 let mut no_votes = 0;
                 let mut abstain_votes = 0;
@@ -835,7 +835,7 @@ where
             }
 
             // --- List Attachments ---
-            let attachment_prefix = format!("proposals/{}/attachments/", proposal.id);
+            let attachment_prefix = format!("governance/proposals/{}/attachments/", proposal.id);
             match storage.list_keys(
                 vm.auth_context.as_ref(),
                 namespace,
@@ -875,17 +875,17 @@ where
             // --- Comments ---
             if show_comments {
                 println!("--- Comments ---");
-                let comment_prefix = format!("proposals/{}/comments/", proposal.id);
+                let comment_prefix = format!("governance/proposals/{}/comments/", proposal.id);
                 match storage.list_keys(vm.auth_context.as_ref(), namespace, Some(&comment_prefix))
                 {
                     Ok(comment_keys) if !comment_keys.is_empty() => {
-                        let mut all_comments = HashMap::new();
+                        let mut all_comments: HashMap<CommentId, ProposalComment> = HashMap::new();
                         let mut root_comments = Vec::new();
                         let mut replies_map: HashMap<Option<CommentId>, Vec<CommentId>> =
                             HashMap::new();
 
                         for key in comment_keys {
-                            match storage.get_json::<Comment>(
+                            match storage.get_json::<ProposalComment>(
                                 vm.auth_context.as_ref(),
                                 namespace,
                                 &key,
@@ -914,7 +914,7 @@ where
                             println!("No comments found.");
                         } else {
                             for root_id in root_comments {
-                                print_threaded_comments(&root_id, &all_comments, &replies_map, 0);
+                                print_view_comments(&root_id, &all_comments, &replies_map, 0);
                                 println!(); // Add a blank line between top-level comments
                             }
                         }
@@ -977,7 +977,7 @@ where
                     return Err(format!("New body file not found: {:?}", path).into());
                 }
                 let content_bytes = fs::read(path)?;
-                let key = format!("proposals/{}/attachments/body", proposal_id);
+                let key = format!("governance/proposals/{}/attachments/body", proposal_id);
                 // Assuming common attachment names like "body.md" or "body"
                 storage.set(Some(auth_context), namespace, &key, content_bytes)?;
                 edited = true;
@@ -990,7 +990,7 @@ where
                     return Err(format!("New logic file not found: {:?}", path).into());
                 }
                 let content_bytes = fs::read(path)?;
-                let key = format!("proposals/{}/attachments/logic", proposal_id);
+                let key = format!("governance/proposals/{}/attachments/logic", proposal_id);
                 // Assuming common attachment names like "logic.ccl" or "logic"
                 storage.set(Some(auth_context), namespace, &key, content_bytes)?;
                 edited = true;
@@ -1004,7 +1004,7 @@ where
                 proposal.history.push((Utc::now(), proposal.state.clone())); // Record the edit/version bump
 
                 // 8. Save updated lifecycle
-                let lifecycle_key = format!("proposals/{}/lifecycle", proposal_id);
+                let lifecycle_key = format!("governance/proposals/{}/lifecycle", proposal_id);
                 storage.set_json(Some(auth_context), namespace, &lifecycle_key, &proposal)?;
                 println!(
                     "Proposal {} edited. New version: {}.",
@@ -1035,7 +1035,7 @@ where
                 .as_mut()
                 .ok_or_else(|| "Storage backend not configured for proposal publish")?;
             let namespace = "governance";
-            let key = format!("proposals/{}/lifecycle", proposal_id);
+            let key = format!("governance/proposals/{}/lifecycle", proposal_id);
             // Use direct method call
             storage.set_json(Some(auth_context), namespace, &key, &proposal)?;
             println!(
@@ -1065,7 +1065,7 @@ where
                 .as_mut()
                 .ok_or_else(|| "Storage backend not configured for proposal vote")?;
             let namespace = "governance";
-            let key = format!("proposals/{}/votes/{}", proposal_id, user_did); // Use DID
+            let key = format!("governance/proposals/{}/votes/{}", proposal_id, user_did); // Use DID
             storage_ref_mut.set(
                 Some(auth_context),
                 namespace,
@@ -1484,73 +1484,53 @@ fn parse_duration_string(duration_str: &str) -> Result<Duration, Box<dyn Error>>
     }
 }
 
-/// Fetch all comments for a proposal
-///
-/// Retrieves comments from storage and returns them as a HashMap keyed by comment ID.
-/// This function checks multiple storage paths to ensure all comments are found,
-/// including both the newer and legacy storage locations.
-///
-/// # Parameters
-/// * `vm` - The virtual machine with access to storage
-/// * `proposal_id` - ID of the proposal to fetch comments for
-/// * `auth` - Optional authentication context
-///
-/// # Returns
-/// * `Result<HashMap<String, ProposalComment>, Box<dyn Error>>` - Comments on success, or an error
-///
-/// # Errors
-/// Returns an error if the storage backend is not available
+/// Fetches comments for a proposal, returning a HashMap keyed by comment id
 pub fn fetch_comments_threaded<S>(
     vm: &VM<S>,
     proposal_id: &str,
     auth: Option<&AuthContext>,
 ) -> Result<HashMap<String, ProposalComment>, Box<dyn Error>> 
-where
-    S: Storage + Send + Sync + Clone + Debug + 'static,
+where 
+    S: Storage + Send + Sync + Clone + Debug + 'static
 {
-    let storage = vm
-        .storage_backend
-        .as_ref()
-        .ok_or("Storage backend not available")?;
+    // Check that the proposal exists
+    let proposal_path = format!("governance/proposals/{}", proposal_id);
+    
+    // Ensure the proposal exists before fetching comments
+    let storage = vm.storage_backend.as_ref().ok_or("Storage backend not available")?;
+    if storage.get_json::<Proposal>(auth, "governance", &proposal_path).is_err() {
+        return Err(format!("Proposal {} does not exist", proposal_id).into());
+    }
 
-    let namespace = "governance";
+    // Fetch all comments stored under governance/proposals/{proposal_id}/comments/
+    let comment_path = format!("governance/proposals/{}/comments", proposal_id);
+    let comments_refs = storage.list_keys(auth, "governance", Some(&comment_path))?;
+    
     let mut comments = HashMap::new();
-    
-    // Check both possible storage paths for comments
-    
-    // Path 1: "comments/{proposal_id}/"
-    let prefix1 = format!("comments/{}/", proposal_id);
-    if let Ok(keys) = storage.list_keys(auth, namespace, Some(&prefix1)) {
-        for key in keys {
-            if let Ok(comment) = storage.get_json::<ProposalComment>(auth, namespace, &key) {
+    let mut children = HashMap::new();
+
+    for comment_ref in comments_refs {
+        match storage.get_json::<ProposalComment>(auth, "governance", &comment_ref) {
+            Ok(comment) => {
+                if let Some(reply_to) = &comment.reply_to {
+                    children
+                        .entry(reply_to.clone())
+                        .or_insert_with(Vec::new)
+                        .push(comment.id.clone());
+                }
                 comments.insert(comment.id.clone(), comment);
-            }
+            },
+            Err(_) => continue, // Skip invalid comments
         }
     }
-    
-    // Path 2: "proposals/{proposal_id}/comments/"
-    let prefix2 = format!("proposals/{}/comments/", proposal_id);
-    if let Ok(keys) = storage.list_keys(auth, namespace, Some(&prefix2)) {
-        for key in keys {
-            // Try to parse as ProposalComment first
-            if let Ok(comment) = storage.get_json::<ProposalComment>(auth, namespace, &key) {
-                comments.insert(comment.id.clone(), comment);
-            } 
-            // If that fails, try to convert from Comment
-            else if let Ok(comment) = storage.get_json::<Comment>(auth, namespace, &key) {
-                // Convert to ProposalComment format
-                let proposal_comment = ProposalComment {
-                    id: comment.id,
-                    author: comment.author.did.clone(),
-                    timestamp: comment.timestamp,
-                    content: comment.content,
-                    reply_to: comment.reply_to,
-                };
-                comments.insert(proposal_comment.id.clone(), proposal_comment);
-            }
+
+    // Update the children for each comment
+    for (comment_id, comment_children) in children {
+        if let Some(comment) = comments.get_mut(&comment_id) {
+            comment.reply_to = Some(comment_children[0].clone());
         }
     }
-    
+
     Ok(comments)
 }
 
@@ -1563,15 +1543,15 @@ where
 /// * `comments_map` - HashMap of all comments, keyed by comment ID
 /// * `replies_map` - HashMap mapping each comment ID to a vector of its reply comment IDs
 /// * `depth` - Current indentation depth (0 for top-level comments)
-fn print_threaded_comments(
+fn print_view_comments(
     comment_id: &CommentId,
-    comments_map: &HashMap<CommentId, Comment>,
+    comments_map: &HashMap<CommentId, ProposalComment>,
     replies_map: &HashMap<Option<CommentId>, Vec<CommentId>>,
     depth: usize,
 ) {
     if let Some(comment) = comments_map.get(comment_id) {
         let indent = "  ".repeat(depth);
-        println!("{}[{}] by {}:", indent, &comment.id, &comment.author.did);
+        println!("{}[{}] by {}:", indent, &comment.id, &comment.author);
         println!("{}  {}", indent, &comment.content);
         println!("{}  @{}", indent, comment.timestamp.to_rfc3339());
 
@@ -1580,7 +1560,7 @@ fn print_threaded_comments(
             let mut sorted_replies = replies.clone();
             sorted_replies.sort_by_key(|id| comments_map.get(id).map(|c| c.timestamp));
             for reply_id in sorted_replies {
-                print_threaded_comments(&reply_id, comments_map, replies_map, depth + 1);
+                print_view_comments(&reply_id, comments_map, replies_map, depth + 1);
             }
         }
     } else {

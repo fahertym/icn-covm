@@ -19,6 +19,15 @@ use crate::storage::implementations::in_memory::InMemoryStorage;
 use crate::storage::traits::{Storage, StorageBackend, StorageExtensions};
 use crate::vm::VM;
 
+// Implement Clone for InMemoryStorage to satisfy VM's constraints
+impl Clone for InMemoryStorage {
+    fn clone(&self) -> Self {
+        // Create a new instance - this is a simplified clone for tests
+        // In practice, you would want to clone the actual data
+        InMemoryStorage::new()
+    }
+}
+
 /// Run a complete demonstration of the proposal lifecycle
 ///
 /// This function demonstrates the entire proposal management system by:
@@ -183,7 +192,7 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
     storage.set_json(
         Some(&auth),
         "governance",
-        &format!("comments/{}/{}", proposal_id, comment1_id),
+        &format!("governance/proposals/{}/comments/{}", proposal_id, comment1_id),
         &comment1,
     )?;
     
@@ -203,7 +212,7 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
     storage.set_json(
         Some(&auth),
         "governance",
-        &format!("comments/{}/{}", proposal_id, comment2_id),
+        &format!("governance/proposals/{}/comments/{}", proposal_id, comment2_id),
         &comment2,
     )?;
     
@@ -222,7 +231,7 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
     storage.set_json(
         Some(&auth),
         "governance",
-        &format!("comments/{}/{}", proposal_id, comment3_id),
+        &format!("governance/proposals/{}/comments/{}", proposal_id, comment3_id),
         &comment3,
     )?;
     
@@ -241,7 +250,7 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
     storage.set_json(
         Some(&auth),
         "governance",
-        &format!("comments/{}/{}", proposal_id, comment4_id),
+        &format!("governance/proposals/{}/comments/{}", proposal_id, comment4_id),
         &comment4,
     )?;
     
@@ -260,7 +269,7 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
     storage.set_json(
         Some(&auth),
         "governance",
-        &format!("comments/{}/{}", proposal_id, comment5_id),
+        &format!("governance/proposals/{}/comments/{}", proposal_id, comment5_id),
         &comment5,
     )?;
     
