@@ -3,15 +3,13 @@ use std::sync::Arc;
 use std::fmt::Debug;
 use crate::storage::traits::{Storage, StorageExtensions};
 use crate::api::auth::{with_auth, AuthInfo};
-use crate::api::error::{not_found, internal_error};
+use crate::api::error::{not_found, internal_error, bad_request};
 use crate::api::storage::AsyncStorage;
-use crate::models::ProposalId;
 use crate::response::ApiResponse;
 use log::{info, warn, error};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use crate::api::v1::models::*;
-use crate::api::v1::errors::*;
+use crate::storage::errors::StorageError;
 use crate::governance::proposal_lifecycle::ProposalLifecycle;
 use crate::vm::VM;
 
@@ -73,9 +71,8 @@ pub async fn get_execution_results_handler<S>(
 where
     S: Storage + Send + Sync + Clone + Debug + 'static,
 {
-    // Parse proposal ID
-    let proposal_id = ProposalId::try_from(proposal_id_str.as_str())
-        .map_err(|_| ApiError::InvalidProposalId(proposal_id_str.clone()))?;
+    // Parse proposal ID - using String directly since ProposalId is a type alias
+    let proposal_id = proposal_id_str.clone();
 
     // Ensure the proposal exists
     let proposal_lifecycle_key = format!("governance/proposals/{}/lifecycle", proposal_id);
@@ -104,12 +101,12 @@ where
                             "execution_status": lifecycle.execution_status
                         });
                         
-                        Ok(warp::reply::json(&response))
+                        Ok(warp::reply::json(&ApiResponse::success("Retrieved execution result", response)))
                     }
-                    Err(StorageError::KeyNotFound(_)) => {
-                        Err(ApiError::VersionNotFound(proposal_id.to_string(), version).into())
+                    Err(StorageError::NotFound) => {
+                        Err(not_found(format!("Execution result version {} not found for proposal {}", version, proposal_id)).into())
                     }
-                    Err(err) => Err(ApiError::StorageError(err.to_string()).into()),
+                    Err(err) => Err(internal_error(format!("Storage error: {}", err)).into()),
                 }
             } else {
                 // Look for latest version
@@ -137,19 +134,19 @@ where
                             "execution_status": lifecycle.execution_status
                         });
                         
-                        Ok(warp::reply::json(&response))
+                        Ok(warp::reply::json(&ApiResponse::success("Retrieved latest execution result", response)))
                     }
-                    Err(StorageError::KeyNotFound(_)) => {
-                        Err(ApiError::NoExecutionResult(proposal_id.to_string()).into())
+                    Err(StorageError::NotFound) => {
+                        Err(not_found(format!("No execution result found for proposal {}", proposal_id)).into())
                     }
-                    Err(err) => Err(ApiError::StorageError(err.to_string()).into()),
+                    Err(err) => Err(internal_error(format!("Storage error: {}", err)).into()),
                 }
             }
         }
-        Err(StorageError::KeyNotFound(_)) => {
-            Err(ApiError::ProposalNotFound(proposal_id.to_string()).into())
+        Err(StorageError::NotFound) => {
+            Err(not_found(format!("Proposal {} not found", proposal_id)).into())
         }
-        Err(err) => Err(ApiError::StorageError(err.to_string()).into()),
+        Err(err) => Err(internal_error(format!("Storage error: {}", err)).into()),
     }
 }
 
@@ -161,9 +158,8 @@ pub async fn list_execution_versions_handler<S>(
 where
     S: Storage + Send + Sync + Clone + Debug + 'static,
 {
-    // Parse proposal ID
-    let proposal_id = ProposalId::try_from(proposal_id_str.as_str())
-        .map_err(|_| ApiError::InvalidProposalId(proposal_id_str.clone()))?;
+    // Parse proposal ID - using String directly since ProposalId is a type alias
+    let proposal_id = proposal_id_str.clone();
 
     // Ensure the proposal exists
     let proposal_lifecycle_key = format!("governance/proposals/{}/lifecycle", proposal_id);
@@ -181,14 +177,14 @@ where
                         "current_metadata": lifecycle.execution_metadata,
                         "execution_status": lifecycle.execution_status
                     });
-                    Ok(warp::reply::json(&response))
+                    Ok(warp::reply::json(&ApiResponse::success("Retrieved execution versions", response)))
                 }
-                Err(err) => Err(ApiError::StorageError(err.to_string()).into()),
+                Err(err) => Err(internal_error(format!("Storage error: {}", err)).into()),
             }
         }
-        Err(StorageError::KeyNotFound(_)) => {
-            Err(ApiError::ProposalNotFound(proposal_id.to_string()).into())
+        Err(StorageError::NotFound) => {
+            Err(not_found(format!("Proposal {} not found", proposal_id)).into())
         }
-        Err(err) => Err(ApiError::StorageError(err.to_string()).into()),
+        Err(err) => Err(internal_error(format!("Storage error: {}", err)).into()),
     }
 } 

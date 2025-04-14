@@ -6,6 +6,7 @@ pub mod events;
 pub mod federation;
 pub mod governance;
 pub mod identity;
+pub mod response;
 pub mod storage;
 pub mod utils;
 #[cfg(feature = "typed-values")]

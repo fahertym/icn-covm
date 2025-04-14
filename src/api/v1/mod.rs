@@ -3,10 +3,8 @@ pub mod executions;
 pub mod models;
 pub mod proposals;
 
-// Use the handlers submodule, not the file
-pub mod handlers {
-    pub use super::handlers::execution::*;
-}
+// Use the handlers submodule
+pub mod handlers;
 
 use crate::storage::traits::{Storage, StorageExtensions};
 use crate::vm::VM;
