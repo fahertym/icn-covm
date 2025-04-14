@@ -2,7 +2,7 @@ use warp::{Filter, Rejection, Reply};
 use crate::storage::traits::{StorageBackend, StorageExtensions, AsyncStorageExtensions};
 use crate::api::storage::AsyncStorage;
 use crate::vm::VM;
-use crate::api::auth::{with_auth, AuthInfo, require_role};
+use crate::api::auth::{with_auth, AuthInfo, require_role, with_auth_and_role};
 use crate::api::error::{ApiError, not_found, bad_request, internal_error, forbidden};
 use crate::api::v1::models::{
     MacroDefinition, MacroListResponse, MacroSummary, CreateMacroRequest,
@@ -49,8 +49,7 @@ where
         .and(warp::body::json())
         .and(v1::with_storage(storage.clone()))
         .and(warp::any().map(move || vm.clone()))
-        .and(with_auth())
-        .and(require_role("dsl:write"))
+        .and(with_auth_and_role("dsl:write"))
         .and_then(create_macro_handler);
     
     let update_macro = base
@@ -60,8 +59,7 @@ where
         .and(warp::body::json())
         .and(v1::with_storage(storage.clone()))
         .and(warp::any().map(move || vm.clone()))
-        .and(with_auth())
-        .and(require_role("dsl:write"))
+        .and(with_auth_and_role("dsl:write"))
         .and_then(update_macro_handler);
     
     let delete_macro = base
@@ -69,8 +67,7 @@ where
         .and(warp::path::param())
         .and(warp::delete())
         .and(v1::with_storage(storage.clone()))
-        .and(with_auth())
-        .and(require_role("dsl:write"))
+        .and(with_auth_and_role("dsl:write"))
         .and_then(delete_macro_handler);
     
     let execute_macro = base
@@ -81,8 +78,7 @@ where
         .and(warp::body::json())
         .and(v1::with_storage(storage.clone()))
         .and(warp::any().map(move || vm.clone()))
-        .and(with_auth())
-        .and(require_role("dsl:execute"))
+        .and(with_auth_and_role("dsl:execute"))
         .and_then(execute_macro_handler);
     
     list_macros
@@ -146,7 +142,6 @@ async fn create_macro_handler(
     storage: Arc<Arc<Mutex<impl StorageBackend + StorageExtensions + AsyncStorageExtensions + Send + Sync + 'static>>>,
     vm: Arc<VM<Arc<Mutex<impl StorageBackend + StorageExtensions + AsyncStorageExtensions + Send + Sync + Clone + std::fmt::Debug + 'static>>>>,
     auth: AuthInfo,
-    _: (),
 ) -> Result<impl Reply, Rejection> {
     // Validate the DSL code
     let _ = vm.validate_dsl(&create_request.code)
@@ -199,7 +194,6 @@ async fn update_macro_handler(
     storage: Arc<Arc<Mutex<impl StorageBackend + StorageExtensions + AsyncStorageExtensions + Send + Sync + 'static>>>,
     vm: Arc<VM<Arc<Mutex<impl StorageBackend + StorageExtensions + AsyncStorageExtensions + Send + Sync + Clone + std::fmt::Debug + 'static>>>>,
     auth: AuthInfo,
-    _: (),
 ) -> Result<impl Reply, Rejection> {
     // Validate the DSL code
     let _ = vm.validate_dsl(&update_request.code)
@@ -248,7 +242,6 @@ async fn delete_macro_handler(
     id: String,
     storage: Arc<Arc<Mutex<impl StorageBackend + StorageExtensions + AsyncStorageExtensions + Send + Sync + 'static>>>,
     auth: AuthInfo,
-    _: (),
 ) -> Result<impl Reply, Rejection> {
     // Check if macro exists
     let _ = AsyncStorage::get_macro(&**storage, &id).await
@@ -270,7 +263,6 @@ async fn execute_macro_handler(
     storage: Arc<Arc<Mutex<impl StorageBackend + StorageExtensions + AsyncStorageExtensions + Send + Sync + 'static>>>,
     vm: Arc<VM<Arc<Mutex<impl StorageBackend + StorageExtensions + AsyncStorageExtensions + Send + Sync + Clone + std::fmt::Debug + 'static>>>>,
     auth: AuthInfo,
-    _: (),
 ) -> Result<impl Reply, Rejection> {
     // Get the macro
     let macro_def = AsyncStorage::get_macro(&**storage, &id).await

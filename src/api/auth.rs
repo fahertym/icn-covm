@@ -81,4 +81,17 @@ pub async fn validate_did_proof(
     // In a real implementation, this would verify the proof against the DID
     
     Ok(true) // Mock validation result (always true for now)
+}
+
+/// Authentication filter with role requirement for secure endpoints
+pub fn with_auth_and_role(role: &'static str) -> impl Filter<Extract = (AuthInfo,), Error = warp::Rejection> + Clone {
+    with_auth().and_then(move |auth_info: AuthInfo| async move {
+        if auth_info.roles.contains(&role.to_string()) {
+            Ok(auth_info)
+        } else {
+            Err(reject_with_api_error(
+                ApiError::Forbidden("Insufficient permissions".to_string())
+            ))
+        }
+    })
 } 

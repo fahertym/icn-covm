@@ -690,7 +690,7 @@ pub struct VMEvent {
 pub struct VM<S>
 // Make VM generic over storage type S
 where
-    S: StorageBackend + StorageExtensions + Send + Sync + Clone + std::fmt::Debug + 'static, 
+    S: StorageBackend + StorageExtensions + AsyncStorageExtensions + Send + Sync + Clone + std::fmt::Debug + 'static, 
 {
     /// Stack for operands
     pub stack: Vec<f64>,
@@ -729,7 +729,7 @@ where
 
 impl<S> VM<S>
 where
-    S: StorageBackend + StorageExtensions + Send + Sync + Clone + std::fmt::Debug + 'static,
+    S: StorageBackend + StorageExtensions + AsyncStorageExtensions + Send + Sync + Clone + std::fmt::Debug + 'static,
 {
     // VM::new - creates default InMemoryStorage if no backend provided initially
     // This needs rethinking. new() maybe shouldn't have storage?
@@ -1718,20 +1718,15 @@ where
     where 
         S: crate::storage::traits::AsyncStorageExtensions,
     {
-        // Get macro definition
-        let macro_def = match self.storage_backend.as_ref() {
-            Some(storage) => {
-                match storage.get_macro(macro_id).await {
-                    Ok(def) => def,
-                    Err(e) => return Err(format!("Error loading macro: {}", e)),
-                }
-            },
-            None => return Err("Storage backend not available".to_string()),
-        };
+        // Get the storage backend
+        let storage = self.storage_backend.as_ref().ok_or_else(|| "Storage backend not available".to_string())?;
         
-        // Execute the macro's DSL code
-        self.execute_dsl(&macro_def.code, params)
-            .map_err(|e| e.to_string())
+        // Get the macro definition
+        let macro_def = storage.get_macro(macro_id).await
+            .map_err(|e| format!("Failed to get macro: {}", e))?;
+        
+        // Execute the DSL code with the parameters
+        self.execute_dsl(&macro_def.code, params).map_err(|e| e.to_string())
     }
     
     /// Execute DSL code with optional parameters
