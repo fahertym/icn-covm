@@ -1,6 +1,5 @@
 use warp::{Filter, Rejection, Reply};
 use crate::storage::traits::{StorageBackend, StorageExtensions, AsyncStorageExtensions};
-use crate::api::storage::AsyncStorage;
 use crate::vm::VM;
 use crate::api::auth::{with_auth, AuthInfo, require_role, with_auth_and_role};
 use crate::api::error::{ApiError, not_found, bad_request, internal_error, forbidden};
@@ -91,7 +90,7 @@ where
 
 fn with_vm<S>(vm: Arc<VM<S>>) -> impl Filter<Extract = (Arc<VM<S>>,), Error = std::convert::Infallible> + Clone 
 where
-    S: StorageBackend + StorageExtensions + AsyncStorageExtensions + Send + Sync + 'static
+    S: StorageBackend + StorageExtensions + AsyncStorageExtensions + Send + Sync + Clone + std::fmt::Debug + 'static
 {
     warp::any().map(move || vm.clone())
 }
@@ -100,15 +99,18 @@ where
 async fn list_macros_handler(
     pagination: PaginationParams,
     sort: SortParams,
-    storage: Arc<Arc<Mutex<impl StorageBackend + AsyncStorageExtensions + Send + Sync + 'static>>>,
+    storage: Arc<Arc<Mutex<impl StorageBackend + StorageExtensions + AsyncStorageExtensions + Send + Sync + 'static>>>,
     _auth: AuthInfo,
 ) -> Result<impl Reply, Rejection> {
-    let page = pagination.page.unwrap_or(1);
-    let page_size = pagination.page_size.unwrap_or(20);
-    let sort_by = sort.sort_by.as_deref();
+    let page = pagination.page;
+    let page_size = pagination.page_size;
+    let sort_by = sort.sort_by;
     
-    // Get the macros from storage
-    let macro_list = AsyncStorage::list_macros(&**storage, page, page_size, sort_by, None).await
+    // Use the inner Arc<Mutex<...>> with its AsyncStorageExtensions implementation
+    let inner_storage = storage.as_ref();
+    
+    // Call the method directly on the inner_storage, which implements AsyncStorageExtensions
+    let macro_list = inner_storage.list_macros(page, page_size, sort_by, None).await
         .map_err(|e| internal_error(&e.to_string()))?;
     
     Ok(warp::reply::json(&macro_list))
@@ -116,10 +118,14 @@ async fn list_macros_handler(
 
 async fn get_macro_handler(
     id: String,
-    storage: Arc<Arc<Mutex<impl StorageBackend + AsyncStorageExtensions + Send + Sync + 'static>>>,
+    storage: Arc<Arc<Mutex<impl StorageBackend + StorageExtensions + AsyncStorageExtensions + Send + Sync + 'static>>>,
     _auth: AuthInfo,
 ) -> Result<impl Reply, Rejection> {
-    let macro_def = AsyncStorage::get_macro(&**storage, &id).await
+    // Use the inner Arc<Mutex<...>> with its AsyncStorageExtensions implementation
+    let inner_storage = storage.as_ref();
+    
+    // Call the get_macro method directly on inner_storage
+    let macro_def = inner_storage.get_macro(&id).await
         .map_err(|_| not_found(&format!("Macro with id {} not found", id)))?;
     
     // Convert to API model
@@ -143,8 +149,9 @@ async fn create_macro_handler(
     vm: Arc<VM<Arc<Mutex<impl StorageBackend + StorageExtensions + AsyncStorageExtensions + Send + Sync + Clone + std::fmt::Debug + 'static>>>>,
     auth: AuthInfo,
 ) -> Result<impl Reply, Rejection> {
-    // Validate the DSL code
-    let _ = vm.validate_dsl(&create_request.code)
+    // Validate the DSL code by unwrapping the VM and accessing it directly
+    let vm_ref = &*vm;
+    let _ = vm_ref.validate_dsl(&create_request.code)
         .map_err(|e| bad_request(&format!("Invalid DSL: {}", e)))?;
     
     // Create new macro
@@ -166,8 +173,11 @@ async fn create_macro_handler(
         })),
     };
     
-    // Save using AsyncStorage trait
-    AsyncStorage::save_macro(&**storage, &macro_def).await
+    // Use the inner Arc<Mutex<...>> with its AsyncStorageExtensions implementation
+    let inner_storage = storage.as_ref();
+    
+    // Call the save_macro method directly on inner_storage
+    inner_storage.save_macro(&macro_def).await
         .map_err(|e| internal_error(&format!("Failed to save macro: {}", e)))?;
     
     // Return the created macro
@@ -195,12 +205,16 @@ async fn update_macro_handler(
     vm: Arc<VM<Arc<Mutex<impl StorageBackend + StorageExtensions + AsyncStorageExtensions + Send + Sync + Clone + std::fmt::Debug + 'static>>>>,
     auth: AuthInfo,
 ) -> Result<impl Reply, Rejection> {
-    // Validate the DSL code
-    let _ = vm.validate_dsl(&update_request.code)
+    // Validate the DSL code by unwrapping the VM and accessing it directly
+    let vm_ref = &*vm;
+    let _ = vm_ref.validate_dsl(&update_request.code)
         .map_err(|e| bad_request(&format!("Invalid DSL: {}", e)))?;
     
-    // Check if macro exists
-    let existing = AsyncStorage::get_macro(&**storage, &id).await
+    // Use the inner Arc<Mutex<...>> with its AsyncStorageExtensions implementation
+    let inner_storage = storage.as_ref();
+    
+    // Call the get_macro method directly on inner_storage
+    let existing = inner_storage.get_macro(&id).await
         .map_err(|_| not_found(&format!("Macro with id {} not found", id)))?;
     
     let now = Utc::now().to_rfc3339();
@@ -220,7 +234,8 @@ async fn update_macro_handler(
         })),
     };
     
-    AsyncStorage::save_macro(&**storage, &updated_macro).await
+    // Call the save_macro method directly on inner_storage
+    inner_storage.save_macro(&updated_macro).await
         .map_err(|e| internal_error(&format!("Failed to update macro: {}", e)))?;
     
     // Return the updated macro
@@ -243,12 +258,15 @@ async fn delete_macro_handler(
     storage: Arc<Arc<Mutex<impl StorageBackend + StorageExtensions + AsyncStorageExtensions + Send + Sync + 'static>>>,
     auth: AuthInfo,
 ) -> Result<impl Reply, Rejection> {
-    // Check if macro exists
-    let _ = AsyncStorage::get_macro(&**storage, &id).await
+    // Use the inner Arc<Mutex<...>> with its AsyncStorageExtensions implementation
+    let inner_storage = storage.as_ref();
+    
+    // Call the get_macro method directly on inner_storage
+    let _ = inner_storage.get_macro(&id).await
         .map_err(|_| not_found(&format!("Macro with id {} not found", id)))?;
     
-    // Delete the macro
-    AsyncStorage::delete_macro(&**storage, &id).await
+    // Call the delete_macro method directly on inner_storage
+    inner_storage.delete_macro(&id).await
         .map_err(|e| internal_error(&format!("Failed to delete macro: {}", e)))?;
     
     Ok(warp::reply::with_status(
@@ -264,12 +282,16 @@ async fn execute_macro_handler(
     vm: Arc<VM<Arc<Mutex<impl StorageBackend + StorageExtensions + AsyncStorageExtensions + Send + Sync + Clone + std::fmt::Debug + 'static>>>>,
     auth: AuthInfo,
 ) -> Result<impl Reply, Rejection> {
-    // Get the macro
-    let macro_def = AsyncStorage::get_macro(&**storage, &id).await
+    // Use the inner Arc<Mutex<...>> with its AsyncStorageExtensions implementation
+    let inner_storage = storage.as_ref();
+    
+    // Call the get_macro method directly on inner_storage
+    let macro_def = inner_storage.get_macro(&id).await
         .map_err(|_| not_found(&format!("Macro with id {} not found", id)))?;
     
-    // Execute the macro with the provided parameters
-    let result = vm.execute_dsl(&macro_def.code, Some(params))
+    // Execute the macro with the provided parameters by unwrapping the VM and accessing it directly
+    let vm_ref = &*vm;
+    let result = vm_ref.execute_dsl(&macro_def.code, Some(params))
         .map_err(|e| internal_error(&format!("Failed to execute macro: {}", e)))?;
     
     Ok(warp::reply::json(&result))

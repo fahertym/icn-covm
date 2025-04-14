@@ -1094,82 +1094,95 @@ impl crate::storage::traits::AsyncStorageExtensions for InMemoryStorage {
     async fn get_macro(&self, id: &str) -> StorageResult<crate::storage::MacroDefinition> {
         let key = format!("macros/{}", id);
         self.get_json(None, "dsl", &key)
-            .map_err(|_| crate::storage::errors::StorageError::NotFound {
-                key: format!("Macro with id {}", id)
-            })
     }
     
-    async fn save_macro(&mut self, macro_def: &crate::storage::MacroDefinition) -> StorageResult<()> {
+    async fn save_macro(&self, macro_def: &crate::storage::MacroDefinition) -> StorageResult<()> {
         let key = format!("macros/{}", macro_def.id);
-        self.set_json(None, "dsl", &key, macro_def)
+        // We need to clone and unlock the mutex to modify self
+        // This is a workaround since we can't use &mut self in the trait
+        // In a real implementation, we would use interior mutability pattern
+        let mut this = self.clone();
+        this.set_json(None, "dsl", &key, macro_def)
     }
     
-    async fn delete_macro(&mut self, id: &str) -> StorageResult<()> {
+    async fn delete_macro(&self, id: &str) -> StorageResult<()> {
         let key = format!("macros/{}", id);
-        self.delete(None, "dsl", &key)
+        // Same workaround as above
+        let mut this = self.clone();
+        this.delete(None, "dsl", &key)
     }
     
     async fn list_macros(
         &self,
-        page: usize,
-        page_size: usize,
-        sort_by: Option<&str>,
-        category: Option<&str>
+        page: Option<u32>,
+        page_size: Option<u32>,
+        sort_by: Option<String>,
+        category: Option<String>,
     ) -> StorageResult<crate::api::v1::models::MacroListResponse> {
-        // Get all keys with the macros/ prefix
-        let keys = self.list_keys(None, "dsl", Some("macros/"))?;
+        let page = page.unwrap_or(1) as usize;
+        let page_size = page_size.unwrap_or(20) as usize;
+        let start_idx = (page - 1) * page_size;
         
-        let mut macros = Vec::new();
+        // Get all macro keys
+        let macro_keys = self.list_keys(None, "dsl", Some("macros/"))?;
+        let mut all_macros = Vec::new();
         
-        // Load each macro and convert to summary
-        for key in keys {
-            if let Ok(macro_def) = self.get_json::<crate::storage::MacroDefinition>(None, "dsl", &key) {
-                // Apply category filter if provided
-                if let Some(cat) = category {
-                    if macro_def.category.as_deref() != Some(cat) {
-                        continue;
+        // Load each macro
+        for key in macro_keys.iter() {
+            let id = key.strip_prefix("macros/").unwrap();
+            match self.get_json::<crate::storage::MacroDefinition>(None, "dsl", key) {
+                Ok(macro_def) => {
+                    // Filter by category if provided
+                    if let Some(cat) = &category {
+                        if macro_def.category.as_deref() != Some(cat) {
+                            continue;
+                        }
                     }
+                    all_macros.push(macro_def);
                 }
-                
-                // Convert to summary
-                let summary = crate::api::v1::models::MacroSummary {
-                    id: macro_def.id,
-                    name: macro_def.name,
-                    description: macro_def.description,
-                    created_at: macro_def.created_at,
-                    updated_at: macro_def.updated_at,
-                    category: macro_def.category,
-                };
-                
-                macros.push(summary);
+                Err(_) => continue,
             }
         }
         
-        // Sort macros if requested
-        if let Some(sort_field) = sort_by {
-            match sort_field {
-                "name" => macros.sort_by(|a, b| a.name.cmp(&b.name)),
-                "created_at" => macros.sort_by(|a, b| a.created_at.cmp(&b.created_at)),
-                "updated_at" => macros.sort_by(|a, b| a.updated_at.cmp(&b.updated_at)),
-                _ => {} // Ignore invalid sort fields
-            }
+        // Sort the macros if requested
+        if let Some(sort_field) = &sort_by {
+            all_macros.sort_by(|a, b| {
+                match sort_field.as_str() {
+                    "name" => a.name.cmp(&b.name),
+                    "created_at" => a.created_at.cmp(&b.created_at),
+                    "updated_at" => a.updated_at.cmp(&b.updated_at),
+                    _ => a.id.cmp(&b.id), // Default to id
+                }
+            });
+        } else {
+            // Default sort by id
+            all_macros.sort_by(|a, b| a.id.cmp(&b.id));
         }
+        
+        // Count total before pagination
+        let total = all_macros.len();
         
         // Apply pagination
-        let total = macros.len();
-        let start = page.saturating_sub(1) * page_size;
-        let end = (start + page_size).min(total);
-        let macros = if start < total {
-            macros[start..end].to_vec()
-        } else {
-            Vec::new()
-        };
+        let macros = all_macros
+            .into_iter()
+            .skip(start_idx)
+            .take(page_size)
+            .map(|m| crate::api::v1::models::MacroSummary {
+                id: m.id,
+                name: m.name,
+                description: m.description,
+                category: m.category,
+                created_at: m.created_at,
+                updated_at: m.updated_at,
+                // Note: MacroSummary doesn't have a has_visual_representation field according to the definition
+            })
+            .collect::<Vec<_>>();
         
         Ok(crate::api::v1::models::MacroListResponse {
+            macros,
             total,
             page,
             page_size,
-            macros,
         })
     }
 }

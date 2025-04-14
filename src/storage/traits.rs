@@ -247,10 +247,10 @@ pub trait AsyncStorageExtensions {
     /// Lists macros with pagination and optional sorting and filtering
     async fn list_macros(
         &self,
-        page: usize,
-        page_size: usize,
-        sort_by: Option<&str>,
-        category: Option<&str>
+        page: Option<u32>,
+        page_size: Option<u32>,
+        sort_by: Option<String>,
+        category: Option<String>,
     ) -> StorageResult<crate::api::v1::models::MacroListResponse>;
 }
 
@@ -261,31 +261,32 @@ pub trait Storage: StorageBackend + StorageExtensions + AsyncStorageExtensions {
 impl<T: StorageBackend + StorageExtensions + AsyncStorageExtensions> Storage for T {}
 
 // Implement AsyncStorageExtensions for Arc<Mutex<S>> to delegate to the inner storage
-impl<S> AsyncStorageExtensions for Arc<Mutex<S>>
+#[async_trait::async_trait]
+impl<S> AsyncStorageExtensions for Arc<Mutex<S>> 
 where
-    S: AsyncStorageExtensions + Send + Sync + 'static,
+    S: StorageBackend + StorageExtensions + AsyncStorageExtensions + Send + Sync + 'static
 {
     async fn get_macro(&self, id: &str) -> StorageResult<crate::storage::MacroDefinition> {
         let storage = self.lock().await;
         storage.get_macro(id).await
     }
-    
+
     async fn save_macro(&self, macro_def: &crate::storage::MacroDefinition) -> StorageResult<()> {
         let mut storage = self.lock().await;
         storage.save_macro(macro_def).await
     }
-    
+
     async fn delete_macro(&self, id: &str) -> StorageResult<()> {
         let mut storage = self.lock().await;
         storage.delete_macro(id).await
     }
-    
+
     async fn list_macros(
         &self,
-        page: usize,
-        page_size: usize,
-        sort_by: Option<&str>,
-        category: Option<&str>
+        page: Option<u32>,
+        page_size: Option<u32>,
+        sort_by: Option<String>,
+        category: Option<String>,
     ) -> StorageResult<crate::api::v1::models::MacroListResponse> {
         let storage = self.lock().await;
         storage.list_macros(page, page_size, sort_by, category).await
@@ -465,32 +466,157 @@ where
     }
 }
 
+// Implement StorageExtensions for Arc<Mutex<S>> to delegate to the inner storage
+impl<S> StorageExtensions for Arc<Mutex<S>>
+where
+    S: StorageExtensions + Send + Sync + 'static,
+{
+    fn get_identity(&self, identity_id: &str) -> StorageResult<crate::identity::Identity> {
+        let storage = futures::executor::block_on(self.lock());
+        storage.get_identity(identity_id)
+    }
+
+    fn get_json<T: DeserializeOwned>(
+        &self,
+        auth: Option<&AuthContext>,
+        namespace: &str,
+        key: &str,
+    ) -> StorageResult<T> {
+        let storage = futures::executor::block_on(self.lock());
+        storage.get_json(auth, namespace, key)
+    }
+
+    fn set_json<T: Serialize>(
+        &mut self,
+        auth: Option<&AuthContext>,
+        namespace: &str,
+        key: &str,
+        value: &T,
+    ) -> StorageResult<()> {
+        let mut storage = futures::executor::block_on(self.lock());
+        storage.set_json(auth, namespace, key, value)
+    }
+
+    fn get_version_json<T: DeserializeOwned>(
+        &self,
+        auth: Option<&AuthContext>,
+        namespace: &str,
+        key: &str,
+        version: u64,
+    ) -> StorageResult<Option<T>> {
+        let storage = futures::executor::block_on(self.lock());
+        storage.get_version_json(auth, namespace, key, version)
+    }
+
+    fn get_proposal_logic_path(&self, proposal_id: &str) -> StorageResult<String> {
+        let storage = futures::executor::block_on(self.lock());
+        storage.get_proposal_logic_path(proposal_id)
+    }
+
+    fn get_proposal_logic(&self, logic_path: &str) -> StorageResult<String> {
+        let storage = futures::executor::block_on(self.lock());
+        storage.get_proposal_logic(logic_path)
+    }
+
+    fn save_proposal_execution_result(&mut self, proposal_id: &str, result: &str) -> StorageResult<()> {
+        let mut storage = futures::executor::block_on(self.lock());
+        storage.save_proposal_execution_result(proposal_id, result)
+    }
+
+    fn get_proposal_execution_result(&self, proposal_id: &str) -> StorageResult<String> {
+        let storage = futures::executor::block_on(self.lock());
+        storage.get_proposal_execution_result(proposal_id)
+    }
+
+    fn get_proposal_execution_logs(&self, proposal_id: &str) -> StorageResult<String> {
+        let storage = futures::executor::block_on(self.lock());
+        storage.get_proposal_execution_logs(proposal_id)
+    }
+
+    fn append_proposal_execution_log(&mut self, proposal_id: &str, log_entry: &str) -> StorageResult<()> {
+        let mut storage = futures::executor::block_on(self.lock());
+        storage.append_proposal_execution_log(proposal_id, log_entry)
+    }
+
+    fn save_proposal_execution_result_versioned(&mut self, proposal_id: &str, result: &str, success: bool, summary: &str) -> StorageResult<u64> {
+        let mut storage = futures::executor::block_on(self.lock());
+        storage.save_proposal_execution_result_versioned(proposal_id, result, success, summary)
+    }
+
+    fn get_proposal_execution_result_versioned(&self, proposal_id: &str, version: u64) -> StorageResult<String> {
+        let storage = futures::executor::block_on(self.lock());
+        storage.get_proposal_execution_result_versioned(proposal_id, version)
+    }
+
+    fn get_latest_execution_result_version(&self, proposal_id: &str) -> StorageResult<u64> {
+        let storage = futures::executor::block_on(self.lock());
+        storage.get_latest_execution_result_version(proposal_id)
+    }
+
+    fn get_latest_execution_result(&self, proposal_id: &str) -> StorageResult<String> {
+        let storage = futures::executor::block_on(self.lock());
+        storage.get_latest_execution_result(proposal_id)
+    }
+
+    fn list_execution_versions(&self, proposal_id: &str) -> StorageResult<Vec<ExecutionVersionMeta>> {
+        let storage = futures::executor::block_on(self.lock());
+        storage.list_execution_versions(proposal_id)
+    }
+
+    fn get_proposal_retry_history(&self, proposal_id: &str) -> StorageResult<Vec<RetryHistoryRecord>> {
+        let storage = futures::executor::block_on(self.lock());
+        storage.get_proposal_retry_history(proposal_id)
+    }
+}
+
 // Explicitly implement Storage for Arc<Mutex<S>> where S is Storage
-impl<S> Storage for Arc<Mutex<S>> where S: Storage + Send + Sync + 'static {}
+// This implementation is causing conflicts, so comment it out as it's not needed
+// The trait is already implemented via the blanket implementation above
+// impl<S> Storage for Arc<Mutex<S>> where S: Storage + Send + Sync + 'static {}
 
 // Implement AsyncStorageExtensions for Arc<Mutex<S>> to allow async access through the mutex
+#[async_trait::async_trait]
 impl<S> AsyncStorageExtensions for std::sync::Arc<std::sync::Mutex<S>>
 where 
     S: AsyncStorageExtensions + Send + Sync + 'static 
 {
     async fn get_macro(&self, id: &str) -> StorageResult<crate::storage::MacroDefinition> {
-        let guard = self.lock().unwrap();
-        AsyncStorageExtensions::get_macro(&*guard, id).await
+        // Use a scope to limit how long we hold the mutex guard
+        let result = {
+            let guard = self.lock().unwrap();
+            // Create a future by directly calling the method on the inner type
+            AsyncStorageExtensions::get_macro(&*guard, id).await
+        };
+        // Return the result outside the scope so we don't hold the mutex longer than needed
+        result
     }
 
-    async fn save_macro(&mut self, macro_def: &crate::storage::MacroDefinition) -> StorageResult<()> {
+    async fn save_macro(&self, macro_def: &crate::storage::MacroDefinition) -> StorageResult<()> {
+        // Use a scope to limit how long we hold the mutex guard
         let mut guard = self.lock().unwrap();
-        AsyncStorageExtensions::save_macro(&mut *guard, macro_def).await
+        // We need interior mutability here which std::sync::Mutex doesn't provide
+        // This is a limitation of the trait design
+        AsyncStorageExtensions::save_macro(&*guard, macro_def).await
     }
 
-    async fn delete_macro(&mut self, id: &str) -> StorageResult<()> {
+    async fn delete_macro(&self, id: &str) -> StorageResult<()> {
+        // Use a scope to limit how long we hold the mutex guard
         let mut guard = self.lock().unwrap();
-        AsyncStorageExtensions::delete_macro(&mut *guard, id).await
+        // We need interior mutability here which std::sync::Mutex doesn't provide
+        // This is a limitation of the trait design
+        AsyncStorageExtensions::delete_macro(&*guard, id).await
     }
 
-    async fn list_macros(&self, page: usize, page_size: usize, sort_by: Option<&str>, category: Option<&str>) 
-        -> StorageResult<crate::api::v1::models::MacroListResponse> {
+    async fn list_macros(
+        &self, 
+        page: Option<u32>, 
+        page_size: Option<u32>, 
+        sort_by: Option<String>, 
+        category: Option<String>
+    ) -> StorageResult<crate::api::v1::models::MacroListResponse> {
+        // Use a scope to limit how long we hold the mutex guard
         let guard = self.lock().unwrap();
+        // Create a future by directly calling the method on the inner type
         AsyncStorageExtensions::list_macros(&*guard, page, page_size, sort_by, category).await
     }
 }
