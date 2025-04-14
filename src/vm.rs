@@ -1716,7 +1716,10 @@ where
         params: Option<serde_json::Value>
     ) -> Result<serde_json::Value, String>
     where 
-        S: crate::storage::traits::AsyncStorageExtensions,
+        S: crate::storage::traits::StorageBackend +
+           crate::storage::traits::StorageExtensions +
+           crate::storage::traits::AsyncStorageExtensions +
+           crate::storage::traits::JsonStorage,
     {
         // Get the storage backend
         let storage = self.storage_backend.as_ref().ok_or_else(|| "Storage backend not available".to_string())?;

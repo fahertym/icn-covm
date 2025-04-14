@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::fs::{self, create_dir_all, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::fmt::{self, Debug};
+use std::fmt::{Debug};
 
 /// Represents a file-based persistent storage implementation.
 ///

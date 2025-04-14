@@ -5,7 +5,7 @@ pub mod auth;
 pub mod error;
 pub mod storage;
 
-use crate::storage::traits::{Storage, StorageExtensions, AsyncStorageExtensions, StorageBackend};
+use crate::storage::traits::{Storage, StorageExtensions, AsyncStorageExtensions, StorageBackend, JsonStorage};
 use crate::vm::VM;
 use error::{ApiError, ErrorResponse, reject_with_api_error};
 use std::fmt::Debug;
@@ -13,13 +13,15 @@ use std::env;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use warp::http::Method;
+use warp::Filter;
+use warp::http::header::{HeaderMap, HeaderValue};
 use warp::filters::cors::CorsForbidden;
 use warp::reject::Reject;
 
 /// Initializes and runs the HTTP API server
 pub async fn start_api_server<S>(vm: VM<Arc<Mutex<S>>>, port: u16) -> Result<(), Box<dyn std::error::Error>>
 where
-    S: StorageBackend + StorageExtensions + AsyncStorageExtensions + Send + Sync + Clone + Debug + 'static,
+    S: StorageBackend + StorageExtensions + AsyncStorageExtensions + JsonStorage + Send + Sync + Clone + Debug + 'static,
 {
     // Read environment variables or use defaults
     let allowed_origins = env::var("ALLOWED_ORIGINS")
@@ -37,17 +39,10 @@ where
     
     // Set up CORS configuration
     let cors = warp::cors()
-        .allow_methods(&[
-            Method::GET, 
-            Method::POST, 
-            Method::PUT, 
-            Method::DELETE, 
-            Method::OPTIONS,
-        ])
-        .allow_headers(vec!["Content-Type", "Authorization", "X-API-Key"])
-        .allow_origin(allowed_origins.split(',').collect::<Vec<_>>().as_slice())
-        .max_age(3600)
-        .build();
+        .allow_methods(&[Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::OPTIONS])
+        .allow_headers(vec!["Content-Type", "Authorization", "x-api-key", "x-identity-token"])
+        .allow_origins(allowed_origins.split(',').map(|s| s.trim()).collect::<Vec<_>>())
+        .allow_credentials(true);
     
     // Combine all routes with proper security headers and error handling
     let routes = legacy_proposal_routes
@@ -66,9 +61,17 @@ where
 
 /// Adds security headers to all responses
 fn security_headers() -> impl warp::Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
-    // For now, just return a simple filter that doesn't modify headers
-    // TODO: Properly implement security headers
-    warp::any().map(|| ())
+    warp::any().map(|| {
+        |reply: warp::reply::Reply| {
+            warp::reply::with::headers(vec![
+                ("X-Content-Type-Options", "nosniff"),
+                ("X-Frame-Options", "DENY"),
+                ("X-XSS-Protection", "1; mode=block"),
+                ("Referrer-Policy", "strict-origin-when-cross-origin"),
+            ])
+            .wrap(reply)
+        }
+    })
 }
 
 /// Common error handler for API rejections
@@ -133,7 +136,7 @@ async fn handle_rejection(err: warp::Rejection) -> Result<impl warp::Reply, std:
         error: error_type.into(),
         message,
         timestamp: chrono::Utc::now().to_rfc3339(),
-        path: err.path().map(|p| p.to_string()).unwrap_or_default(),
+        path: String::new(), // Default to empty string since path() method is not available
     });
 
     Ok(warp::reply::with_status(json, code))

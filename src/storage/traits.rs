@@ -149,32 +149,6 @@ pub trait StorageBackend {
 pub trait StorageExtensions: StorageBackend {
     /// Retrieves an identity by ID from storage
     fn get_identity(&self, identity_id: &str) -> StorageResult<crate::identity::Identity>;
-
-    /// Gets data as JSON from storage, deserializing it to the specified type
-    fn get_json<T: DeserializeOwned>(
-        &self,
-        auth: Option<&AuthContext>,
-        namespace: &str,
-        key: &str,
-    ) -> StorageResult<T>;
-
-    /// Stores data as JSON in storage
-    fn set_json<T: Serialize>(
-        &mut self,
-        auth: Option<&AuthContext>,
-        namespace: &str,
-        key: &str,
-        value: &T,
-    ) -> StorageResult<()>;
-
-    /// Retrieves a specific version of data as JSON, deserializing it to the specified type
-    fn get_version_json<T: DeserializeOwned>(
-        &self,
-        auth: Option<&AuthContext>,
-        namespace: &str,
-        key: &str,
-        version: u64,
-    ) -> StorageResult<Option<T>>;
     
     /// Gets the logic path for a proposal
     fn get_proposal_logic_path(&self, proposal_id: &str) -> StorageResult<String>;
@@ -206,12 +180,70 @@ pub trait StorageExtensions: StorageBackend {
     /// Gets the latest execution result for a proposal
     fn get_latest_execution_result(&self, proposal_id: &str) -> StorageResult<String>;
     
-    /// Lists all execution version metadata for a proposal
+    /// Lists execution versions for a proposal
     fn list_execution_versions(&self, proposal_id: &str) -> StorageResult<Vec<ExecutionVersionMeta>>;
     
-    /// Gets the retry history for a proposal by parsing execution logs
+    /// Gets the retry history for a proposal
     fn get_proposal_retry_history(&self, proposal_id: &str) -> StorageResult<Vec<RetryHistoryRecord>>;
 }
+
+/// JSON storage extension trait for generic JSON operations
+/// This is separated from StorageExtensions to maintain object-safety
+pub trait JsonStorage: StorageBackend {
+    /// Gets data as JSON from storage, deserializing it to the specified type
+    fn get_json<T: DeserializeOwned>(
+        &self,
+        auth: Option<&AuthContext>,
+        namespace: &str,
+        key: &str,
+    ) -> StorageResult<T>;
+
+    /// Stores data as JSON in storage
+    fn set_json<T: Serialize>(
+        &mut self,
+        auth: Option<&AuthContext>,
+        namespace: &str,
+        key: &str,
+        value: &T,
+    ) -> StorageResult<()>;
+
+    /// Retrieves a specific version of data as JSON, deserializing it to the specified type
+    fn get_version_json<T: DeserializeOwned>(
+        &self,
+        auth: Option<&AuthContext>,
+        namespace: &str,
+        key: &str,
+        version: u64,
+    ) -> StorageResult<Option<T>>;
+}
+
+/// Async storage extensions for operations that should be async
+#[async_trait::async_trait]
+pub trait AsyncStorageExtensions {
+    /// Gets a macro definition by ID
+    async fn get_macro(&self, id: &str) -> StorageResult<crate::storage::MacroDefinition>;
+    
+    /// Saves a macro definition
+    async fn save_macro(&self, macro_def: &crate::storage::MacroDefinition) -> StorageResult<()>;
+    
+    /// Deletes a macro definition
+    async fn delete_macro(&self, id: &str) -> StorageResult<()>;
+    
+    /// Lists available macros with pagination and filtering
+    async fn list_macros(
+        &self,
+        page: Option<u32>,
+        page_size: Option<u32>,
+        sort_by: Option<String>,
+        category: Option<String>,
+    ) -> StorageResult<crate::api::v1::models::MacroListResponse>;
+}
+
+/// Marker trait to indicate that a type provides both synchronous and asynchronous storage operations
+pub trait Storage: StorageBackend + StorageExtensions + AsyncStorageExtensions {}
+
+/// Implement the marker trait for any type that implements both required traits
+impl<T: StorageBackend + StorageExtensions + AsyncStorageExtensions> Storage for T {}
 
 /// Metadata about a proposal execution version
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -231,34 +263,6 @@ pub struct RetryHistoryRecord {
     pub retry_count: Option<u64>,
     pub reason: Option<String>,
 }
-
-/// Trait for async access to DSL macro operations
-#[async_trait::async_trait]
-pub trait AsyncStorageExtensions {
-    /// Retrieves a macro definition by ID
-    async fn get_macro(&self, id: &str) -> StorageResult<crate::storage::MacroDefinition>;
-    
-    /// Saves a macro definition
-    async fn save_macro(&self, macro_def: &crate::storage::MacroDefinition) -> StorageResult<()>;
-    
-    /// Deletes a macro by ID
-    async fn delete_macro(&self, id: &str) -> StorageResult<()>;
-    
-    /// Lists macros with pagination and optional sorting and filtering
-    async fn list_macros(
-        &self,
-        page: Option<u32>,
-        page_size: Option<u32>,
-        sort_by: Option<String>,
-        category: Option<String>,
-    ) -> StorageResult<crate::api::v1::models::MacroListResponse>;
-}
-
-/// Marker trait to indicate that a type provides both synchronous and asynchronous storage operations
-pub trait Storage: StorageBackend + StorageExtensions + AsyncStorageExtensions {}
-
-/// Implement the marker trait for any type that implements both required traits
-impl<T: StorageBackend + StorageExtensions + AsyncStorageExtensions> Storage for T {}
 
 // Implement AsyncStorageExtensions for Arc<Mutex<S>> to delegate to the inner storage
 #[async_trait::async_trait]
@@ -476,38 +480,6 @@ where
         storage.get_identity(identity_id)
     }
 
-    fn get_json<T: DeserializeOwned>(
-        &self,
-        auth: Option<&AuthContext>,
-        namespace: &str,
-        key: &str,
-    ) -> StorageResult<T> {
-        let storage = futures::executor::block_on(self.lock());
-        storage.get_json(auth, namespace, key)
-    }
-
-    fn set_json<T: Serialize>(
-        &mut self,
-        auth: Option<&AuthContext>,
-        namespace: &str,
-        key: &str,
-        value: &T,
-    ) -> StorageResult<()> {
-        let mut storage = futures::executor::block_on(self.lock());
-        storage.set_json(auth, namespace, key, value)
-    }
-
-    fn get_version_json<T: DeserializeOwned>(
-        &self,
-        auth: Option<&AuthContext>,
-        namespace: &str,
-        key: &str,
-        version: u64,
-    ) -> StorageResult<Option<T>> {
-        let storage = futures::executor::block_on(self.lock());
-        storage.get_version_json(auth, namespace, key, version)
-    }
-
     fn get_proposal_logic_path(&self, proposal_id: &str) -> StorageResult<String> {
         let storage = futures::executor::block_on(self.lock());
         storage.get_proposal_logic_path(proposal_id)
@@ -566,6 +538,44 @@ where
     fn get_proposal_retry_history(&self, proposal_id: &str) -> StorageResult<Vec<RetryHistoryRecord>> {
         let storage = futures::executor::block_on(self.lock());
         storage.get_proposal_retry_history(proposal_id)
+    }
+}
+
+// Implement JsonStorage for Arc<Mutex<S>> to delegate to the inner storage
+impl<S> JsonStorage for Arc<Mutex<S>>
+where
+    S: JsonStorage + Send + Sync + 'static,
+{
+    fn get_json<T: DeserializeOwned>(
+        &self,
+        auth: Option<&AuthContext>,
+        namespace: &str,
+        key: &str,
+    ) -> StorageResult<T> {
+        let storage = futures::executor::block_on(self.lock());
+        storage.get_json(auth, namespace, key)
+    }
+
+    fn set_json<T: Serialize>(
+        &mut self,
+        auth: Option<&AuthContext>,
+        namespace: &str,
+        key: &str,
+        value: &T,
+    ) -> StorageResult<()> {
+        let mut storage = futures::executor::block_on(self.lock());
+        storage.set_json(auth, namespace, key, value)
+    }
+
+    fn get_version_json<T: DeserializeOwned>(
+        &self,
+        auth: Option<&AuthContext>,
+        namespace: &str,
+        key: &str,
+        version: u64,
+    ) -> StorageResult<Option<T>> {
+        let storage = futures::executor::block_on(self.lock());
+        storage.get_version_json(auth, namespace, key, version)
     }
 }
 
