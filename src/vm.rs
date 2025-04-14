@@ -110,6 +110,10 @@ pub enum VMError {
     /// Deserialization error
     #[error("Deserialization error: {0}")]
     Deserialization(String),
+
+    /// DSL error
+    #[error("DSL error: {0}")]
+    DSLError(String),
 }
 
 /// Operation types for the virtual machine
@@ -685,7 +689,7 @@ pub struct VMEvent {
 pub struct VM<S>
 // Make VM generic over storage type S
 where
-    S: Storage + Send + Sync + Clone + std::fmt::Debug + 'static, 
+    S: Send + Sync + Clone + std::fmt::Debug + 'static, 
 {
     /// Stack for operands
     pub stack: Vec<f64>,
@@ -1724,48 +1728,59 @@ where
     /// Execute DSL code with optional parameters
     ///
     /// This method parses and executes the provided DSL code with the given parameters
-    pub fn execute_dsl(
-        &mut self,
-        code: &str,
-        params: Option<serde_json::Value>
-    ) -> Result<serde_json::Value, String> {
-        // Set parameters in VM if provided
-        if let Some(params_value) = params {
-            // Convert serde_json::Value to HashMap<String, String> for VM parameters
-            let mut param_map = HashMap::new();
-            if let serde_json::Value::Object(obj) = params_value {
-                for (key, value) in obj {
-                    param_map.insert(key, value.to_string());
+    pub fn execute_dsl(&self, dsl_code: &str, params: Option<serde_json::Value>) -> Result<serde_json::Value, VMError> {
+        // Parse the DSL code
+        let ops = crate::compiler::parse_dsl(dsl_code)
+            .map_err(|e| VMError::DSLError(format!("Invalid DSL: {}", e)))?;
+        
+        // Convert params to HashMap<String, String> if provided
+        let params_map = if let Some(params_value) = params {
+            let mut map = HashMap::new();
+            if let Some(obj) = params_value.as_object() {
+                for (k, v) in obj {
+                    let str_value = match v {
+                        serde_json::Value::String(s) => s.clone(),
+                        _ => v.to_string(),
+                    };
+                    map.insert(k.clone(), str_value);
                 }
             }
-            self.set_parameters(param_map).map_err(|e| e.to_string())?;
-        }
+            map
+        } else {
+            HashMap::new()
+        };
         
-        // Parse and execute the DSL code
-        // This is a placeholder as we need a proper parser
-        let ops = self.parse_dsl_code(code)?;
-        self.execute(&ops).map_err(|e| e.to_string())?;
+        // Clone VM for execution (to avoid changing state)
+        let mut cloned_vm = self.try_clone()
+            .ok_or_else(|| VMError::DSLError("Failed to clone VM".to_string()))?;
         
-        // Return the result (for now just return the top of the stack)
-        let result = self.top().unwrap_or(0.0);
-        Ok(serde_json::json!({ "result": result }))
+        // Set parameters
+        cloned_vm.set_parameters(params_map)
+            .map_err(|e| VMError::DSLError(format!("Failed to set parameters: {}", e)))?;
+        
+        // Execute the code
+        cloned_vm.execute(&ops)
+            .map_err(|e| VMError::DSLError(format!("Execution error: {}", e)))?;
+        
+        // Return the stack as JSON
+        let stack = cloned_vm.get_stack();
+        let result = serde_json::json!({
+            "result": stack,
+            "output": cloned_vm.output,
+        });
+        
+        Ok(result)
     }
     
     /// Validate DSL code for syntax errors
     ///
     /// This method parses the provided DSL code to check for syntax errors
     /// without executing it
-    pub fn validate_dsl(&self, code: &str) -> Result<(), String> {
-        // Use the parser to validate the DSL syntax
-        let _ = self.parse_dsl_code(code)?;
-        Ok(())
-    }
-
-    // Helper method to parse DSL code into operations
-    fn parse_dsl_code(&self, code: &str) -> Result<Vec<Op>, String> {
-        // This is a placeholder - actual implementation would parse DSL code into Op structs
-        // For now, we'll just return a simple Push operation
-        Ok(vec![Op::Push(1.0)])
+    pub fn validate_dsl(&self, dsl_code: &str) -> Result<(), VMError> {
+        // Validate the DSL by parsing it, but not executing
+        crate::compiler::parse_dsl(dsl_code)
+            .map(|_| ())
+            .map_err(|e| VMError::DSLError(format!("Invalid DSL: {}", e)))
     }
 }
 

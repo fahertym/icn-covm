@@ -97,42 +97,5 @@ pub struct MacroDefinition {
 
 // Add extension methods to InMemoryStorage for proposals
 impl InMemoryStorage {
-    pub async fn list_proposals(&self) -> StorageResult<Vec<Proposal>> {
-        // In a real implementation, this would query the database
-        // For this demo, we'll return an empty list
-        Ok(Vec::new())
-    }
-    
-    pub async fn get_proposal(&self, id: &str) -> StorageResult<Proposal> {
-        // For demo purposes, return a dummy proposal
-        // In a real implementation, this would query the database
-        Err(StorageError::NotImplemented { 
-            feature: format!("Getting proposal with id: {}", id)
-        })
-    }
-    
-    pub async fn save_proposal(&mut self, proposal: &Proposal) -> StorageResult<()> {
-        // In a real implementation, this would save to the database
-        Ok(())
-    }
-    
-    pub async fn save_proposal_attachment(&mut self, attachment: &ProposalAttachment) -> StorageResult<()> {
-        // In a real implementation, this would save to the database
-        Ok(())
-    }
-    
-    pub async fn get_proposal_comments(&self, proposal_id: &str) -> StorageResult<Vec<Comment>> {
-        // In a real implementation, this would query the database
-        Ok(Vec::new())
-    }
-    
-    pub async fn save_comment(&mut self, comment: &Comment) -> StorageResult<()> {
-        // In a real implementation, this would save to the database
-        Ok(())
-    }
-    
-    pub async fn save_vote(&mut self, vote: &Vote) -> StorageResult<()> {
-        // In a real implementation, this would save to the database
-        Ok(())
-    }
+    // These methods should be removed and replaced with trait implementations
 }

@@ -26,6 +26,7 @@ use std::path::Path;
 use std::process;
 use std::time::Instant;
 use thiserror::Error;
+use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Error)]
 enum AppError {
@@ -439,7 +440,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
             // Initialize VM with storage
             let storage = setup_storage(default_storage_backend, default_storage_path)?;
-            let mut vm = VM::with_storage_backend(storage);
+            let vm = VM::with_storage_backend(storage);
 
             // Start the API server
             api::start_api_server(vm, port)
@@ -1771,7 +1772,8 @@ fn get_or_create_auth_context(
     Ok(AuthContext::new("demo_user"))
 }
 
-fn setup_storage(storage_backend: &str, storage_path: &str) -> Result<InMemoryStorage, AppError> {
-    // For now, just create an in-memory storage
-    Ok(InMemoryStorage::new())
+fn setup_storage(storage_backend: &str, storage_path: &str) -> Result<Arc<tokio::sync::Mutex<InMemoryStorage>>, AppError> {
+    // Create an in-memory storage and wrap it in Mutex and Arc for thread safety
+    let storage = InMemoryStorage::new();
+    Ok(Arc::new(tokio::sync::Mutex::new(storage)))
 }

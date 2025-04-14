@@ -11,18 +11,19 @@ use crate::vm::VM;
 use warp::{Filter, Rejection, Reply};
 use std::fmt::Debug;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 /// Returns all v1 API routes
-pub fn get_routes<S>(vm: VM<S>) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone
+pub fn get_routes<S>(vm: VM<Arc<Mutex<S>>>) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone
 where
-    S: Storage + StorageExtensions + Send + Sync + Clone + Debug + 'static,
+    S: StorageBackend + StorageExtensions + AsyncStorageExtensions + Send + Sync + Clone + Debug + 'static,
 {
     // Base path for v1 API
     let base = warp::path("api").and(warp::path("v1"));
     
     // Create wrapped VM and storage for sharing
     let vm_arc = Arc::new(vm.clone());
-    let storage_arc = Arc::new(vm.storage_backend.as_ref().unwrap().clone());
+    let storage_arc = vm.storage_backend.as_ref().unwrap().clone();
     
     // Register v1 routes
     let dsl_routes = base.and(dsl::get_routes(storage_arc.clone(), vm_arc.clone()));

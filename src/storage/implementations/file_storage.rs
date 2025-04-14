@@ -929,7 +929,7 @@ impl StorageBackend for FileStorage {
     }
 
     fn delete(
-        &self,
+        &mut self,
         auth: Option<&AuthContext>,
         namespace: &str,
         key: &str,
@@ -948,9 +948,7 @@ impl StorageBackend for FileStorage {
 
         // Emit event
         if let Some(auth_context) = auth {
-            // Since this operation modifies data, use interior mutability to record the event
-            let mut storage = unsafe { &mut *(self as *const FileStorage as *mut FileStorage) };
-            storage.record_audit_log(auth_context, "delete", namespace, Some(key), "Key deleted")?;
+            self.record_audit_log(auth_context, "delete", namespace, Some(key), "Key deleted")?;
         }
 
         Ok(())
@@ -1677,7 +1675,7 @@ impl crate::storage::traits::AsyncStorageExtensions for FileStorage {
         crate::storage::traits::StorageExtensions::set_json(self, None, "dsl", &key, macro_def)
     }
     
-    async fn delete_macro(&self, id: &str) -> StorageResult<()> {
+    async fn delete_macro(&mut self, id: &str) -> StorageResult<()> {
         let key = format!("macros/{}", id);
         self.delete(None, "dsl", &key)
     }

@@ -5,19 +5,21 @@ pub mod auth;
 pub mod error;
 pub mod storage;
 
-use crate::storage::traits::{Storage, StorageExtensions};
+use crate::storage::traits::{Storage, StorageExtensions, AsyncStorageExtensions, StorageBackend};
 use crate::vm::VM;
 use error::{ApiError, ErrorResponse, reject_with_api_error};
 use std::fmt::Debug;
 use std::env;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use warp::http::Method;
 use warp::filters::cors::CorsForbidden;
 use warp::reject::Reject;
 
 /// Initializes and runs the HTTP API server
-pub async fn start_api_server<S>(vm: VM<S>, port: u16) -> Result<(), Box<dyn std::error::Error>>
+pub async fn start_api_server<S>(vm: VM<Arc<Mutex<S>>>, port: u16) -> Result<(), Box<dyn std::error::Error>>
 where
-    S: Storage + StorageExtensions + Send + Sync + Clone + Debug + 'static,
+    S: StorageBackend + StorageExtensions + AsyncStorageExtensions + Send + Sync + Clone + Debug + 'static,
 {
     // Read environment variables or use defaults
     let allowed_origins = env::var("ALLOWED_ORIGINS")
