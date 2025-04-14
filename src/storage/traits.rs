@@ -1,9 +1,12 @@
+use chrono::{DateTime, Utc};
 use crate::storage::auth::AuthContext;
 use crate::storage::errors::StorageResult;
 use crate::storage::events::StorageEvent;
 use crate::storage::namespaces::NamespaceMetadata;
 use crate::storage::versioning::{VersionDiff, VersionInfo};
 use serde::{de::DeserializeOwned, Serialize};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 /// Defines the core operations for a cooperative storage backend.
 /// This trait is designed to be object-safe where possible, but some methods
@@ -229,401 +232,19 @@ pub struct RetryHistoryRecord {
     pub reason: Option<String>,
 }
 
-// Blanket impl for all types implementing StorageBackend
-impl<S: StorageBackend> StorageExtensions for S {
-    fn get_identity(&self, identity_id: &str) -> StorageResult<crate::identity::Identity> {
-        let key = format!("identities/{}", identity_id);
-        let bytes = self.get(None, "identity", &key)?;
-        serde_json::from_slice(&bytes).map_err(|e| {
-            crate::storage::errors::StorageError::SerializationError {
-                details: e.to_string(),
-            }
-        })
-    }
-
-    fn get_json<T: DeserializeOwned>(
-        &self,
-        auth: Option<&AuthContext>,
-        namespace: &str,
-        key: &str,
-    ) -> StorageResult<T> {
-        let bytes = self.get(auth, namespace, key)?;
-        serde_json::from_slice(&bytes).map_err(|e| {
-            crate::storage::errors::StorageError::SerializationError {
-                details: e.to_string(),
-            }
-        })
-    }
-
-    fn set_json<T: Serialize>(
-        &mut self,
-        auth: Option<&AuthContext>,
-        namespace: &str,
-        key: &str,
-        value: &T,
-    ) -> StorageResult<()> {
-        let bytes = serde_json::to_vec(value).map_err(|e| {
-            crate::storage::errors::StorageError::SerializationError {
-                details: e.to_string(),
-            }
-        })?;
-        self.set(auth, namespace, key, bytes)
-    }
-
-    fn get_version_json<T: DeserializeOwned>(
-        &self,
-        auth: Option<&AuthContext>,
-        namespace: &str,
-        key: &str,
-        version: u64,
-    ) -> StorageResult<Option<T>> {
-        match self.get_version(auth, namespace, key, version) {
-            Ok((data, _version_info)) => match serde_json::from_slice(&data) {
-                Ok(value) => Ok(Some(value)),
-                Err(e) => Err(crate::storage::errors::StorageError::SerializationError {
-                    details: format!("Failed to deserialize JSON: {}", e),
-                }),
-            },
-            Err(crate::storage::errors::StorageError::NotFound { .. }) => Ok(None),
-            Err(e) => Err(e),
-        }
-    }
-    
-    fn get_proposal_logic_path(&self, proposal_id: &str) -> StorageResult<String> {
-        // Get the proposal first to validate it exists
-        let key = format!("proposals/{}", proposal_id);
-        
-        let proposal_data = self.get(None, "governance", &key)?;
-        let proposal_json: serde_json::Value = serde_json::from_slice(&proposal_data)
-            .map_err(|e| crate::storage::errors::StorageError::SerializationError {
-                details: format!("Failed to parse proposal data: {}", e),
-            })?;
-        
-        // Extract the logic_path field
-        let logic_path = proposal_json.get("logic_path");
-        
-        match logic_path {
-            Some(path) => match path.as_str() {
-                Some(path_str) => Ok(path_str.to_string()),
-                None => Err(crate::storage::errors::StorageError::InvalidStorageData(
-                    "logic_path is not a string".to_string()
-                )),
-            },
-            None => Err(crate::storage::errors::StorageError::NotFound {
-                key: "logic_path".to_string(),
-            }),
-        }
-    }
-    
-    fn get_proposal_logic(&self, logic_path: &str) -> StorageResult<String> {
-        // Get the DSL code from the specified path
-        let bytes = self.get(None, "governance", logic_path)?;
-        
-        // Convert bytes to string
-        String::from_utf8(bytes).map_err(|e| {
-            crate::storage::errors::StorageError::SerializationError {
-                details: format!("Invalid UTF-8 in DSL code: {}", e),
-            }
-        })
-    }
-    
-    fn save_proposal_execution_result(&mut self, proposal_id: &str, result: &str) -> StorageResult<()> {
-        // Create the key for storing execution result
-        let result_key = format!("proposals/{}/execution_result", proposal_id);
-        
-        // Save the result as a string
-        self.set(None, "governance", &result_key, result.as_bytes().to_vec())
-    }
-    
-    fn get_proposal_execution_result(&self, proposal_id: &str) -> StorageResult<String> {
-        // Create the key for retrieving execution result
-        let result_key = format!("proposals/{}/execution_result", proposal_id);
-        
-        // Try to get execution result, return error if not found
-        match self.get(None, "governance", &result_key) {
-            Ok(bytes) => String::from_utf8(bytes).map_err(|e| {
-                crate::storage::errors::StorageError::SerializationError {
-                    details: format!("Invalid UTF-8 in execution result: {}", e),
-                }
-            }),
-            Err(e) => Err(e),
-        }
-    }
-    
-    fn get_proposal_execution_logs(&self, proposal_id: &str) -> StorageResult<String> {
-        let key = format!("proposals/{}/execution_logs", proposal_id);
-        
-        match self.get(None, "governance", &key) {
-            Ok(data) => {
-                match String::from_utf8(data) {
-                    Ok(s) => Ok(s),
-                    Err(e) => Err(crate::storage::errors::StorageError::SerializationError { 
-                        details: format!("Failed to parse execution logs as UTF-8: {}", e) 
-                    }),
-                }
-            },
-            Err(crate::storage::errors::StorageError::NotFound { .. }) => Ok(String::new()),
-            Err(e) => Err(e),
-        }
-    }
-    
-    fn append_proposal_execution_log(&mut self, proposal_id: &str, log_entry: &str) -> StorageResult<()> {
-        let key = format!("proposals/{}/execution_logs", proposal_id);
-        
-        // Read existing logs or create empty string
-        let existing_logs = match self.get(None, "governance", &key) {
-            Ok(data) => {
-                match String::from_utf8(data) {
-                    Ok(s) => s,
-                    Err(e) => return Err(crate::storage::errors::StorageError::SerializationError { 
-                        details: format!("Failed to parse execution logs as UTF-8: {}", e) 
-                    }),
-                }
-            },
-            Err(crate::storage::errors::StorageError::NotFound { .. }) => String::new(),
-            Err(e) => return Err(e),
-        };
-        
-        // Append new log entry with timestamp
-        let timestamp = crate::storage::now();
-        let updated_logs = format!("{}\n[{}] {}", existing_logs, timestamp, log_entry);
-        
-        // Write back the updated logs
-        self.set(None, "governance", &key, updated_logs.into_bytes())
-    }
-    
-    fn save_proposal_execution_result_versioned(&mut self, proposal_id: &str, result: &str, success: bool, summary: &str) -> StorageResult<u64> {
-        // Get the latest version and increment it
-        let next_version = match self.get_latest_execution_result_version(proposal_id) {
-            Ok(version) => version + 1,
-            Err(_) => 1, // Start with version 1 if no versions exist
-        };
-        
-        // Create the key for storing versioned execution result
-        let result_key = format!("proposals/{}/execution_results/{}", proposal_id, next_version);
-        
-        // Save the result as a string
-        self.set(None, "governance", &result_key, result.as_bytes().to_vec())?;
-        
-        // Save metadata for this version
-        let meta = ExecutionVersionMeta {
-            version: next_version,
-            executed_at: crate::storage::now().to_string(),
-            success,
-            summary: summary.to_string(),
-        };
-        
-        let meta_key = format!("proposals/{}/execution_results/{}/meta", proposal_id, next_version);
-        let meta_bytes = serde_json::to_vec(&meta).map_err(|e| {
-            crate::storage::errors::StorageError::SerializationError {
-                details: format!("Failed to serialize execution metadata: {}", e),
-            }
-        })?;
-        
-        self.set(None, "governance", &meta_key, meta_bytes)?;
-        
-        // Update the latest version pointer
-        let latest_key = format!("proposals/{}/execution_results/latest", proposal_id);
-        let version_bytes = next_version.to_string().into_bytes();
-        self.set(None, "governance", &latest_key, version_bytes)?;
-        
-        Ok(next_version)
-    }
-    
-    fn get_proposal_execution_result_versioned(&self, proposal_id: &str, version: u64) -> StorageResult<String> {
-        // Create the key for retrieving versioned execution result
-        let result_key = format!("proposals/{}/execution_results/{}", proposal_id, version);
-        
-        // Try to get execution result, return error if not found
-        match self.get(None, "governance", &result_key) {
-            Ok(bytes) => String::from_utf8(bytes).map_err(|e| {
-                crate::storage::errors::StorageError::SerializationError {
-                    details: format!("Invalid UTF-8 in execution result: {}", e),
-                }
-            }),
-            Err(e) => Err(e),
-        }
-    }
-    
-    fn get_latest_execution_result_version(&self, proposal_id: &str) -> StorageResult<u64> {
-        // Create the key for retrieving the latest version pointer
-        let latest_key = format!("proposals/{}/execution_results/latest", proposal_id);
-        
-        // Try to get the latest version
-        match self.get(None, "governance", &latest_key) {
-            Ok(bytes) => {
-                let version_str = String::from_utf8(bytes).map_err(|e| {
-                    crate::storage::errors::StorageError::SerializationError {
-                        details: format!("Invalid UTF-8 in version pointer: {}", e),
-                    }
-                })?;
-                
-                version_str.parse::<u64>().map_err(|e| {
-                    crate::storage::errors::StorageError::SerializationError {
-                        details: format!("Invalid version number: {}", e),
-                    }
-                })
-            },
-            // If the latest pointer doesn't exist, list all versions and find the max
-            Err(crate::storage::errors::StorageError::NotFound { .. }) => {
-                let prefix = format!("proposals/{}/execution_results/", proposal_id);
-                let keys = self.list_keys(None, "governance", Some(&prefix))?;
-                
-                // Find max version from keys
-                let mut max_version = 0;
-                for key in keys {
-                    if let Some(version_str) = key.strip_prefix(&prefix) {
-                        if !version_str.contains('/') { // Skip metadata keys with /
-                            if let Ok(version) = version_str.parse::<u64>() {
-                                if version > max_version {
-                                    max_version = version;
-                                }
-                            }
-                        }
-                    }
-                }
-                
-                if max_version == 0 {
-                    Err(crate::storage::errors::StorageError::NotFound {
-                        key: format!("No execution results for proposal {}", proposal_id),
-                    })
-                } else {
-                    Ok(max_version)
-                }
-            },
-            Err(e) => Err(e),
-        }
-    }
-    
-    fn get_latest_execution_result(&self, proposal_id: &str) -> StorageResult<String> {
-        // Get the latest version
-        let latest_version = self.get_latest_execution_result_version(proposal_id)?;
-        
-        // Get the result for that version
-        self.get_proposal_execution_result_versioned(proposal_id, latest_version)
-    }
-    
-    fn list_execution_versions(&self, proposal_id: &str) -> StorageResult<Vec<ExecutionVersionMeta>> {
-        let prefix = format!("proposals/{}/execution_results/", proposal_id);
-        let keys = self.list_keys(None, "governance", Some(&prefix))?;
-        
-        let mut versions = Vec::new();
-        
-        // Filter for metadata keys and collect version info
-        for key in keys {
-            if key.ends_with("/meta") {
-                match self.get(None, "governance", &key) {
-                    Ok(bytes) => {
-                        match serde_json::from_slice::<ExecutionVersionMeta>(&bytes) {
-                            Ok(meta) => versions.push(meta),
-                            Err(_) => continue, // Skip invalid metadata
-                        }
-                    },
-                    Err(_) => continue, // Skip if can't read metadata
-                }
-            }
-        }
-        
-        // Sort by version (descending)
-        versions.sort_by(|a, b| b.version.cmp(&a.version));
-        
-        Ok(versions)
-    }
-    
-    fn get_proposal_retry_history(&self, proposal_id: &str) -> StorageResult<Vec<RetryHistoryRecord>> {
-        // Get the execution logs
-        let logs = self.get_proposal_execution_logs(proposal_id)?;
-        let mut records = Vec::new();
-
-        // Parse each log line that contains RETRY information
-        for line in logs.lines() {
-            // Retry log entries follow this format:
-            // [timestamp] RETRY by user:username | status: success/failed | retry_count: N
-            // or for failures with reason:
-            // [timestamp] RETRY by user:username | status: failed | reason: reason_text
-            
-            if line.contains("RETRY by user:") {
-                // Extract timestamp, which is enclosed in square brackets
-                let timestamp = if let Some(end_idx) = line.find(']') {
-                    if line.starts_with('[') {
-                        line[1..end_idx].to_string()
-                    } else {
-                        continue; // Invalid format, skip this line
-                    }
-                } else {
-                    continue; // No closing bracket, skip this line
-                };
-                
-                // Extract user
-                let user_start = line.find("user:").map(|idx| idx + 5).unwrap_or(0);
-                let user_end = line[user_start..].find(" |").map(|idx| user_start + idx).unwrap_or(line.len());
-                let user = if user_start > 0 && user_end > user_start {
-                    line[user_start..user_end].to_string()
-                } else {
-                    "unknown".to_string()
-                };
-                
-                // Extract status
-                let status = if line.contains("status: success") {
-                    "success".to_string()
-                } else if line.contains("status: failed") {
-                    "failed".to_string()
-                } else {
-                    "unknown".to_string()
-                };
-                
-                // Extract retry count if present
-                let retry_count = if let Some(count_idx) = line.find("retry_count: ") {
-                    let count_start = count_idx + 13; // "retry_count: ".len()
-                    let count_end = line[count_start..].find(" |").map(|idx| count_start + idx).unwrap_or(line.len());
-                    line[count_start..count_end].parse::<u64>().ok()
-                } else {
-                    None
-                };
-                
-                // Extract reason for failures
-                let reason = if status == "failed" && line.contains("reason: ") {
-                    let reason_start = line.find("reason: ").map(|idx| idx + 8).unwrap_or(0);
-                    if reason_start > 0 {
-                        Some(line[reason_start..].to_string())
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-                
-                // Add to records
-                records.push(RetryHistoryRecord {
-                    timestamp,
-                    user,
-                    status,
-                    retry_count,
-                    reason,
-                });
-            }
-        }
-        
-        // Sort by timestamp descending (newest first)
-        records.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
-        
-        Ok(records)
-    }
-}
-
-/// Async storage extensions for methods that require async operations
+/// Trait for async access to DSL macro operations
 #[async_trait::async_trait]
-pub trait AsyncStorageExtensions: StorageBackend {
-    /// Gets a macro definition by ID
+pub trait AsyncStorageExtensions {
+    /// Retrieves a macro definition by ID
     async fn get_macro(&self, id: &str) -> StorageResult<crate::storage::MacroDefinition>;
     
     /// Saves a macro definition
-    async fn save_macro(&mut self, macro_def: &crate::storage::MacroDefinition) -> StorageResult<()>;
+    async fn save_macro(&self, macro_def: &crate::storage::MacroDefinition) -> StorageResult<()>;
     
-    /// Deletes a macro definition
-    async fn delete_macro(&mut self, id: &str) -> StorageResult<()>;
+    /// Deletes a macro by ID
+    async fn delete_macro(&self, id: &str) -> StorageResult<()>;
     
-    /// Lists all macros with optional filtering and pagination
+    /// Lists macros with pagination and optional sorting and filtering
     async fn list_macros(
         &self,
         page: usize,
@@ -638,3 +259,238 @@ pub trait Storage: StorageBackend + StorageExtensions + AsyncStorageExtensions {
 
 /// Implement the marker trait for any type that implements both required traits
 impl<T: StorageBackend + StorageExtensions + AsyncStorageExtensions> Storage for T {}
+
+// Implement AsyncStorageExtensions for Arc<Mutex<S>> to delegate to the inner storage
+impl<S> AsyncStorageExtensions for Arc<Mutex<S>>
+where
+    S: AsyncStorageExtensions + Send + Sync + 'static,
+{
+    async fn get_macro(&self, id: &str) -> StorageResult<crate::storage::MacroDefinition> {
+        let storage = self.lock().await;
+        storage.get_macro(id).await
+    }
+    
+    async fn save_macro(&self, macro_def: &crate::storage::MacroDefinition) -> StorageResult<()> {
+        let mut storage = self.lock().await;
+        storage.save_macro(macro_def).await
+    }
+    
+    async fn delete_macro(&self, id: &str) -> StorageResult<()> {
+        let mut storage = self.lock().await;
+        storage.delete_macro(id).await
+    }
+    
+    async fn list_macros(
+        &self,
+        page: usize,
+        page_size: usize,
+        sort_by: Option<&str>,
+        category: Option<&str>
+    ) -> StorageResult<crate::api::v1::models::MacroListResponse> {
+        let storage = self.lock().await;
+        storage.list_macros(page, page_size, sort_by, category).await
+    }
+}
+
+// Implement StorageBackend for Arc<Mutex<S>> to delegate to the inner storage
+impl<S> StorageBackend for Arc<Mutex<S>>
+where
+    S: StorageBackend + Send + Sync + 'static,
+{
+    fn get(
+        &self,
+        auth: Option<&AuthContext>,
+        namespace: &str,
+        key: &str,
+    ) -> StorageResult<Vec<u8>> {
+        // This is a blocking operation in an async context, but it's okay for the trait impl
+        // In practice, this should be used with the async wrapper functions
+        let storage = futures::executor::block_on(self.lock());
+        storage.get(auth, namespace, key)
+    }
+
+    fn get_versioned(
+        &self,
+        auth: Option<&AuthContext>,
+        namespace: &str,
+        key: &str,
+    ) -> StorageResult<(Vec<u8>, VersionInfo)> {
+        let storage = futures::executor::block_on(self.lock());
+        storage.get_versioned(auth, namespace, key)
+    }
+
+    fn set(
+        &mut self,
+        auth: Option<&AuthContext>,
+        namespace: &str,
+        key: &str,
+        value: Vec<u8>,
+    ) -> StorageResult<()> {
+        let mut storage = futures::executor::block_on(self.lock());
+        storage.set(auth, namespace, key, value)
+    }
+
+    fn delete(
+        &mut self,
+        auth: Option<&AuthContext>,
+        namespace: &str,
+        key: &str,
+    ) -> StorageResult<()> {
+        let mut storage = futures::executor::block_on(self.lock());
+        storage.delete(auth, namespace, key)
+    }
+
+    fn list_keys(
+        &self,
+        auth: Option<&AuthContext>,
+        namespace: &str,
+        prefix: Option<&str>,
+    ) -> StorageResult<Vec<String>> {
+        let storage = futures::executor::block_on(self.lock());
+        storage.list_keys(auth, namespace, prefix)
+    }
+
+    fn contains(
+        &self,
+        auth: Option<&AuthContext>,
+        namespace: &str,
+        key: &str,
+    ) -> StorageResult<bool> {
+        let storage = futures::executor::block_on(self.lock());
+        storage.contains(auth, namespace, key)
+    }
+
+    fn check_permission(
+        &self,
+        auth: Option<&AuthContext>,
+        action: &str,
+        namespace: &str,
+    ) -> StorageResult<()> {
+        let storage = futures::executor::block_on(self.lock());
+        storage.check_permission(auth, action, namespace)
+    }
+
+    fn begin_transaction(&mut self) -> StorageResult<()> {
+        let mut storage = futures::executor::block_on(self.lock());
+        storage.begin_transaction()
+    }
+
+    fn commit_transaction(&mut self) -> StorageResult<()> {
+        let mut storage = futures::executor::block_on(self.lock());
+        storage.commit_transaction()
+    }
+
+    fn rollback_transaction(&mut self) -> StorageResult<()> {
+        let mut storage = futures::executor::block_on(self.lock());
+        storage.rollback_transaction()
+    }
+
+    fn get_audit_log(
+        &self,
+        auth: Option<&AuthContext>,
+        namespace: Option<&str>,
+        event_type: Option<&str>,
+        limit: usize,
+    ) -> StorageResult<Vec<crate::storage::StorageEvent>> {
+        let storage = futures::executor::block_on(self.lock());
+        storage.get_audit_log(auth, namespace, event_type, limit)
+    }
+
+    fn get_version(
+        &self,
+        auth: Option<&AuthContext>,
+        namespace: &str,
+        key: &str,
+        version: u64,
+    ) -> StorageResult<(Vec<u8>, VersionInfo)> {
+        let storage = futures::executor::block_on(self.lock());
+        storage.get_version(auth, namespace, key, version)
+    }
+
+    fn list_versions(
+        &self,
+        auth: Option<&AuthContext>,
+        namespace: &str,
+        key: &str,
+    ) -> StorageResult<Vec<VersionInfo>> {
+        let storage = futures::executor::block_on(self.lock());
+        storage.list_versions(auth, namespace, key)
+    }
+
+    fn diff_versions(
+        &self,
+        auth: Option<&AuthContext>,
+        namespace: &str,
+        key: &str,
+        v1: u64,
+        v2: u64,
+    ) -> StorageResult<VersionDiff<Vec<u8>>> {
+        let storage = futures::executor::block_on(self.lock());
+        storage.diff_versions(auth, namespace, key, v1, v2)
+    }
+
+    fn create_namespace(
+        &mut self,
+        auth: Option<&AuthContext>,
+        namespace: &str,
+        quota_bytes: u64,
+        parent_namespace: Option<&str>,
+    ) -> StorageResult<()> {
+        let mut storage = futures::executor::block_on(self.lock());
+        storage.create_namespace(auth, namespace, quota_bytes, parent_namespace)
+    }
+
+    fn list_namespaces(
+        &self,
+        auth: Option<&AuthContext>,
+        parent_namespace: &str,
+    ) -> StorageResult<Vec<NamespaceMetadata>> {
+        let storage = futures::executor::block_on(self.lock());
+        storage.list_namespaces(auth, parent_namespace)
+    }
+
+    fn get_usage(&self, auth: Option<&AuthContext>, namespace: &str) -> StorageResult<u64> {
+        let storage = futures::executor::block_on(self.lock());
+        storage.get_usage(auth, namespace)
+    }
+
+    fn create_account(
+        &mut self,
+        auth: Option<&AuthContext>,
+        user_id: &str,
+        quota_bytes: u64,
+    ) -> StorageResult<()> {
+        let mut storage = futures::executor::block_on(self.lock());
+        storage.create_account(auth, user_id, quota_bytes)
+    }
+}
+
+// Explicitly implement Storage for Arc<Mutex<S>> where S is Storage
+impl<S> Storage for Arc<Mutex<S>> where S: Storage + Send + Sync + 'static {}
+
+// Implement AsyncStorageExtensions for Arc<Mutex<S>> to allow async access through the mutex
+impl<S> AsyncStorageExtensions for std::sync::Arc<std::sync::Mutex<S>>
+where 
+    S: AsyncStorageExtensions + Send + Sync + 'static 
+{
+    async fn get_macro(&self, id: &str) -> StorageResult<crate::storage::MacroDefinition> {
+        let guard = self.lock().unwrap();
+        AsyncStorageExtensions::get_macro(&*guard, id).await
+    }
+
+    async fn save_macro(&mut self, macro_def: &crate::storage::MacroDefinition) -> StorageResult<()> {
+        let mut guard = self.lock().unwrap();
+        AsyncStorageExtensions::save_macro(&mut *guard, macro_def).await
+    }
+
+    async fn delete_macro(&mut self, id: &str) -> StorageResult<()> {
+        let mut guard = self.lock().unwrap();
+        AsyncStorageExtensions::delete_macro(&mut *guard, id).await
+    }
+
+    async fn list_macros(&self, page: usize, page_size: usize, sort_by: Option<&str>, category: Option<&str>) 
+        -> StorageResult<crate::api::v1::models::MacroListResponse> {
+        let guard = self.lock().unwrap();
+        AsyncStorageExtensions::list_macros(&*guard, page, page_size, sort_by, category).await
+    }
+}
