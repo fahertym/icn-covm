@@ -102,8 +102,9 @@ async fn list_macros_handler(
     storage: Arc<Arc<Mutex<impl StorageBackend + StorageExtensions + AsyncStorageExtensions + Send + Sync + 'static>>>,
     _auth: AuthInfo,
 ) -> Result<impl Reply, Rejection> {
-    let page = pagination.page;
-    let page_size = pagination.page_size;
+    // Convert pagination parameters to Option<u32>
+    let page = pagination.page.map(|p| p as u32);
+    let page_size = pagination.page_size.map(|ps| ps as u32);
     let sort_by = sort.sort_by;
     
     // Use the inner Arc<Mutex<...>> with its AsyncStorageExtensions implementation
@@ -189,7 +190,7 @@ async fn create_macro_handler(
         created_at: macro_def.created_at,
         updated_at: macro_def.updated_at,
         category: macro_def.category,
-        visual_representation: create_request.visual_representation,
+        visual_representation: create_request.visual_representation.clone(),
     };
     
     Ok(warp::reply::with_status(
@@ -247,7 +248,7 @@ async fn update_macro_handler(
         created_at: updated_macro.created_at,
         updated_at: updated_macro.updated_at,
         category: updated_macro.category,
-        visual_representation: update_request.visual_representation,
+        visual_representation: update_request.visual_representation.clone(),
     };
     
     Ok(warp::reply::json(&response))

@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::fs::{self, create_dir_all, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::fmt::{self, Debug};
 
 /// Represents a file-based persistent storage implementation.
 ///
@@ -1654,6 +1655,17 @@ impl StorageBackend for FileStorage {
     }
 }
 
+impl Clone for FileStorage {
+    fn clone(&self) -> Self {
+        FileStorage {
+            root_path: self.root_path.clone(),
+            transactions: self.transactions.clone(),
+            namespace_cache: self.namespace_cache.clone(),
+            account_cache: self.account_cache.clone(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     // ... existing code ...
@@ -1664,10 +1676,16 @@ mod tests {
 impl crate::storage::traits::AsyncStorageExtensions for FileStorage {
     async fn get_macro(&self, id: &str) -> StorageResult<crate::storage::MacroDefinition> {
         let key = format!("macros/{}", id);
-        crate::storage::traits::StorageExtensions::get_json(self, None, "dsl", &key)
+        // Use the StorageBackend trait methods directly
+        let data = self.get(None, "dsl", &key)
             .map_err(|_| crate::storage::errors::StorageError::NotFound {
                 key: format!("Macro with id {}", id)
-            })
+            })?;
+        
+        // Deserialize the data ourselves
+        serde_json::from_slice(&data).map_err(|e| crate::storage::errors::StorageError::SerializationError {
+            details: format!("Failed to deserialize macro: {}", e)
+        })
     }
     
     async fn save_macro(&self, macro_def: &crate::storage::MacroDefinition) -> StorageResult<()> {
@@ -1676,7 +1694,16 @@ impl crate::storage::traits::AsyncStorageExtensions for FileStorage {
         // In a real implementation, this would use RwLock or similar
         // For testing purposes, we'll clone the FileStorage
         let mut this = self.clone();
-        crate::storage::traits::StorageExtensions::set_json(&mut this, None, "dsl", &key, macro_def)
+        
+        // Serialize the data ourselves
+        let json_data = serde_json::to_vec(macro_def).map_err(|e| 
+            crate::storage::errors::StorageError::SerializationError {
+                details: format!("Failed to serialize macro: {}", e)
+            }
+        )?;
+        
+        // Use the StorageBackend trait method directly
+        this.set(None, "dsl", &key, json_data)
     }
     
     async fn delete_macro(&self, id: &str) -> StorageResult<()> {
@@ -1705,26 +1732,36 @@ impl crate::storage::traits::AsyncStorageExtensions for FileStorage {
         
         // Load each macro and convert to summary
         for key in keys {
-            if let Ok(macro_def) = crate::storage::traits::StorageExtensions::get_json::<crate::storage::MacroDefinition>(self, None, "dsl", &key) {
-                // Apply category filter if provided
-                if let Some(cat) = &category {
-                    if macro_def.category.as_deref() != Some(cat) {
-                        continue;
-                    }
+            // Get the data with StorageBackend
+            let data = match self.get(None, "dsl", &key) {
+                Ok(data) => data,
+                Err(_) => continue,
+            };
+            
+            // Deserialize manually
+            let macro_def: crate::storage::MacroDefinition = match serde_json::from_slice(&data) {
+                Ok(def) => def,
+                Err(_) => continue,
+            };
+            
+            // Apply category filter if provided
+            if let Some(cat) = &category {
+                if macro_def.category.as_deref() != Some(cat) {
+                    continue;
                 }
-                
-                // Convert to summary
-                let summary = crate::api::v1::models::MacroSummary {
-                    id: macro_def.id,
-                    name: macro_def.name,
-                    description: macro_def.description,
-                    created_at: macro_def.created_at,
-                    updated_at: macro_def.updated_at,
-                    category: macro_def.category,
-                };
-                
-                macros.push(summary);
             }
+            
+            // Convert to summary
+            let summary = crate::api::v1::models::MacroSummary {
+                id: macro_def.id,
+                name: macro_def.name,
+                description: macro_def.description,
+                created_at: macro_def.created_at,
+                updated_at: macro_def.updated_at,
+                category: macro_def.category,
+            };
+            
+            macros.push(summary);
         }
         
         // Sort macros if requested

@@ -578,33 +578,39 @@ where
 #[async_trait::async_trait]
 impl<S> AsyncStorageExtensions for std::sync::Arc<std::sync::Mutex<S>>
 where 
-    S: AsyncStorageExtensions + Send + Sync + 'static 
+    S: AsyncStorageExtensions + Send + Sync + Clone + 'static 
 {
     async fn get_macro(&self, id: &str) -> StorageResult<crate::storage::MacroDefinition> {
-        // Use a scope to limit how long we hold the mutex guard
-        let result = {
+        // Create a clone of the inner storage to avoid holding the MutexGuard across await points
+        let inner = {
             let guard = self.lock().unwrap();
-            // Create a future by directly calling the method on the inner type
-            AsyncStorageExtensions::get_macro(&*guard, id).await
+            guard.clone()
         };
-        // Return the result outside the scope so we don't hold the mutex longer than needed
-        result
+        
+        // Now we can safely await on the cloned storage
+        AsyncStorageExtensions::get_macro(&inner, id).await
     }
 
     async fn save_macro(&self, macro_def: &crate::storage::MacroDefinition) -> StorageResult<()> {
-        // Use a scope to limit how long we hold the mutex guard
-        let mut guard = self.lock().unwrap();
-        // We need interior mutability here which std::sync::Mutex doesn't provide
-        // This is a limitation of the trait design
-        AsyncStorageExtensions::save_macro(&*guard, macro_def).await
+        // Create a clone of the inner storage to avoid holding the MutexGuard across await points
+        let inner = {
+            let guard = self.lock().unwrap();
+            guard.clone()
+        };
+        
+        // Now we can safely await on the cloned storage
+        AsyncStorageExtensions::save_macro(&inner, macro_def).await
     }
 
     async fn delete_macro(&self, id: &str) -> StorageResult<()> {
-        // Use a scope to limit how long we hold the mutex guard
-        let mut guard = self.lock().unwrap();
-        // We need interior mutability here which std::sync::Mutex doesn't provide
-        // This is a limitation of the trait design
-        AsyncStorageExtensions::delete_macro(&*guard, id).await
+        // Create a clone of the inner storage to avoid holding the MutexGuard across await points
+        let inner = {
+            let guard = self.lock().unwrap();
+            guard.clone()
+        };
+        
+        // Now we can safely await on the cloned storage
+        AsyncStorageExtensions::delete_macro(&inner, id).await
     }
 
     async fn list_macros(
@@ -614,9 +620,13 @@ where
         sort_by: Option<String>, 
         category: Option<String>
     ) -> StorageResult<crate::api::v1::models::MacroListResponse> {
-        // Use a scope to limit how long we hold the mutex guard
-        let guard = self.lock().unwrap();
-        // Create a future by directly calling the method on the inner type
-        AsyncStorageExtensions::list_macros(&*guard, page, page_size, sort_by, category).await
+        // Create a clone of the inner storage to avoid holding the MutexGuard across await points
+        let inner = {
+            let guard = self.lock().unwrap();
+            guard.clone()
+        };
+        
+        // Now we can safely await on the cloned storage
+        AsyncStorageExtensions::list_macros(&inner, page, page_size, sort_by, category).await
     }
 }
