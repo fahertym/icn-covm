@@ -34,4 +34,13 @@ where
     dsl_routes
         .or(proposals_routes)
         .or(execution_result_routes)
+}
+
+// Helper function to convert a concrete storage implementation to async storage
+pub fn with_storage<S>(storage: Arc<Mutex<S>>) -> impl Filter<Extract = (Arc<Arc<Mutex<S>>>,), Error = std::convert::Infallible> + Clone
+where
+    S: StorageBackend + StorageExtensions + AsyncStorageExtensions + Send + Sync + 'static
+{
+    let async_storage = Arc::new(storage);
+    warp::any().map(move || async_storage.clone())
 } 
