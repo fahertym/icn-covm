@@ -3,7 +3,7 @@ use crate::storage::traits::{StorageBackend, StorageExtensions, AsyncStorageExte
 use crate::api::storage::AsyncStorage;
 use crate::vm::VM;
 use crate::api::auth::{with_auth, AuthInfo, require_role};
-use crate::api::error::{ApiError, not_found, bad_request, internal_error};
+use crate::api::error::{ApiError, not_found, bad_request, internal_error, forbidden};
 use crate::api::v1::models::{
     MacroDefinition, MacroListResponse, MacroSummary, CreateMacroRequest,
     PaginationParams, SortParams
@@ -13,6 +13,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 use chrono::Utc;
+use std::collections::HashMap;
 
 /// Get all DSL-related API routes
 pub fn get_routes<S>(
@@ -48,51 +49,59 @@ where
         .and(warp::path("macros"))
         .and(warp::post())
         .and(warp::body::json())
-        .and(with_storage(async_storage.clone()))
+        .and(with_storage(storage.clone()))
         .and(with_vm(vm.clone()))
         .and(with_auth())
-        .and(warp::any().and_then(|auth: AuthInfo| async move {
-            require_role(auth, "dsl:write")
-        }))
-        .and_then(create_macro_handler);
+        .and_then(|macro_def: CreateMacroRequest, storage: Arc<Mutex<S>>, vm: Arc<VM<Arc<Mutex<S>>>>, auth: AuthInfo| async move {
+            if !auth.has_role("dsl:write") {
+                return Err(warp::reject::custom(forbidden("Missing role: dsl:write")));
+            }
+            create_macro_handler(macro_def, storage, vm, auth, ()).await
+        });
     
     let update_macro = base
         .and(warp::path("macros"))
-        .and(warp::path::param::<String>())
+        .and(warp::path::param())
         .and(warp::put())
         .and(warp::body::json())
-        .and(with_storage(async_storage.clone()))
+        .and(with_storage(storage.clone()))
         .and(with_vm(vm.clone()))
         .and(with_auth())
-        .and(warp::any().and_then(|auth: AuthInfo| async move {
-            require_role(auth, "dsl:write")
-        }))
-        .and_then(update_macro_handler);
+        .and_then(|id: String, macro_def: CreateMacroRequest, storage: Arc<Mutex<S>>, vm: Arc<VM<Arc<Mutex<S>>>>, auth: AuthInfo| async move {
+            if !auth.has_role("dsl:write") {
+                return Err(warp::reject::custom(forbidden("Missing role: dsl:write")));
+            }
+            update_macro_handler(id, macro_def, storage, vm, auth, ()).await
+        });
     
     let delete_macro = base
         .and(warp::path("macros"))
-        .and(warp::path::param::<String>())
+        .and(warp::path::param())
         .and(warp::delete())
-        .and(with_storage(async_storage.clone()))
+        .and(with_storage(storage.clone()))
         .and(with_auth())
-        .and(warp::any().and_then(|auth: AuthInfo| async move {
-            require_role(auth, "dsl:write")
-        }))
-        .and_then(delete_macro_handler);
+        .and_then(|id: String, storage: Arc<Mutex<S>>, auth: AuthInfo| async move {
+            if !auth.has_role("dsl:write") {
+                return Err(warp::reject::custom(forbidden("Missing role: dsl:write")));
+            }
+            delete_macro_handler(id, storage, auth, ()).await
+        });
     
     let execute_macro = base
         .and(warp::path("macros"))
-        .and(warp::path::param::<String>())
+        .and(warp::path::param())
         .and(warp::path("execute"))
         .and(warp::post())
         .and(warp::body::json())
-        .and(with_storage(async_storage.clone()))
+        .and(with_storage(storage.clone()))
         .and(with_vm(vm.clone()))
         .and(with_auth())
-        .and(warp::any().and_then(|auth: AuthInfo| async move {
-            require_role(auth, "dsl:execute")
-        }))
-        .and_then(execute_macro_handler);
+        .and_then(|id: String, params: Value, storage: Arc<Mutex<S>>, vm: Arc<VM<Arc<Mutex<S>>>>, auth: AuthInfo| async move {
+            if !auth.has_role("dsl:execute") {
+                return Err(warp::reject::custom(forbidden("Missing role: dsl:execute")));
+            }
+            execute_macro_handler(id, params, storage, vm, auth, ()).await
+        });
     
     list_macros
         .or(get_macro)
@@ -112,7 +121,7 @@ where
 
 fn with_vm<S>(vm: Arc<VM<S>>) -> impl Filter<Extract = (Arc<VM<S>>,), Error = std::convert::Infallible> + Clone 
 where
-    S: Send + Sync + 'static
+    S: StorageBackend + StorageExtensions + AsyncStorageExtensions + Send + Sync + 'static
 {
     warp::any().map(move || vm.clone())
 }

@@ -2,7 +2,7 @@ use crate::governance::ProposalLifecycle;
 use crate::governance::comments;
 use crate::governance::proposal::Proposal;
 use crate::storage::auth::AuthContext;
-use crate::storage::traits::{Storage, StorageExtensions};
+use crate::storage::traits::{Storage, StorageExtensions, StorageBackend, AsyncStorageExtensions};
 use crate::vm::VM;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -89,12 +89,10 @@ pub struct ShowHiddenQuery {
 }
 
 /// Returns all the proposal API routes
-pub fn get_routes<S>(vm: VM<S>) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone
+pub fn get_routes<S>(vm: Arc<VM<Arc<Mutex<S>>>>) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone
 where
-    S: Storage + StorageExtensions + Send + Sync + Clone + Debug + 'static,
+    S: StorageBackend + StorageExtensions + AsyncStorageExtensions + Send + Sync + Clone + Debug + 'static,
 {
-    let vm = Arc::new(Mutex::new(vm));
-
     // Create routes for API endpoints
     let proposals_route = warp::path!("proposals" / String)
         .and(with_vm(vm.clone()))
@@ -117,16 +115,16 @@ where
 
 /// Dependency injection helper for the VM
 fn with_vm<S>(
-    vm: Arc<Mutex<VM<S>>>,
-) -> impl Filter<Extract = (Arc<Mutex<VM<S>>>,), Error = Infallible> + Clone
+    vm: Arc<VM<S>>,
+) -> impl Filter<Extract = (Arc<VM<S>>,), Error = Infallible> + Clone
 where
-    S: Storage + StorageExtensions + Send + Sync + Clone + Debug + 'static,
+    S: Send + Sync + Debug + 'static,
 {
     warp::any().map(move || vm.clone())
 }
 
 /// Handler for GET /proposals/{id}
-async fn get_proposal<S>(id: String, vm: Arc<Mutex<VM<S>>>) -> Result<impl Reply, Rejection>
+async fn get_proposal<S>(id: String, vm: Arc<VM<S>>) -> Result<impl Reply, Rejection>
 where
     S: Storage + StorageExtensions + Send + Sync + Clone + Debug + 'static,
 {
@@ -201,7 +199,7 @@ where
 /// Handler for GET /proposals/{id}/comments
 async fn get_proposal_comments<S>(
     id: String,
-    vm: Arc<Mutex<VM<S>>>,
+    vm: Arc<VM<S>>,
     query: ShowHiddenQuery,
 ) -> Result<impl Reply, Rejection>
 where
@@ -249,7 +247,7 @@ where
 }
 
 /// Handler for GET /proposals/{id}/summary
-async fn get_proposal_summary<S>(id: String, vm: Arc<Mutex<VM<S>>>) -> Result<impl Reply, Rejection>
+async fn get_proposal_summary<S>(id: String, vm: Arc<VM<S>>) -> Result<impl Reply, Rejection>
 where
     S: Storage + StorageExtensions + Send + Sync + Clone + Debug + 'static,
 {

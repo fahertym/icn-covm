@@ -1,5 +1,5 @@
 use crate::compiler::macros;
-use crate::storage::traits::{Storage, StorageExtensions};
+use crate::storage::traits::{Storage, StorageExtensions, StorageBackend, AsyncStorageExtensions};
 use crate::vm::VM;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -83,12 +83,10 @@ pub struct SaveMacroRequest {
 }
 
 /// Returns all the DSL API routes
-pub fn get_routes<S>(vm: VM<S>) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone
+pub fn get_routes<S>(vm: Arc<VM<Arc<Mutex<S>>>>) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone
 where
-    S: Storage + StorageExtensions + Send + Sync + Clone + Debug + 'static,
+    S: StorageBackend + StorageExtensions + AsyncStorageExtensions + Send + Sync + Clone + Debug + 'static,
 {
-    let vm = Arc::new(Mutex::new(vm));
-
     // Route to list all macros
     let list_macros_route = warp::path!("api" / "dsl" / "macros")
         .and(warp::get())
@@ -123,18 +121,18 @@ where
 
 /// Dependency injection helper for the VM
 fn with_vm<S>(
-    vm: Arc<Mutex<VM<S>>>,
-) -> impl Filter<Extract = (Arc<Mutex<VM<S>>>,), Error = Infallible> + Clone
+    vm: Arc<VM<S>>,
+) -> impl Filter<Extract = (Arc<VM<S>>,), Error = Infallible> + Clone
 where
-    S: Storage + StorageExtensions + Send + Sync + Clone + Debug + 'static,
+    S: Send + Sync + Debug + 'static,
 {
     warp::any().map(move || vm.clone())
 }
 
 /// Handler for GET /api/dsl/macros
-async fn list_macros<S>(vm: Arc<Mutex<VM<S>>>) -> Result<impl Reply, Rejection>
+async fn list_macros<S>(vm: Arc<VM<S>>) -> Result<impl Reply, Rejection>
 where
-    S: Storage + StorageExtensions + Send + Sync + Clone + Debug + 'static,
+    S: StorageBackend + StorageExtensions + AsyncStorageExtensions + Send + Sync + Clone + Debug + 'static,
 {
     let vm_lock = vm.lock().await;
     
@@ -164,9 +162,9 @@ where
 }
 
 /// Handler for GET /api/dsl/macros/{name}
-async fn get_macro<S>(name: String, vm: Arc<Mutex<VM<S>>>) -> Result<impl Reply, Rejection>
+async fn get_macro<S>(name: String, vm: Arc<VM<S>>) -> Result<impl Reply, Rejection>
 where
-    S: Storage + StorageExtensions + Send + Sync + Clone + Debug + 'static,
+    S: StorageBackend + StorageExtensions + AsyncStorageExtensions + Send + Sync + Clone + Debug + 'static,
 {
     let vm_lock = vm.lock().await;
     
@@ -240,10 +238,10 @@ EmitEvent "economic" "Balance updated"
 /// Handler for POST /api/dsl/macros
 async fn save_macro<S>(
     request: SaveMacroRequest,
-    vm: Arc<Mutex<VM<S>>>,
+    vm: Arc<VM<S>>,
 ) -> Result<impl Reply, Rejection>
 where
-    S: Storage + StorageExtensions + Send + Sync + Clone + Debug + 'static,
+    S: StorageBackend + StorageExtensions + AsyncStorageExtensions + Send + Sync + Clone + Debug + 'static,
 {
     let vm_lock = vm.lock().await;
     
@@ -265,9 +263,9 @@ where
 }
 
 /// Handler for DELETE /api/dsl/macros/{name}
-async fn delete_macro<S>(name: String, vm: Arc<Mutex<VM<S>>>) -> Result<impl Reply, Rejection>
+async fn delete_macro<S>(name: String, vm: Arc<VM<S>>) -> Result<impl Reply, Rejection>
 where
-    S: Storage + StorageExtensions + Send + Sync + Clone + Debug + 'static,
+    S: StorageBackend + StorageExtensions + AsyncStorageExtensions + Send + Sync + Clone + Debug + 'static,
 {
     let vm_lock = vm.lock().await;
     

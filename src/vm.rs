@@ -4,9 +4,10 @@ use crate::events::Event;
 use crate::storage::auth::AuthContext;
 use crate::storage::errors::{StorageError, StorageResult};
 use crate::storage::implementations::in_memory::InMemoryStorage;
-use crate::storage::traits::{Storage, StorageBackend, StorageExtensions};
+use crate::storage::traits::{Storage, StorageBackend, StorageExtensions, AsyncStorageExtensions};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use thiserror::Error;
 
@@ -685,11 +686,11 @@ pub struct VMEvent {
 }
 
 /// Virtual Machine for executing ICN-COVM bytecode
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct VM<S>
 // Make VM generic over storage type S
 where
-    S: Send + Sync + Clone + std::fmt::Debug + 'static, 
+    S: StorageBackend + StorageExtensions + Send + Sync + Clone + std::fmt::Debug + 'static, 
 {
     /// Stack for operands
     pub stack: Vec<f64>,
@@ -728,7 +729,7 @@ where
 
 impl<S> VM<S>
 where
-    S: Storage + Send + Sync + Clone + std::fmt::Debug + 'static,
+    S: StorageBackend + StorageExtensions + Send + Sync + Clone + std::fmt::Debug + 'static,
 {
     // VM::new - creates default InMemoryStorage if no backend provided initially
     // This needs rethinking. new() maybe shouldn't have storage?
@@ -1705,7 +1706,7 @@ where
         self.storage_backend = Some(storage);
     }
 
-    /// Execute a DSL macro with optional parameters
+    /// Execute a async macro from storage with optional parameters
     ///
     /// This method loads a macro from storage by name, substitutes any parameters,
     /// and executes the resulting DSL code
@@ -1713,16 +1714,24 @@ where
         &mut self,
         macro_id: &str,
         params: Option<serde_json::Value>
-    ) -> Result<serde_json::Value, String> {
-        // Get the macro from storage
-        let macro_def = self.storage_backend.as_ref()
-            .ok_or_else(|| "Storage backend not available".to_string())?
-            .get_macro(macro_id)
-            .await
-            .map_err(|e| format!("Failed to load macro {}: {}", macro_id, e))?;
+    ) -> Result<serde_json::Value, String>
+    where 
+        S: crate::storage::traits::AsyncStorageExtensions,
+    {
+        // Get macro definition
+        let macro_def = match self.storage_backend.as_ref() {
+            Some(storage) => {
+                match storage.get_macro(macro_id).await {
+                    Ok(def) => def,
+                    Err(e) => return Err(format!("Error loading macro: {}", e)),
+                }
+            },
+            None => return Err("Storage backend not available".to_string()),
+        };
         
         // Execute the macro's DSL code
         self.execute_dsl(&macro_def.code, params)
+            .map_err(|e| e.to_string())
     }
     
     /// Execute DSL code with optional parameters
@@ -1781,6 +1790,13 @@ where
         crate::compiler::parse_dsl(dsl_code)
             .map(|_| ())
             .map_err(|e| VMError::DSLError(format!("Invalid DSL: {}", e)))
+    }
+
+    pub async fn get_async_storage(&self) -> Result<&S, VMError> {
+        match &self.storage_backend {
+            Some(storage) => Ok(storage),
+            None => Err(VMError::StorageUnavailable),
+        }
     }
 }
 
