@@ -1,3 +1,39 @@
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt::Debug;
+use chrono::Utc;
+
+use crate::VM;
+use crate::Storage;
+use crate::StorageExtensions;
+use crate::storage::auth::AuthContext;
+use crate::governance::ProposalComment;
+use crate::governance::ExecutionStatus;
+
+/// Creates the proposal command structure for the CLI
+pub fn proposal_command() -> clap::Command {
+    clap::Command::new("proposal")
+        .about("Manage governance proposals")
+        .subcommand(
+            clap::Command::new("execute")
+                .about("Execute an approved proposal")
+                .arg(
+                    clap::Arg::new("id")
+                        .required(true)
+                        .help("Proposal ID to execute")
+                )
+        )
+        .subcommand(
+            clap::Command::new("retry-history")
+                .about("View execution retry history for a proposal")
+                .arg(
+                    clap::Arg::new("id")
+                        .required(true)
+                        .help("Proposal ID to check")
+                )
+        )
+}
+
 /// Handle the execute command for a proposal
 pub fn handle_execute_command<S>(
     vm: &mut VM<S>,
@@ -116,6 +152,64 @@ where
         },
         Err(e) => Err(format!("Proposal {} not found: {}", proposal_id, e).into()),
     }
+}
+
+/// Loads a proposal from storage by ID
+fn load_proposal<S>(vm: &mut VM<S>, proposal_id: &str) -> Result<crate::governance::proposal_lifecycle::ProposalLifecycle, Box<dyn Error>>
+where
+    S: Storage + Send + Sync + Clone + Debug + 'static,
+{
+    let storage = vm.storage_backend.as_ref().ok_or("Storage backend not configured")?;
+    let proposal_key = format!("proposals/{}/metadata", proposal_id);
+    
+    let data = storage.get(None, "governance", &proposal_key)
+        .map_err(|e| format!("Failed to load proposal {}: {}", proposal_id, e))?;
+    
+    let proposal: crate::governance::proposal_lifecycle::ProposalLifecycle = serde_json::from_slice(&data)
+        .map_err(|e| format!("Failed to parse proposal {}: {}", proposal_id, e))?;
+    
+    Ok(proposal)
+}
+
+// Helper functions for tests
+#[cfg(test)]
+fn setup_test_vm() -> VM<impl Storage> {
+    use crate::storage::implementations::in_memory::InMemoryStorage;
+    let storage = InMemoryStorage::new();
+    VM::new_with_storage(storage)
+}
+
+#[cfg(test)]
+fn setup_test_auth() -> AuthContext {
+    AuthContext {
+        current_identity_did: "did:key:test".to_string(),
+        current_identity_alias: Some("TestUser".to_string()),
+        roles: vec!["admin".to_string()],
+    }
+}
+
+#[cfg(test)]
+fn create_test_proposal<S: Storage>(vm: &mut VM<S>, proposal_id: &str) -> Result<(), Box<dyn Error>> {
+    let proposal_key = format!("proposals/{}/metadata", proposal_id);
+    let proposal = crate::governance::proposal_lifecycle::ProposalLifecycle::new(
+        proposal_id.to_string(),
+        "Test Proposal".to_string(),
+        "Test description".to_string(),
+        "did:key:test".to_string(),
+        55, // quorum percentage
+        60, // threshold percentage
+    );
+    
+    let proposal_data = serde_json::to_vec(&proposal)?;
+    
+    vm.storage_backend.as_mut().unwrap().set(
+        None,
+        "governance",
+        &proposal_key,
+        proposal_data,
+    )?;
+    
+    Ok(())
 }
 
 #[test]

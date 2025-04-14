@@ -18,6 +18,8 @@ use crate::storage::auth::AuthContext;
 use crate::storage::implementations::in_memory::InMemoryStorage;
 use crate::storage::traits::{Storage, StorageBackend, StorageExtensions};
 use crate::vm::VM;
+use crate::governance::ProposalComment;
+use crate::governance::comments::fetch_comments_threaded;
 
 // Implement Clone for InMemoryStorage to satisfy VM's constraints
 impl Clone for InMemoryStorage {
@@ -179,7 +181,7 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
 
     // Create a parent comment
     let comment1_id = "comment-demo-001";
-    let comment1 = crate::cli::proposal::ProposalComment {
+    let comment1 = ProposalComment {
         id: comment1_id.to_string(),
         author: user_id.to_string(),
         timestamp: Utc::now(),
@@ -206,7 +208,7 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
 
     // Create a reply comment
     let comment2_id = "comment-demo-002";
-    let comment2 = crate::cli::proposal::ProposalComment {
+    let comment2 = ProposalComment {
         id: comment2_id.to_string(),
         author: "council_member".to_string(),
         timestamp: Utc::now(),
@@ -233,7 +235,7 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
 
     // Add more nested comments to demonstrate threading
     let comment3_id = "comment-demo-003";
-    let comment3 = crate::cli::proposal::ProposalComment {
+    let comment3 = ProposalComment {
         id: comment3_id.to_string(),
         author: user_id.to_string(),
         timestamp: Utc::now() + Duration::seconds(30),
@@ -257,7 +259,7 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
 
     // Add another top-level comment
     let comment4_id = "comment-demo-004";
-    let comment4 = crate::cli::proposal::ProposalComment {
+    let comment4 = ProposalComment {
         id: comment4_id.to_string(),
         author: "finance_team".to_string(),
         timestamp: Utc::now() + Duration::seconds(60),
@@ -281,7 +283,7 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
 
     // Add reply to the second thread
     let comment5_id = "comment-demo-005";
-    let comment5 = crate::cli::proposal::ProposalComment {
+    let comment5 = ProposalComment {
         id: comment5_id.to_string(),
         author: user_id.to_string(),
         timestamp: Utc::now() + Duration::seconds(90),
@@ -310,10 +312,10 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
 
     // Demonstrate comment display
     println!("\n--- Demonstrating threaded comment display ---");
-    let comments = crate::cli::proposal::fetch_comments_threaded(&vm, proposal_id, Some(&auth), false)?;
+    let comments = fetch_comments_threaded(&vm, proposal_id, Some(&auth), false)?;
 
     // Find and sort root comments
-    let mut roots: Vec<&crate::cli::proposal::ProposalComment> =
+    let mut roots: Vec<&ProposalComment> =
         comments.values().filter(|c| c.reply_to.is_none()).collect();
 
     roots.sort_by_key(|c| c.timestamp);
@@ -322,8 +324,8 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
     println!("Comments for proposal: {}", proposal_id);
 
     fn print_thread_demo(
-        comments: &HashMap<String, crate::cli::proposal::ProposalComment>,
-        comment: &crate::cli::proposal::ProposalComment,
+        comments: &HashMap<String, ProposalComment>,
+        comment: &ProposalComment,
         depth: usize,
     ) {
         let indent = "  ".repeat(depth);
@@ -337,7 +339,7 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
         println!("{}   {}", indent, comment.content);
 
         // Find and sort replies to this comment
-        let mut replies: Vec<&crate::cli::proposal::ProposalComment> = comments
+        let mut replies: Vec<&ProposalComment> = comments
             .values()
             .filter(|c| c.reply_to.as_deref() == Some(&comment.id))
             .collect();

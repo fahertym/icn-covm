@@ -1,4 +1,5 @@
-use crate::cli::proposal::{count_votes, fetch_comments_threaded, load_proposal_from_governance};
+use crate::governance::ProposalLifecycle;
+use crate::governance::comments;
 use crate::governance::proposal::Proposal;
 use crate::storage::auth::AuthContext;
 use crate::storage::traits::{Storage, StorageExtensions};
@@ -136,9 +137,27 @@ where
 
     match proposal_result {
         Ok(proposal) => {
-            // Get vote counts
-            let (yes_votes, no_votes, abstain_votes) =
-                count_votes(&vm_lock, &id).unwrap_or((0, 0, 0));
+            // Count votes manually since we don't have a count_votes function
+            let storage = vm_lock.storage_backend.as_ref().unwrap();
+            let votes_key = format!("proposals/{}/votes", id);
+            
+            let mut yes_votes = 0;
+            let mut no_votes = 0;
+            let mut abstain_votes = 0;
+            
+            // Get votes if available
+            if let Ok(votes_data) = storage.get(None, "governance", &votes_key) {
+                if let Ok(votes_map) = serde_json::from_slice::<HashMap<String, String>>(&votes_data) {
+                    for vote_type in votes_map.values() {
+                        match vote_type.as_str() {
+                            "yes" => yes_votes += 1,
+                            "no" => no_votes += 1,
+                            "abstain" => abstain_votes += 1,
+                            _ => {}
+                        }
+                    }
+                }
+            }
 
             let total_votes = yes_votes + no_votes + abstain_votes;
 
@@ -195,7 +214,7 @@ where
     let show_hidden = query.show_hidden.unwrap_or(false);
 
     // Pass the show_hidden parameter to control visibility of hidden comments
-    match crate::governance::comments::fetch_comments_threaded(
+    match comments::fetch_comments_threaded(
         &vm_lock,
         &id,
         auth_context,
@@ -217,7 +236,7 @@ where
                     edit_count: comment.edit_history.len() - 1, // First version is not an edit
                 })
                 .collect();
-
+            
             Ok(warp::reply::json(&comment_responses))
         }
         Err(e) => {
@@ -322,4 +341,33 @@ async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> {
     };
 
     Ok(warp::reply::json(&error))
+}
+
+/// Loads a proposal from storage
+fn load_proposal_from_governance<S>(vm: &VM<S>, id: &str) -> Result<Proposal, String>
+where
+    S: Storage + StorageExtensions + Send + Sync + Clone + Debug + 'static,
+{
+    let storage = vm.storage_backend.as_ref().unwrap();
+    let proposal_key = format!("proposals/{}/metadata", id);
+    
+    match storage.get(None, "governance", &proposal_key) {
+        Ok(data) => {
+            match serde_json::from_slice::<ProposalLifecycle>(&data) {
+                Ok(lifecycle) => {
+                    // Convert the lifecycle to a proposal
+                    let proposal = Proposal {
+                        id: lifecycle.id.clone(),
+                        creator: lifecycle.creator.clone(),
+                        created_at: lifecycle.created_at,
+                        status: lifecycle.state.into(),
+                        execution_result: lifecycle.execution_status.map(|status| format!("{:?}", status)),
+                    };
+                    Ok(proposal)
+                },
+                Err(e) => Err(format!("Failed to deserialize proposal: {}", e)),
+            }
+        },
+        Err(e) => Err(format!("Failed to retrieve proposal: {}", e)),
+    }
 }

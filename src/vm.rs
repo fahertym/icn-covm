@@ -722,7 +722,6 @@ where
     transaction_active: bool, // Keep track if WE started a transaction
 }
 
-// Implement VM for the generic S
 impl<S> VM<S>
 where
     S: Storage + Send + Sync + Clone + Debug + 'static,
@@ -1703,6 +1702,23 @@ where
         // Just use the default S type instead of a custom MockStorage
         let storage = S::default();
         self.storage_backend = Some(storage);
+    }
+}
+
+impl<S: Storage + Clone> Clone for VM<S> {
+    fn clone(&self) -> Self {
+        VM {
+            storage_backend: self.storage_backend.clone(),
+            events: self.events.clone(),
+            stack: self.stack.clone(),
+            call_stack: self.call_stack.clone(),
+            call_frames: self.call_frames.clone(),
+            output: self.output.clone(),
+            auth_context: self.auth_context.clone(),
+            namespace: self.namespace.clone(),
+            parameters: self.parameters.clone(),
+            transaction_active: self.transaction_active,
+        }
     }
 }
 
