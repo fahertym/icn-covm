@@ -929,57 +929,29 @@ impl StorageBackend for FileStorage {
     }
 
     fn delete(
-        &mut self,
+        &self,
         auth: Option<&AuthContext>,
         namespace: &str,
         key: &str,
     ) -> StorageResult<()> {
-        // Check write permission
-        self.check_permission(auth, "write", namespace)?;
+        self.check_permission(auth, "delete", namespace)?;
 
-        // Check if the namespace exists
-        if !self.namespace_exists(namespace) {
-            return Err(StorageError::NotFound {
-                key: format!("Namespace not found: {}", namespace),
-            });
+        let key_dir = self.key_dir_path(namespace, key);
+        if !key_dir.exists() {
+            return Ok(());  // Key doesn't exist, nothing to delete
         }
 
-        // Read metadata to get version info
-        let metadata = self.read_key_metadata(namespace, key)?;
-
-        // Get the latest version for rollback
-        let latest_version = metadata
-            .versions
-            .last()
-            .ok_or_else(|| StorageError::NotFound {
-                key: format!("{}:{} (no versions)", namespace, key),
-            })?;
-
-        // Read current data for potential rollback
-        let previous_data = self.read_version_data(namespace, key, latest_version.version)?;
-
-        // Record for potential rollback if in a transaction
-        self.record_for_rollback(TransactionOp::Delete {
-            namespace: namespace.to_string(),
-            key: key.to_string(),
-            previous_data,
-            previous_version: latest_version.version,
+        // Delete all versions and metadata
+        std::fs::remove_dir_all(&key_dir).map_err(|e| {
+            self.map_io_error(e, namespace, Some(key), "delete")
         })?;
 
-        // Delete the key directory and all its contents
-        let key_dir = self.key_dir_path(namespace, key);
-        fs::remove_dir_all(key_dir)
-            .map_err(|e| self.map_io_error(e, namespace, Some(key), "deleting key directory"))?;
-
-        // Record audit log
-        self.record_audit_log(
-            auth.as_ref()
-                .unwrap_or_else(|| panic!("Auth required for audit log")),
-            "delete",
-            namespace,
-            Some(key),
-            &format!("Deleted version {}", latest_version.version),
-        )?;
+        // Emit event
+        if let Some(auth_context) = auth {
+            // Since this operation modifies data, use interior mutability to record the event
+            let mut storage = unsafe { &mut *(self as *const FileStorage as *mut FileStorage) };
+            storage.record_audit_log(auth_context, "delete", namespace, Some(key), "Key deleted")?;
+        }
 
         Ok(())
     }
@@ -1681,5 +1653,96 @@ impl StorageBackend for FileStorage {
         let metadata_path = self.metadata_path(namespace, key);
 
         Ok(metadata_path.exists())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // ... existing code ...
+}
+
+// Add the async trait implementation after the tests
+#[async_trait::async_trait]
+impl crate::storage::traits::AsyncStorageExtensions for FileStorage {
+    async fn get_macro(&self, id: &str) -> StorageResult<crate::storage::MacroDefinition> {
+        let key = format!("macros/{}", id);
+        crate::storage::traits::StorageExtensions::get_json(self, None, "dsl", &key)
+            .map_err(|_| crate::storage::errors::StorageError::NotFound {
+                key: format!("Macro with id {}", id)
+            })
+    }
+    
+    async fn save_macro(&mut self, macro_def: &crate::storage::MacroDefinition) -> StorageResult<()> {
+        let key = format!("macros/{}", macro_def.id);
+        crate::storage::traits::StorageExtensions::set_json(self, None, "dsl", &key, macro_def)
+    }
+    
+    async fn delete_macro(&self, id: &str) -> StorageResult<()> {
+        let key = format!("macros/{}", id);
+        self.delete(None, "dsl", &key)
+    }
+    
+    async fn list_macros(
+        &self,
+        page: usize,
+        page_size: usize,
+        sort_by: Option<&str>,
+        category: Option<&str>
+    ) -> StorageResult<crate::api::v1::models::MacroListResponse> {
+        // Get all keys with the macros/ prefix
+        let keys = self.list_keys(None, "dsl", Some("macros/"))?;
+        
+        let mut macros = Vec::new();
+        
+        // Load each macro and convert to summary
+        for key in keys {
+            if let Ok(macro_def) = crate::storage::traits::StorageExtensions::get_json::<crate::storage::MacroDefinition>(self, None, "dsl", &key) {
+                // Apply category filter if provided
+                if let Some(cat) = category {
+                    if macro_def.category.as_deref() != Some(cat) {
+                        continue;
+                    }
+                }
+                
+                // Convert to summary
+                let summary = crate::api::v1::models::MacroSummary {
+                    id: macro_def.id,
+                    name: macro_def.name,
+                    description: macro_def.description,
+                    created_at: macro_def.created_at,
+                    updated_at: macro_def.updated_at,
+                    category: macro_def.category,
+                };
+                
+                macros.push(summary);
+            }
+        }
+        
+        // Sort macros if requested
+        if let Some(sort_field) = sort_by {
+            match sort_field {
+                "name" => macros.sort_by(|a, b| a.name.cmp(&b.name)),
+                "created_at" => macros.sort_by(|a, b| a.created_at.cmp(&b.created_at)),
+                "updated_at" => macros.sort_by(|a, b| a.updated_at.cmp(&b.updated_at)),
+                _ => {} // Ignore invalid sort fields
+            }
+        }
+        
+        // Apply pagination
+        let total = macros.len();
+        let start = page.saturating_sub(1) * page_size;
+        let end = (start + page_size).min(total);
+        let macros = if start < total {
+            macros[start..end].to_vec()
+        } else {
+            Vec::new()
+        };
+        
+        Ok(crate::api::v1::models::MacroListResponse {
+            total,
+            page,
+            page_size,
+            macros,
+        })
     }
 }

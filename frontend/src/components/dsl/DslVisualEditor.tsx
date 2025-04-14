@@ -15,6 +15,7 @@ import ReactFlow, {
   applyEdgeChanges 
 } from 'reactflow';
 import 'reactflow/dist/style.css';
+import { dslApi } from '@/lib/api';
 
 import DslNode from './nodes/DslNode';
 import MacroNode from './nodes/MacroNode';
@@ -86,18 +87,49 @@ export default function DslVisualEditor({ currentMacro, onMacroChange }: DslVisu
   const [nodes, setNodes] = useState<Node[]>(initialNodes);
   const [edges, setEdges] = useState<Edge[]>(initialEdges);
   const [selectedNode, setSelectedNode] = useState<Node | null>(null);
+  const [loading, setLoading] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
 
   // Load nodes and edges from backend when currentMacro changes
   useEffect(() => {
     if (currentMacro) {
-      // Here you would fetch the macro definition from your backend
-      // For now, we're using the initial data
-      console.log(`Loading macro: ${currentMacro}`);
-      // Simulated API call
-      // fetchMacro(currentMacro).then(data => {
-      //   setNodes(data.nodes);
-      //   setEdges(data.edges);
-      // });
+      setLoading(true);
+      setError(null);
+      
+      // Fetch the macro definition from the API
+      dslApi.getMacro(currentMacro)
+        .then(macroData => {
+          if (macroData.visual_representation) {
+            // Convert the API data to ReactFlow format
+            const apiNodes = macroData.visual_representation.nodes.map(node => ({
+              id: node.id,
+              type: node.node_type,
+              data: node.data,
+              position: node.position
+            }));
+            
+            const apiEdges = macroData.visual_representation.edges.map(edge => ({
+              id: edge.id,
+              source: edge.source,
+              target: edge.target,
+              animated: edge.animated || false,
+              label: edge.label
+            }));
+            
+            setNodes(apiNodes);
+            setEdges(apiEdges);
+          } else {
+            // No visual representation, reset to empty flow
+            setNodes([]);
+            setEdges([]);
+          }
+          setLoading(false);
+        })
+        .catch(err => {
+          console.error("Failed to load macro:", err);
+          setError("Failed to load macro. Please try again.");
+          setLoading(false);
+        });
     }
   }, [currentMacro]);
 
@@ -204,6 +236,67 @@ export default function DslVisualEditor({ currentMacro, onMacroChange }: DslVisu
     // or update the code view
   };
 
+  // Export both the DSL code and visual representation for saving
+  const exportForSaving = () => {
+    // Generate DSL code from nodes
+    const dslCode = nodes
+      .sort((a, b) => 
+        (a.position.y === b.position.y 
+          ? a.position.x - b.position.x 
+          : a.position.y - b.position.y)
+      )
+      .map(node => {
+        if (node.type === 'dslNode') {
+          if (node.data.label === 'Push') {
+            return `Push ${node.data.value}`;
+          } else if (node.data.label === 'Store') {
+            return `Store "${node.data.value}"`;
+          } else if (node.data.label === 'Load') {
+            return `Load "${node.data.value}"`;
+          } else if (node.data.label === 'Add') {
+            return 'Add';
+          } else if (node.data.label === 'Sub') {
+            return 'Sub';
+          } else if (node.data.label === 'Mul') {
+            return 'Mul';
+          } else if (node.data.label === 'Div') {
+            return 'Div';
+          }
+        } else if (node.type === 'actionNode') {
+          if (node.data.label === 'EmitEvent') {
+            return `EmitEvent "${node.data.category}" "${node.data.message}"`;
+          }
+        } else if (node.type === 'macroNode') {
+          return `Macro "${node.data.label}"`;
+        }
+        return '';
+      })
+      .filter(line => line)
+      .join('\n');
+    
+    // Create visual representation object
+    const visualRepresentation = {
+      nodes: nodes.map(node => ({
+        id: node.id,
+        node_type: node.type || 'dslNode',
+        data: node.data,
+        position: node.position
+      })),
+      edges: edges.map(edge => ({
+        id: edge.id,
+        source: edge.source,
+        target: edge.target,
+        animated: edge.animated,
+        label: edge.label
+      }))
+    };
+    
+    return {
+      code: dslCode,
+      visualRepresentation
+    };
+  };
+
   return (
     <div className="h-full flex flex-col">
       <ControlPanel 
@@ -212,24 +305,64 @@ export default function DslVisualEditor({ currentMacro, onMacroChange }: DslVisu
         onExportDsl={handleExportDsl}
         selectedNode={selectedNode}
         onUpdateNode={handleUpdateNode}
+        onSave={() => {
+          const { code, visualRepresentation } = exportForSaving();
+          
+          // Create a save request
+          const saveRequest = {
+            name: currentMacro || `New_Macro_${Date.now()}`,
+            code: code,
+            description: `DSL macro created with the visual editor`,
+            category: "custom",
+            visual_representation: visualRepresentation
+          };
+          
+          // Send to API
+          dslApi.saveMacro(saveRequest)
+            .then(result => {
+              console.log('Macro saved successfully:', result);
+              // If this is a new macro, update the current macro name
+              if (!currentMacro) {
+                onMacroChange(result.name);
+              }
+            })
+            .catch(err => {
+              console.error('Failed to save macro:', err);
+              setError('Failed to save macro. Please try again.');
+            });
+        }}
       />
       
-      <div className="flex-grow">
-        <ReactFlow
-          nodes={nodes}
-          edges={edges}
-          onNodesChange={onNodesChange}
-          onEdgesChange={onEdgesChange}
-          onConnect={onConnect}
-          onNodeClick={onNodeClick}
-          nodeTypes={nodeTypes}
-          fitView
-        >
-          <Background color="#aaa" gap={16} />
-          <Controls />
-          <MiniMap />
-        </ReactFlow>
-      </div>
+      {loading && (
+        <div className="flex-grow flex items-center justify-center bg-gray-100">
+          <div className="text-lg text-gray-600">Loading macro...</div>
+        </div>
+      )}
+      
+      {error && (
+        <div className="bg-red-100 border border-red-300 text-red-700 px-4 py-2 rounded">
+          {error}
+        </div>
+      )}
+      
+      {!loading && (
+        <div className="flex-grow">
+          <ReactFlow
+            nodes={nodes}
+            edges={edges}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            onConnect={onConnect}
+            onNodeClick={onNodeClick}
+            nodeTypes={nodeTypes}
+            fitView
+          >
+            <Background color="#aaa" gap={16} />
+            <Controls />
+            <MiniMap />
+          </ReactFlow>
+        </div>
+      )}
     </div>
   );
 } 

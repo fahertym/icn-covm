@@ -940,77 +940,38 @@ impl InMemoryStorage {
     
     /// Get the logic path for a proposal
     pub fn get_proposal_logic_path(&self, proposal_id: &str) -> StorageResult<String> {
-        // Get the logic path from the proposal metadata
-        let meta_key = format!("proposals/{}/metadata", proposal_id);
-        let bytes = self.get(None, "governance", &meta_key)?;
-        
-        // Parse metadata to extract logic_path
-        let metadata: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| {
-            crate::storage::errors::StorageError::SerializationError {
-                details: format!("Failed to parse proposal metadata: {}", e),
-            }
-        })?;
-        
-        // Extract logic path from metadata
-        match metadata.get("logic_path") {
-            Some(path) => match path.as_str() {
-                Some(path_str) => Ok(path_str.to_string()),
-                None => Err(crate::storage::errors::StorageError::InvalidValue {
-                    details: "logic_path is not a string".to_string(),
-                }),
-            },
-            None => Err(crate::storage::errors::StorageError::KeyNotFound {
-                key: "logic_path".to_string(),
-            }),
-        }
+        // Get proposal logic path using StorageExtensions trait implementation
+        <Self as crate::storage::traits::StorageExtensions>::get_proposal_logic_path(self, proposal_id)
     }
     
-    /// Get the DSL logic code for a proposal
-    pub fn get_proposal_logic(&self, logic_path: &str) -> StorageResult<String> {
-        // Get the DSL code from the specified path
-        let bytes = self.get(None, "governance", logic_path)?;
-        
-        // Convert bytes to string
-        String::from_utf8(bytes).map_err(|e| {
-            crate::storage::errors::StorageError::SerializationError {
-                details: format!("Invalid UTF-8 in DSL code: {}", e),
-            }
-        })
+    /// Gets the DSL logic code for a proposal
+    fn get_proposal_logic(&self, logic_path: &str) -> StorageResult<String> {
+        // Use the StorageExtensions trait implementation
+        <Self as crate::storage::traits::StorageExtensions>::get_proposal_logic(self, logic_path)
     }
     
     /// Saves the execution result of a proposal
     pub fn save_proposal_execution_result(&mut self, proposal_id: &str, result: &str) -> StorageResult<()> {
-        // Forward to the versioned implementation with basic metadata
-        self.save_proposal_execution_result_versioned(
-            proposal_id, 
-            result,
-            true, // Default to success
-            "Execution completed successfully", // Default summary
-        ).map(|_| ())
+        // Use the StorageExtensions trait implementation
+        <Self as crate::storage::traits::StorageExtensions>::save_proposal_execution_result(self, proposal_id, result)
     }
     
     /// Gets the execution result of a proposal
     pub fn get_proposal_execution_result(&self, proposal_id: &str) -> StorageResult<String> {
-        // Forward to the latest result implementation
-        self.get_latest_execution_result(proposal_id)
+        // Use the StorageExtensions trait implementation
+        <Self as crate::storage::traits::StorageExtensions>::get_proposal_execution_result(self, proposal_id)
     }
     
     /// Gets the execution logs of a proposal
-    pub fn get_proposal_execution_logs(&self, proposal_id: &str) -> StorageResult<String> {
-        // Create the key for retrieving execution logs
-        let logs_key = format!("proposals/{}/execution_logs", proposal_id);
-        
-        // Try to get logs, return empty string if not found
-        match self.get(None, "governance", &logs_key) {
-            Ok(bytes) => String::from_utf8(bytes).map_err(|e| {
-                crate::storage::errors::StorageError::SerializationError {
-                    details: format!("Invalid UTF-8 in execution logs: {}", e),
-                }
-            }),
-            Err(crate::storage::errors::StorageError::KeyNotFound { .. }) => Ok(String::new()),
-            Err(e) => Err(e),
-        }
+    fn get_proposal_execution_logs(&self, proposal_id: &str) -> StorageResult<String> {
+        // Use the StorageExtensions trait implementation
+        <Self as crate::storage::traits::StorageExtensions>::get_proposal_execution_logs(self, proposal_id)
     }
+}
+
+// Extension methods for macros
+impl InMemoryStorage {
+    // remove the existing macro methods
 }
 
 #[cfg(test)]
@@ -1252,5 +1213,91 @@ mod tests {
             .unwrap();
         // We didn't perform any read operations on this namespace yet
         assert!(log_filtered.is_empty());
+    }
+}
+
+// Add after the tests module
+#[async_trait::async_trait]
+impl crate::storage::traits::AsyncStorageExtensions for InMemoryStorage {
+    async fn get_macro(&self, id: &str) -> StorageResult<crate::storage::MacroDefinition> {
+        let key = format!("macros/{}", id);
+        self.get_json(None, "dsl", &key)
+            .map_err(|_| crate::storage::errors::StorageError::NotFound {
+                key: format!("Macro with id {}", id)
+            })
+    }
+    
+    async fn save_macro(&mut self, macro_def: &crate::storage::MacroDefinition) -> StorageResult<()> {
+        let key = format!("macros/{}", macro_def.id);
+        self.set_json(None, "dsl", &key, macro_def)
+    }
+    
+    async fn delete_macro(&mut self, id: &str) -> StorageResult<()> {
+        let key = format!("macros/{}", id);
+        self.delete(None, "dsl", &key)
+    }
+    
+    async fn list_macros(
+        &self,
+        page: usize,
+        page_size: usize,
+        sort_by: Option<&str>,
+        category: Option<&str>
+    ) -> StorageResult<crate::api::v1::models::MacroListResponse> {
+        // Get all keys with the macros/ prefix
+        let keys = self.list_keys(None, "dsl", Some("macros/"))?;
+        
+        let mut macros = Vec::new();
+        
+        // Load each macro and convert to summary
+        for key in keys {
+            if let Ok(macro_def) = self.get_json::<crate::storage::MacroDefinition>(None, "dsl", &key) {
+                // Apply category filter if provided
+                if let Some(cat) = category {
+                    if macro_def.category.as_deref() != Some(cat) {
+                        continue;
+                    }
+                }
+                
+                // Convert to summary
+                let summary = crate::api::v1::models::MacroSummary {
+                    id: macro_def.id,
+                    name: macro_def.name,
+                    description: macro_def.description,
+                    created_at: macro_def.created_at,
+                    updated_at: macro_def.updated_at,
+                    category: macro_def.category,
+                };
+                
+                macros.push(summary);
+            }
+        }
+        
+        // Sort macros if requested
+        if let Some(sort_field) = sort_by {
+            match sort_field {
+                "name" => macros.sort_by(|a, b| a.name.cmp(&b.name)),
+                "created_at" => macros.sort_by(|a, b| a.created_at.cmp(&b.created_at)),
+                "updated_at" => macros.sort_by(|a, b| a.updated_at.cmp(&b.updated_at)),
+                _ => {} // Ignore invalid sort fields
+            }
+        }
+        
+        // Apply pagination
+        let total = macros.len();
+        let start = page.saturating_sub(1) * page_size;
+        let end = (start + page_size).min(total);
+        let macros = if start < total {
+            macros[start..end].to_vec()
+        } else {
+            Vec::new()
+        };
+        
+        Ok(crate::api::v1::models::MacroListResponse {
+            total,
+            page,
+            page_size,
+            macros,
+        })
     }
 }

@@ -9,6 +9,7 @@ interface ControlPanelProps {
   onExportDsl: () => void;
   selectedNode: Node | null;
   onUpdateNode: (nodeId: string, newData: any) => void;
+  onSave?: () => void;
 }
 
 export default function ControlPanel({
@@ -17,6 +18,7 @@ export default function ControlPanel({
   onExportDsl,
   selectedNode,
   onUpdateNode,
+  onSave,
 }: ControlPanelProps) {
   const [nodeType, setNodeType] = useState<string>('dslNode');
   const [nodeOperation, setNodeOperation] = useState<string>('Push');
@@ -235,8 +237,16 @@ export default function ControlPanel({
             onClick={onExportDsl}
             className="btn bg-secondary text-white"
           >
-            Export DSL
+            Generate Code
           </button>
+          {onSave && (
+            <button
+              onClick={onSave}
+              className="btn bg-primary text-white"
+            >
+              Save Macro
+            </button>
+          )}
         </div>
       </div>
     </div>

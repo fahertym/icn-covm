@@ -21,9 +21,10 @@ pub use implementations::in_memory::InMemoryStorage;
 pub use utils::{now, Timestamp};
 
 use std::collections::HashMap;
+use serde_json::Value;
 
 /// Represents a proposal in the system
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Proposal {
     pub id: String,
     pub title: String,
@@ -39,7 +40,7 @@ pub struct Proposal {
 }
 
 /// Represents an attachment to a proposal
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ProposalAttachment {
     pub id: String,
     pub proposal_id: String,
@@ -50,7 +51,7 @@ pub struct ProposalAttachment {
 }
 
 /// Represents a vote on a proposal
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Vote {
     pub id: String,
     pub proposal_id: String,
@@ -60,7 +61,7 @@ pub struct Vote {
 }
 
 /// Represents a comment on a proposal
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Comment {
     pub id: String,
     pub proposal_id: String,
@@ -69,6 +70,29 @@ pub struct Comment {
     pub created_at: String,
     pub updated_at: String,
     pub reactions: Option<HashMap<String, i32>>,
+}
+
+/// Represents a DSL macro definition
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MacroDefinition {
+    /// Unique identifier for the macro
+    pub id: String,
+    /// Name of the macro
+    pub name: String,
+    /// The DSL code contents of the macro
+    pub code: String,
+    /// Optional description of the macro's purpose
+    pub description: Option<String>,
+    /// Creation timestamp in ISO 8601 format
+    pub created_at: String,
+    /// Last update timestamp in ISO 8601 format
+    pub updated_at: String,
+    /// Category for grouping macros (e.g., "economic", "governance")
+    pub category: Option<String>,
+    /// User who created the macro
+    pub created_by: Option<String>,
+    /// Additional metadata for the macro (including visual representation)
+    pub metadata: Option<Value>,
 }
 
 // Add extension methods to InMemoryStorage for proposals
@@ -82,7 +106,9 @@ impl InMemoryStorage {
     pub async fn get_proposal(&self, id: &str) -> StorageResult<Proposal> {
         // For demo purposes, return a dummy proposal
         // In a real implementation, this would query the database
-        Err(StorageError::KeyNotFound { key: id.to_string() })
+        Err(StorageError::NotImplemented { 
+            feature: format!("Getting proposal with id: {}", id)
+        })
     }
     
     pub async fn save_proposal(&mut self, proposal: &Proposal) -> StorageResult<()> {

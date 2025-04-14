@@ -277,42 +277,39 @@ impl<S: StorageBackend> StorageExtensions for S {
         key: &str,
         version: u64,
     ) -> StorageResult<Option<T>> {
-        // Try to get the version, handle "not found" gracefully
         match self.get_version(auth, namespace, key, version) {
-            Ok((bytes, _)) => {
-                let value = serde_json::from_slice(&bytes).map_err(|e| {
-                    crate::storage::errors::StorageError::SerializationError {
-                        details: e.to_string(),
-                    }
-                })?;
-                Ok(Some(value))
-            }
-            Err(crate::storage::errors::StorageError::KeyNotFound { .. }) => Ok(None),
+            Ok((data, _version_info)) => match serde_json::from_slice(&data) {
+                Ok(value) => Ok(Some(value)),
+                Err(e) => Err(crate::storage::errors::StorageError::SerializationError {
+                    details: format!("Failed to deserialize JSON: {}", e),
+                }),
+            },
+            Err(crate::storage::errors::StorageError::NotFound { .. }) => Ok(None),
             Err(e) => Err(e),
         }
     }
     
     fn get_proposal_logic_path(&self, proposal_id: &str) -> StorageResult<String> {
-        // Get the logic path from the proposal metadata
-        let meta_key = format!("proposals/{}/metadata", proposal_id);
-        let bytes = self.get(None, "governance", &meta_key)?;
+        // Get the proposal first to validate it exists
+        let key = format!("proposals/{}", proposal_id);
         
-        // Parse metadata to extract logic_path
-        let metadata: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| {
-            crate::storage::errors::StorageError::SerializationError {
-                details: format!("Failed to parse proposal metadata: {}", e),
-            }
-        })?;
+        let proposal_data = self.get(None, "governance", &key)?;
+        let proposal_json: serde_json::Value = serde_json::from_slice(&proposal_data)
+            .map_err(|e| crate::storage::errors::StorageError::SerializationError {
+                details: format!("Failed to parse proposal data: {}", e),
+            })?;
         
-        // Extract logic path from metadata
-        match metadata.get("logic_path") {
+        // Extract the logic_path field
+        let logic_path = proposal_json.get("logic_path");
+        
+        match logic_path {
             Some(path) => match path.as_str() {
                 Some(path_str) => Ok(path_str.to_string()),
-                None => Err(crate::storage::errors::StorageError::InvalidValue {
-                    details: "logic_path is not a string".to_string(),
-                }),
+                None => Err(crate::storage::errors::StorageError::InvalidStorageData(
+                    "logic_path is not a string".to_string()
+                )),
             },
-            None => Err(crate::storage::errors::StorageError::KeyNotFound {
+            None => Err(crate::storage::errors::StorageError::NotFound {
                 key: "logic_path".to_string(),
             }),
         }
@@ -354,45 +351,45 @@ impl<S: StorageBackend> StorageExtensions for S {
     }
     
     fn get_proposal_execution_logs(&self, proposal_id: &str) -> StorageResult<String> {
-        // Create the key for retrieving execution logs
-        let logs_key = format!("proposals/{}/execution_logs", proposal_id);
+        let key = format!("proposals/{}/execution_logs", proposal_id);
         
-        // Try to get logs, return empty string if not found
-        match self.get(None, "governance", &logs_key) {
-            Ok(bytes) => String::from_utf8(bytes).map_err(|e| {
-                crate::storage::errors::StorageError::SerializationError {
-                    details: format!("Invalid UTF-8 in execution logs: {}", e),
+        match self.get(None, "governance", &key) {
+            Ok(data) => {
+                match String::from_utf8(data) {
+                    Ok(s) => Ok(s),
+                    Err(e) => Err(crate::storage::errors::StorageError::SerializationError { 
+                        details: format!("Failed to parse execution logs as UTF-8: {}", e) 
+                    }),
                 }
-            }),
-            Err(crate::storage::errors::StorageError::KeyNotFound { .. }) => Ok(String::new()),
+            },
+            Err(crate::storage::errors::StorageError::NotFound { .. }) => Ok(String::new()),
             Err(e) => Err(e),
         }
     }
     
     fn append_proposal_execution_log(&mut self, proposal_id: &str, log_entry: &str) -> StorageResult<()> {
-        // Create the key for execution logs
-        let logs_key = format!("proposals/{}/execution_logs", proposal_id);
+        let key = format!("proposals/{}/execution_logs", proposal_id);
         
-        // Get existing logs, if any
-        let existing_logs = match self.get(None, "governance", &logs_key) {
-            Ok(bytes) => String::from_utf8(bytes).map_err(|e| {
-                crate::storage::errors::StorageError::SerializationError {
-                    details: format!("Invalid UTF-8 in execution logs: {}", e),
+        // Read existing logs or create empty string
+        let existing_logs = match self.get(None, "governance", &key) {
+            Ok(data) => {
+                match String::from_utf8(data) {
+                    Ok(s) => s,
+                    Err(e) => return Err(crate::storage::errors::StorageError::SerializationError { 
+                        details: format!("Failed to parse execution logs as UTF-8: {}", e) 
+                    }),
                 }
-            })?,
-            Err(crate::storage::errors::StorageError::KeyNotFound { .. }) => String::new(),
+            },
+            Err(crate::storage::errors::StorageError::NotFound { .. }) => String::new(),
             Err(e) => return Err(e),
         };
         
-        // Append the new log entry to existing logs
-        let updated_logs = if existing_logs.is_empty() {
-            log_entry.to_string()
-        } else {
-            format!("{}\n{}", existing_logs, log_entry)
-        };
+        // Append new log entry with timestamp
+        let timestamp = crate::storage::now();
+        let updated_logs = format!("{}\n[{}] {}", existing_logs, timestamp, log_entry);
         
-        // Save the updated logs
-        self.set(None, "governance", &logs_key, updated_logs.as_bytes().to_vec())
+        // Write back the updated logs
+        self.set(None, "governance", &key, updated_logs.into_bytes())
     }
     
     fn save_proposal_execution_result_versioned(&mut self, proposal_id: &str, result: &str, success: bool, summary: &str) -> StorageResult<u64> {
@@ -614,8 +611,30 @@ impl<S: StorageBackend> StorageExtensions for S {
     }
 }
 
-/// Supertrait combining StorageBackend and StorageExtensions for use in trait objects.
-pub trait Storage: StorageBackend + StorageExtensions {}
+/// Async storage extensions for methods that require async operations
+#[async_trait::async_trait]
+pub trait AsyncStorageExtensions: StorageBackend {
+    /// Gets a macro definition by ID
+    async fn get_macro(&self, id: &str) -> StorageResult<crate::storage::MacroDefinition>;
+    
+    /// Saves a macro definition
+    async fn save_macro(&mut self, macro_def: &crate::storage::MacroDefinition) -> StorageResult<()>;
+    
+    /// Deletes a macro definition
+    async fn delete_macro(&mut self, id: &str) -> StorageResult<()>;
+    
+    /// Lists all macros with optional filtering and pagination
+    async fn list_macros(
+        &self,
+        page: usize,
+        page_size: usize,
+        sort_by: Option<&str>,
+        category: Option<&str>
+    ) -> StorageResult<crate::api::v1::models::MacroListResponse>;
+}
 
-/// Blanket implementation for the Storage supertrait.
-impl<T: StorageBackend + StorageExtensions> Storage for T {}
+/// Marker trait to indicate that a type provides both synchronous and asynchronous storage operations
+pub trait Storage: StorageBackend + StorageExtensions + AsyncStorageExtensions {}
+
+/// Implement the marker trait for any type that implements both required traits
+impl<T: StorageBackend + StorageExtensions + AsyncStorageExtensions> Storage for T {}

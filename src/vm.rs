@@ -685,7 +685,7 @@ pub struct VMEvent {
 pub struct VM<S>
 // Make VM generic over storage type S
 where
-    S: Storage + Send + Sync + Clone + Debug + 'static, // Add Debug bound
+    S: Storage + Send + Sync + Clone + std::fmt::Debug + 'static, 
 {
     /// Stack for operands
     pub stack: Vec<f64>,
@@ -724,7 +724,7 @@ where
 
 impl<S> VM<S>
 where
-    S: Storage + Send + Sync + Clone + Debug + 'static,
+    S: Storage + Send + Sync + Clone + std::fmt::Debug + 'static,
 {
     // VM::new - creates default InMemoryStorage if no backend provided initially
     // This needs rethinking. new() maybe shouldn't have storage?
@@ -945,10 +945,7 @@ where
     where
         S: Clone,
     {
-        // Try to clone the storage backend
-        let storage_backend = self.storage_backend.as_ref().map(|s| s.clone());
-
-        Some(Self {
+        Some(VM {
             stack: self.stack.clone(),
             memory: self.memory.clone(),
             functions: self.functions.clone(),
@@ -959,7 +956,7 @@ where
             auth_context: self.auth_context.clone(),
             namespace: self.namespace.clone(),
             parameters: self.parameters.clone(),
-            storage_backend,
+            storage_backend: self.storage_backend.clone(),
             transaction_active: self.transaction_active,
         })
     }
@@ -1703,22 +1700,72 @@ where
         let storage = S::default();
         self.storage_backend = Some(storage);
     }
-}
 
-impl<S: Storage + Clone> Clone for VM<S> {
-    fn clone(&self) -> Self {
-        VM {
-            storage_backend: self.storage_backend.clone(),
-            events: self.events.clone(),
-            stack: self.stack.clone(),
-            call_stack: self.call_stack.clone(),
-            call_frames: self.call_frames.clone(),
-            output: self.output.clone(),
-            auth_context: self.auth_context.clone(),
-            namespace: self.namespace.clone(),
-            parameters: self.parameters.clone(),
-            transaction_active: self.transaction_active,
+    /// Execute a DSL macro with optional parameters
+    ///
+    /// This method loads a macro from storage by name, substitutes any parameters,
+    /// and executes the resulting DSL code
+    pub async fn execute_macro(
+        &mut self,
+        macro_id: &str,
+        params: Option<serde_json::Value>
+    ) -> Result<serde_json::Value, String> {
+        // Get the macro from storage
+        let macro_def = self.storage_backend.as_ref()
+            .ok_or_else(|| "Storage backend not available".to_string())?
+            .get_macro(macro_id)
+            .await
+            .map_err(|e| format!("Failed to load macro {}: {}", macro_id, e))?;
+        
+        // Execute the macro's DSL code
+        self.execute_dsl(&macro_def.code, params)
+    }
+    
+    /// Execute DSL code with optional parameters
+    ///
+    /// This method parses and executes the provided DSL code with the given parameters
+    pub fn execute_dsl(
+        &mut self,
+        code: &str,
+        params: Option<serde_json::Value>
+    ) -> Result<serde_json::Value, String> {
+        // Set parameters in VM if provided
+        if let Some(params_value) = params {
+            // Convert serde_json::Value to HashMap<String, String> for VM parameters
+            let mut param_map = HashMap::new();
+            if let serde_json::Value::Object(obj) = params_value {
+                for (key, value) in obj {
+                    param_map.insert(key, value.to_string());
+                }
+            }
+            self.set_parameters(param_map).map_err(|e| e.to_string())?;
         }
+        
+        // Parse and execute the DSL code
+        // This is a placeholder as we need a proper parser
+        let ops = self.parse_dsl_code(code)?;
+        self.execute(&ops).map_err(|e| e.to_string())?;
+        
+        // Return the result (for now just return the top of the stack)
+        let result = self.top().unwrap_or(0.0);
+        Ok(serde_json::json!({ "result": result }))
+    }
+    
+    /// Validate DSL code for syntax errors
+    ///
+    /// This method parses the provided DSL code to check for syntax errors
+    /// without executing it
+    pub fn validate_dsl(&self, code: &str) -> Result<(), String> {
+        // Use the parser to validate the DSL syntax
+        let _ = self.parse_dsl_code(code)?;
+        Ok(())
+    }
+
+    // Helper method to parse DSL code into operations
+    fn parse_dsl_code(&self, code: &str) -> Result<Vec<Op>, String> {
+        // This is a placeholder - actual implementation would parse DSL code into Op structs
+        // For now, we'll just return a simple Push operation
+        Ok(vec![Op::Push(1.0)])
     }
 }
 

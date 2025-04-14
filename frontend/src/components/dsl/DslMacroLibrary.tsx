@@ -1,6 +1,8 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { dslApi } from '@/lib/api';
+import { MacroInfo } from '@/lib/api';
 
 interface MacroItem {
   id: string;
@@ -14,58 +16,37 @@ interface DslMacroLibraryProps {
   onSelectMacro: (macroName: string) => void;
 }
 
-// Sample macro data for demonstration
-const sampleMacros: MacroItem[] = [
-  {
-    id: '1',
-    name: 'IncrementBalance',
-    description: 'Increases the balance of an account by the specified amount',
-    category: 'economic',
-    lastUpdated: '2023-05-15',
-  },
-  {
-    id: '2',
-    name: 'CreateProposal',
-    description: 'Creates a new governance proposal with specified parameters',
-    category: 'governance',
-    lastUpdated: '2023-06-02',
-  },
-  {
-    id: '3',
-    name: 'ValidateVoter',
-    description: 'Validates that a voter has sufficient voting rights',
-    category: 'governance',
-    lastUpdated: '2023-06-10',
-  },
-  {
-    id: '4',
-    name: 'TransferTokens',
-    description: 'Transfers tokens from one account to another',
-    category: 'economic',
-    lastUpdated: '2023-05-28',
-  },
-  {
-    id: '5',
-    name: 'RegisterIdentity',
-    description: 'Registers a new identity in the system',
-    category: 'identity',
-    lastUpdated: '2023-05-30',
-  },
-];
-
 export default function DslMacroLibrary({ onSelectMacro }: DslMacroLibraryProps) {
   const [macros, setMacros] = useState<MacroItem[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
 
-  // Simulate loading macros from API
+  // Load macros from API
   useEffect(() => {
-    // This would be an actual API call in production
-    setTimeout(() => {
-      setMacros(sampleMacros);
-      setLoading(false);
-    }, 500);
+    setLoading(true);
+    setError(null);
+    
+    dslApi.listMacros()
+      .then(macroList => {
+        // Convert API response to component format
+        const formattedMacros = macroList.map((macro: MacroInfo) => ({
+          id: macro.id,
+          name: macro.name,
+          description: macro.description || 'No description provided',
+          category: macro.category || 'uncategorized',
+          lastUpdated: macro.updated_at,
+        }));
+        
+        setMacros(formattedMacros);
+        setLoading(false);
+      })
+      .catch(err => {
+        console.error("Failed to load macros:", err);
+        setError("Failed to load macro library. Please try again.");
+        setLoading(false);
+      });
   }, []);
 
   // Filter macros based on search query and category
@@ -78,6 +59,27 @@ export default function DslMacroLibrary({ onSelectMacro }: DslMacroLibraryProps)
 
   // Get unique categories for the filter dropdown
   const categories = ['all', ...Array.from(new Set(macros.map((macro) => macro.category)))];
+
+  // Handle macro deletion
+  const handleDeleteMacro = (macroId: string, event: React.MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation(); // Prevent selecting the macro when clicking delete
+    
+    if (confirm('Are you sure you want to delete this macro?')) {
+      setLoading(true);
+      
+      dslApi.deleteMacro(macroId)
+        .then(() => {
+          // Remove the deleted macro from the state
+          setMacros(macros.filter(macro => macro.id !== macroId));
+          setLoading(false);
+        })
+        .catch(err => {
+          console.error("Failed to delete macro:", err);
+          setError("Failed to delete macro. Please try again.");
+          setLoading(false);
+        });
+    }
+  };
 
   return (
     <div className="h-full flex flex-col">
@@ -111,6 +113,8 @@ export default function DslMacroLibrary({ onSelectMacro }: DslMacroLibraryProps)
       <div className="flex-grow overflow-auto p-4">
         {loading ? (
           <div className="animate-pulse text-center py-8">Loading macros...</div>
+        ) : error ? (
+          <div className="text-center py-8 text-red-500">{error}</div>
         ) : filteredMacros.length === 0 ? (
           <div className="text-center py-8 text-gray-500">
             No macros found matching your criteria
@@ -125,13 +129,24 @@ export default function DslMacroLibrary({ onSelectMacro }: DslMacroLibraryProps)
               >
                 <div className="flex justify-between items-start">
                   <h3 className="font-bold text-primary">{macro.name}</h3>
-                  <span className="text-xs px-2 py-1 bg-gray-100 rounded-full">
-                    {macro.category}
-                  </span>
+                  <div className="flex gap-2">
+                    <span className="text-xs px-2 py-1 bg-gray-100 rounded-full">
+                      {macro.category}
+                    </span>
+                    <button
+                      className="text-red-500 hover:text-red-700"
+                      onClick={(e) => handleDeleteMacro(macro.id, e)}
+                      aria-label="Delete macro"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                    </button>
+                  </div>
                 </div>
                 <p className="text-sm text-gray-600 mt-2">{macro.description}</p>
                 <div className="text-xs text-gray-500 mt-3">
-                  Last updated: {macro.lastUpdated}
+                  Last updated: {new Date(macro.lastUpdated).toLocaleDateString()}
                 </div>
               </div>
             ))}

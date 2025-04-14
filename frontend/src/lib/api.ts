@@ -25,7 +25,7 @@ export interface NodeData {
 export interface NodeInfo {
   id: string;
   node_type: string;
-  data: NodeData;
+  data: any;
   position: {
     x: number;
     y: number;
@@ -73,22 +73,34 @@ export const dslApi = {
   },
 
   // Get details of a specific macro
-  async getMacro(name: string): Promise<MacroDetails> {
-    const response = await api.get<MacroDetails>(`/dsl/macros/${name}`);
+  async getMacro(id: string): Promise<MacroDetails> {
+    const response = await api.get<MacroDetails>(`/dsl/macros/${id}`);
     return response.data;
   },
 
   // Save a macro (create or update)
   async saveMacro(macro: SaveMacroRequest): Promise<MacroDetails> {
-    const response = await api.post<MacroDetails>('/dsl/macros', macro);
-    return response.data;
+    // If macro has an ID, update it, otherwise create a new one
+    if ('id' in macro && macro.id) {
+      const response = await api.put<MacroDetails>(`/dsl/macros/${macro.id}`, macro);
+      return response.data;
+    } else {
+      const response = await api.post<MacroDetails>('/dsl/macros', macro);
+      return response.data;
+    }
   },
 
   // Delete a macro
-  async deleteMacro(name: string): Promise<{ success: boolean, message: string }> {
-    const response = await api.delete<{ success: boolean, message: string }>(`/dsl/macros/${name}`);
+  async deleteMacro(id: string): Promise<{ success: boolean, message: string }> {
+    const response = await api.delete<{ success: boolean, message: string }>(`/dsl/macros/${id}`);
     return response.data;
   },
+
+  // Execute a macro with parameters
+  async executeMacro(id: string, params: any): Promise<any> {
+    const response = await api.post<any>(`/dsl/macros/${id}/execute`, params);
+    return response.data;
+  }
 };
 
 // API functions for proposals
