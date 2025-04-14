@@ -2,7 +2,8 @@ use crate::governance::ProposalLifecycle;
 use crate::governance::comments;
 use crate::governance::proposal::Proposal;
 use crate::storage::auth::AuthContext;
-use crate::storage::traits::{Storage, StorageExtensions, StorageBackend, AsyncStorageExtensions};
+use crate::storage::traits::{Storage, StorageExtensions, StorageBackend, AsyncStorageExtensions, JsonStorage};
+use crate::storage::errors::StorageError;
 use crate::vm::VM;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -88,10 +89,25 @@ pub struct ShowHiddenQuery {
     show_hidden: Option<bool>,
 }
 
+/// Also import VoteType for vote counting
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub enum VoteType {
+    Yes,
+    No,
+    Abstain,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Vote {
+    pub voter: String,
+    pub vote: VoteType,
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+}
+
 /// Returns all the proposal API routes
 pub fn get_routes<S>(vm: Arc<VM<Arc<Mutex<S>>>>) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone
 where
-    S: StorageBackend + StorageExtensions + AsyncStorageExtensions + Send + Sync + Clone + Debug + 'static,
+    S: StorageBackend + StorageExtensions + AsyncStorageExtensions + JsonStorage + Send + Sync + Clone + Debug + 'static,
 {
     // Create routes for API endpoints
     let proposals_route = warp::path!("proposals" / String)
@@ -115,48 +131,29 @@ where
 
 /// Dependency injection helper for the VM
 fn with_vm<S>(
-    vm: Arc<VM<S>>,
-) -> impl Filter<Extract = (Arc<VM<S>>,), Error = Infallible> + Clone
+    vm: Arc<VM<Arc<Mutex<S>>>>,
+) -> impl Filter<Extract = (Arc<VM<Arc<Mutex<S>>>>,), Error = Infallible> + Clone
 where
-    S: Send + Sync + Debug + 'static,
+    S: StorageBackend + StorageExtensions + AsyncStorageExtensions + JsonStorage + Send + Sync + Clone + Debug + 'static,
 {
     warp::any().map(move || vm.clone())
 }
 
 /// Handler for GET /proposals/{id}
-async fn get_proposal<S>(id: String, vm: Arc<VM<S>>) -> Result<impl Reply, Rejection>
+async fn get_proposal<S>(id: String, vm: Arc<VM<Arc<Mutex<S>>>>) -> Result<impl Reply, Rejection>
 where
-    S: Storage + StorageExtensions + Send + Sync + Clone + Debug + 'static,
+    S: StorageBackend + StorageExtensions + AsyncStorageExtensions + JsonStorage + Send + Sync + Clone + Debug + 'static,
 {
-    let vm_lock = vm.lock().await;
+    let storage_mutex = vm.storage_backend.clone();
+    let storage = storage_mutex.lock().await;
 
     // Load proposal
-    let proposal_result = load_proposal_from_governance(&vm_lock, &id);
+    let proposal_result = load_proposal_from_governance(&vm, &id).await;
 
     match proposal_result {
         Ok(proposal) => {
-            // Count votes manually since we don't have a count_votes function
-            let storage = vm_lock.storage_backend.as_ref().unwrap();
-            let votes_key = format!("proposals/{}/votes", id);
-            
-            let mut yes_votes = 0;
-            let mut no_votes = 0;
-            let mut abstain_votes = 0;
-            
-            // Get votes if available
-            if let Ok(votes_data) = storage.get(None, "governance", &votes_key) {
-                if let Ok(votes_map) = serde_json::from_slice::<HashMap<String, String>>(&votes_data) {
-                    for vote_type in votes_map.values() {
-                        match vote_type.as_str() {
-                            "yes" => yes_votes += 1,
-                            "no" => no_votes += 1,
-                            "abstain" => abstain_votes += 1,
-                            _ => {}
-                        }
-                    }
-                }
-            }
-
+            // Count votes
+            let (yes_votes, no_votes, abstain_votes) = count_votes(&vm, &id).await.unwrap_or((0, 0, 0));
             let total_votes = yes_votes + no_votes + abstain_votes;
 
             // Calculate percentages
@@ -175,10 +172,10 @@ where
                 status: format!("{:?}", proposal.status),
                 created_at: proposal.created_at.to_rfc3339(),
                 votes: VoteCounts {
-                    yes: yes_votes,
-                    no: no_votes,
-                    abstain: abstain_votes,
-                    total: total_votes,
+                    yes: yes_votes as u32,
+                    no: no_votes as u32,
+                    abstain: abstain_votes as u32,
+                    total: total_votes as u32,
                 },
                 quorum_percentage,
                 threshold_percentage,
@@ -199,13 +196,14 @@ where
 /// Handler for GET /proposals/{id}/comments
 async fn get_proposal_comments<S>(
     id: String,
-    vm: Arc<VM<S>>,
+    vm: Arc<VM<Arc<Mutex<S>>>>,
     query: ShowHiddenQuery,
 ) -> Result<impl Reply, Rejection>
 where
-    S: Storage + StorageExtensions + Send + Sync + Clone + Debug + 'static,
+    S: StorageBackend + StorageExtensions + AsyncStorageExtensions + JsonStorage + Send + Sync + Clone + Debug + 'static,
 {
-    let vm_lock = vm.lock().await;
+    let storage_mutex = vm.storage_backend.clone();
+    let storage = storage_mutex.lock().await;
 
     // Create a null auth context for read-only operations
     let auth_context = None;
@@ -213,7 +211,7 @@ where
 
     // Pass the show_hidden parameter to control visibility of hidden comments
     match comments::fetch_comments_threaded(
-        &vm_lock,
+        &vm,
         &id,
         auth_context,
         show_hidden,
@@ -247,20 +245,21 @@ where
 }
 
 /// Handler for GET /proposals/{id}/summary
-async fn get_proposal_summary<S>(id: String, vm: Arc<VM<S>>) -> Result<impl Reply, Rejection>
+async fn get_proposal_summary<S>(id: String, vm: Arc<VM<Arc<Mutex<S>>>>) -> Result<impl Reply, Rejection>
 where
-    S: Storage + StorageExtensions + Send + Sync + Clone + Debug + 'static,
+    S: StorageBackend + StorageExtensions + AsyncStorageExtensions + JsonStorage + Send + Sync + Clone + Debug + 'static,
 {
-    let vm_lock = vm.lock().await;
+    let storage_mutex = vm.storage_backend.clone();
+    let storage = storage_mutex.lock().await;
 
     // Load proposal and comments
-    let proposal_result = load_proposal_from_governance(&vm_lock, &id);
+    let proposal_result = load_proposal_from_governance(&vm, &id).await;
     let comments_result =
-        crate::governance::comments::fetch_comments_threaded(&vm_lock, &id, None, false);
+        crate::governance::comments::fetch_comments_threaded(&vm, &id, None, false);
 
     if let (Ok(proposal), Ok(comments)) = (&proposal_result, &comments_result) {
         // Count votes
-        let (yes_votes, no_votes, abstain_votes) = count_votes(&vm_lock, &id).unwrap_or((0, 0, 0));
+        let (yes_votes, no_votes, abstain_votes) = count_votes(&vm, &id).await.unwrap_or((0, 0, 0));
 
         let total_votes = yes_votes + no_votes + abstain_votes;
 
@@ -342,30 +341,106 @@ async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> {
 }
 
 /// Loads a proposal from storage
-fn load_proposal_from_governance<S>(vm: &VM<S>, id: &str) -> Result<Proposal, String>
+async fn load_proposal_from_governance<S>(vm: &VM<Arc<Mutex<S>>>, id: &str) -> Result<Proposal, String>
 where
-    S: Storage + StorageExtensions + Send + Sync + Clone + Debug + 'static,
+    S: StorageBackend + StorageExtensions + AsyncStorageExtensions + JsonStorage + Send + Sync + Clone + Debug + 'static,
 {
-    let storage = vm.storage_backend.as_ref().unwrap();
+    let storage_mutex = vm.storage_backend.clone();
+    let storage = storage_mutex.lock().await;
+    
     let proposal_key = format!("proposals/{}/metadata", id);
     
-    match storage.get(None, "governance", &proposal_key) {
-        Ok(data) => {
-            match serde_json::from_slice::<ProposalLifecycle>(&data) {
-                Ok(lifecycle) => {
-                    // Convert the lifecycle to a proposal
-                    let proposal = Proposal {
-                        id: lifecycle.id.clone(),
-                        creator: lifecycle.creator.clone(),
-                        created_at: lifecycle.created_at,
-                        status: lifecycle.state.into(),
-                        execution_result: lifecycle.execution_status.map(|status| format!("{:?}", status)),
-                    };
-                    Ok(proposal)
-                },
-                Err(e) => Err(format!("Failed to deserialize proposal: {}", e)),
-            }
+    match storage.get_json::<ProposalLifecycle>(None, "governance", &proposal_key) {
+        Ok(lifecycle) => {
+            // Convert the lifecycle to a proposal
+            let proposal = Proposal {
+                id: lifecycle.id.clone(),
+                creator: lifecycle.creator.clone(),
+                created_at: lifecycle.created_at,
+                status: lifecycle.state.into(),
+                execution_result: lifecycle.execution_status.map(|status| format!("{:?}", status)),
+            };
+            Ok(proposal)
         },
-        Err(e) => Err(format!("Failed to retrieve proposal: {}", e)),
+        Err(e) => Err(format!("Failed to retrieve or deserialize proposal: {}", e)),
     }
+}
+
+/// Count votes for a proposal
+async fn count_votes<S>(
+    vm: &Arc<VM<Arc<Mutex<S>>>>,
+    proposal_id: &str,
+) -> Result<(usize, usize, usize), Box<dyn std::error::Error>>
+where
+    S: StorageBackend + StorageExtensions + AsyncStorageExtensions + JsonStorage + Send + Sync + Clone + Debug + 'static,
+{
+    let storage_mutex = vm.storage_backend.clone();
+    let storage = storage_mutex.lock().await;
+    
+    let votes_key = format!("proposals/{}/votes", proposal_id);
+    let mut yes_votes = 0;
+    let mut no_votes = 0;
+    let mut abstain_votes = 0;
+    
+    // Get votes if available
+    match storage.get_json::<HashMap<String, Vote>>(None, "governance", &votes_key) {
+        Ok(votes) => {
+            for vote in votes.values() {
+                match vote.vote {
+                    VoteType::Yes => yes_votes += 1,
+                    VoteType::No => no_votes += 1,
+                    VoteType::Abstain => abstain_votes += 1,
+                }
+            }
+            Ok((yes_votes, no_votes, abstain_votes))
+        },
+        Err(StorageError::NotFound { .. }) => {
+            // No votes yet
+            Ok((0, 0, 0))
+        },
+        Err(e) => Err(Box::new(e)),
+    }
+}
+
+/// Handler for GET /proposals
+async fn list_proposals<S>(
+    vm: Arc<VM<Arc<Mutex<S>>>>,
+    query: ProposalQuery,
+) -> Result<impl Reply, Rejection>
+where
+    S: StorageBackend + StorageExtensions + AsyncStorageExtensions + JsonStorage + Send + Sync + Clone + Debug + 'static,
+{
+    let storage_mutex = vm.storage_backend.clone();
+    let storage = storage_mutex.lock().await;
+    
+    // ... existing code ...
+}
+
+/// Handler for POST /proposals
+async fn create_proposal<S>(
+    proposal: NewProposal,
+    vm: Arc<VM<Arc<Mutex<S>>>>,
+) -> Result<impl Reply, Rejection>
+where
+    S: StorageBackend + StorageExtensions + AsyncStorageExtensions + JsonStorage + Send + Sync + Clone + Debug + 'static,
+{
+    let storage_mutex = vm.storage_backend.clone();
+    let mut storage = storage_mutex.lock().await;
+    
+    // ... existing code ...
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ProposalQuery {
+    pub status: Option<String>,
+    pub creator: Option<String>,
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct NewProposal {
+    pub title: String,
+    pub description: String,
+    pub proposed_code: Option<String>,
 }

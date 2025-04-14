@@ -1,5 +1,5 @@
 use crate::compiler::macros;
-use crate::storage::traits::{Storage, StorageExtensions, StorageBackend, AsyncStorageExtensions};
+use crate::storage::traits::{Storage, StorageExtensions, StorageBackend, AsyncStorageExtensions, JsonStorage};
 use crate::vm::VM;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

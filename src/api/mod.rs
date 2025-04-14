@@ -17,6 +17,7 @@ use warp::Filter;
 use warp::http::header::{HeaderMap, HeaderValue};
 use warp::filters::cors::CorsForbidden;
 use warp::reject::Reject;
+use warp::{Reply, Rejection};
 
 /// Initializes and runs the HTTP API server
 pub async fn start_api_server<S>(vm: VM<Arc<Mutex<S>>>, port: u16) -> Result<(), Box<dyn std::error::Error>>
@@ -44,14 +45,21 @@ where
         .allow_origins(allowed_origins.split(',').map(|s| s.trim()).collect::<Vec<_>>())
         .allow_credentials(true);
     
-    // Combine all routes with proper security headers and error handling
+    // Combine all routes
     let routes = legacy_proposal_routes
         .or(legacy_dsl_routes)
-        .or(v1_routes)
+        .or(v1_routes);
+    
+    // Apply middleware
+    let routes = routes
         .with(cors)
-        .with(security_headers())
         .with(warp::log("api"))
         .recover(handle_rejection);
+    
+    // Add security headers
+    let routes = routes.map(|reply| {
+        security_headers(reply)
+    });
     
     println!("Starting API server on port {}", port);
     warp::serve(routes).run(([0, 0, 0, 0], port)).await;
@@ -59,19 +67,34 @@ where
     Ok(())
 }
 
-/// Adds security headers to all responses
-fn security_headers() -> impl warp::Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
-    warp::any().map(|| {
-        |reply: warp::reply::Reply| {
-            warp::reply::with::headers(vec![
-                ("X-Content-Type-Options", "nosniff"),
-                ("X-Frame-Options", "DENY"),
-                ("X-XSS-Protection", "1; mode=block"),
-                ("Referrer-Policy", "strict-origin-when-cross-origin"),
-            ])
-            .wrap(reply)
-        }
-    })
+/// Adds security headers to a reply
+fn security_headers<T: Reply>(reply: T) -> impl Reply {
+    let reply = warp::reply::with_header(
+        reply,
+        "X-Content-Type-Options", 
+        "nosniff"
+    );
+    let reply = warp::reply::with_header(
+        reply,
+        "X-Frame-Options", 
+        "DENY"
+    );
+    let reply = warp::reply::with_header(
+        reply,
+        "X-XSS-Protection", 
+        "1; mode=block"
+    );
+    let reply = warp::reply::with_header(
+        reply,
+        "Referrer-Policy", 
+        "strict-origin-when-cross-origin"
+    );
+    let reply = warp::reply::with_header(
+        reply,
+        "Strict-Security-Policy", 
+        "default-src 'self'; frame-ancestors 'none'; form-action 'self';"
+    );
+    reply
 }
 
 /// Common error handler for API rejections

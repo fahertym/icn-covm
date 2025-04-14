@@ -1,6 +1,7 @@
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use std::thread::sleep;
 use std::time::Duration as StdDuration;
+use std::io::Write;
 
 /// Formats a duration into a human-readable string
 /// (e.g., "2h 3m 10s" or "10m 5s")

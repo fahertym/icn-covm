@@ -1,5 +1,5 @@
 use warp::{Filter, Rejection, Reply};
-use crate::storage::traits::{StorageBackend, StorageExtensions, AsyncStorageExtensions};
+use crate::storage::traits::{StorageBackend, StorageExtensions, AsyncStorageExtensions, JsonStorage};
 use crate::vm::VM;
 use crate::api::auth::{with_auth, AuthInfo, require_role, with_auth_and_role};
 use crate::api::error::{ApiError, not_found, bad_request, internal_error, forbidden};
@@ -21,7 +21,7 @@ pub fn get_routes<S>(
     vm: Arc<VM<Arc<Mutex<S>>>>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone 
 where
-    S: StorageBackend + StorageExtensions + AsyncStorageExtensions + Send + Sync + Clone + std::fmt::Debug + 'static
+    S: StorageBackend + StorageExtensions + AsyncStorageExtensions + JsonStorage + Send + Sync + Clone + std::fmt::Debug + 'static
 {
     let base = warp::path("dsl");
     
@@ -90,7 +90,7 @@ where
 
 fn with_vm<S>(vm: Arc<VM<S>>) -> impl Filter<Extract = (Arc<VM<S>>,), Error = std::convert::Infallible> + Clone 
 where
-    S: StorageBackend + StorageExtensions + AsyncStorageExtensions + Send + Sync + Clone + std::fmt::Debug + 'static
+    S: StorageBackend + StorageExtensions + AsyncStorageExtensions + JsonStorage + Send + Sync + Clone + std::fmt::Debug + 'static
 {
     warp::any().map(move || vm.clone())
 }
@@ -99,7 +99,7 @@ where
 async fn list_macros_handler(
     pagination: PaginationParams,
     sort: SortParams,
-    storage: Arc<Arc<Mutex<impl StorageBackend + StorageExtensions + AsyncStorageExtensions + Send + Sync + 'static>>>,
+    storage: Arc<Arc<Mutex<impl StorageBackend + StorageExtensions + AsyncStorageExtensions + JsonStorage + Send + Sync + 'static>>>,
     _auth: AuthInfo,
 ) -> Result<impl Reply, Rejection> {
     // Convert pagination parameters to Option<u32>
@@ -119,7 +119,7 @@ async fn list_macros_handler(
 
 async fn get_macro_handler(
     id: String,
-    storage: Arc<Arc<Mutex<impl StorageBackend + StorageExtensions + AsyncStorageExtensions + Send + Sync + 'static>>>,
+    storage: Arc<Arc<Mutex<impl StorageBackend + StorageExtensions + AsyncStorageExtensions + JsonStorage + Send + Sync + 'static>>>,
     _auth: AuthInfo,
 ) -> Result<impl Reply, Rejection> {
     // Use the inner Arc<Mutex<...>> with its AsyncStorageExtensions implementation
@@ -146,8 +146,8 @@ async fn get_macro_handler(
 
 async fn create_macro_handler(
     create_request: CreateMacroRequest,
-    storage: Arc<Arc<Mutex<impl StorageBackend + StorageExtensions + AsyncStorageExtensions + Send + Sync + 'static>>>,
-    vm: Arc<VM<Arc<Mutex<impl StorageBackend + StorageExtensions + AsyncStorageExtensions + Send + Sync + Clone + std::fmt::Debug + 'static>>>>,
+    storage: Arc<Arc<Mutex<impl StorageBackend + StorageExtensions + AsyncStorageExtensions + JsonStorage + Send + Sync + 'static>>>,
+    vm: Arc<VM<Arc<Mutex<impl StorageBackend + StorageExtensions + AsyncStorageExtensions + JsonStorage + Send + Sync + Clone + std::fmt::Debug + 'static>>>>,
     auth: AuthInfo,
 ) -> Result<impl Reply, Rejection> {
     // Validate the DSL code by unwrapping the VM and accessing it directly
@@ -202,8 +202,8 @@ async fn create_macro_handler(
 async fn update_macro_handler(
     id: String,
     update_request: CreateMacroRequest,
-    storage: Arc<Arc<Mutex<impl StorageBackend + StorageExtensions + AsyncStorageExtensions + Send + Sync + 'static>>>,
-    vm: Arc<VM<Arc<Mutex<impl StorageBackend + StorageExtensions + AsyncStorageExtensions + Send + Sync + Clone + std::fmt::Debug + 'static>>>>,
+    storage: Arc<Arc<Mutex<impl StorageBackend + StorageExtensions + AsyncStorageExtensions + JsonStorage + Send + Sync + 'static>>>,
+    vm: Arc<VM<Arc<Mutex<impl StorageBackend + StorageExtensions + AsyncStorageExtensions + JsonStorage + Send + Sync + Clone + std::fmt::Debug + 'static>>>>,
     auth: AuthInfo,
 ) -> Result<impl Reply, Rejection> {
     // Validate the DSL code by unwrapping the VM and accessing it directly
@@ -256,7 +256,7 @@ async fn update_macro_handler(
 
 async fn delete_macro_handler(
     id: String,
-    storage: Arc<Arc<Mutex<impl StorageBackend + StorageExtensions + AsyncStorageExtensions + Send + Sync + 'static>>>,
+    storage: Arc<Arc<Mutex<impl StorageBackend + StorageExtensions + AsyncStorageExtensions + JsonStorage + Send + Sync + 'static>>>,
     auth: AuthInfo,
 ) -> Result<impl Reply, Rejection> {
     // Use the inner Arc<Mutex<...>> with its AsyncStorageExtensions implementation
@@ -279,8 +279,8 @@ async fn delete_macro_handler(
 async fn execute_macro_handler(
     id: String,
     params: Value,
-    storage: Arc<Arc<Mutex<impl StorageBackend + StorageExtensions + AsyncStorageExtensions + Send + Sync + 'static>>>,
-    vm: Arc<VM<Arc<Mutex<impl StorageBackend + StorageExtensions + AsyncStorageExtensions + Send + Sync + Clone + std::fmt::Debug + 'static>>>>,
+    storage: Arc<Arc<Mutex<impl StorageBackend + StorageExtensions + AsyncStorageExtensions + JsonStorage + Send + Sync + 'static>>>,
+    vm: Arc<VM<Arc<Mutex<impl StorageBackend + StorageExtensions + AsyncStorageExtensions + JsonStorage + Send + Sync + Clone + std::fmt::Debug + 'static>>>>,
     auth: AuthInfo,
 ) -> Result<impl Reply, Rejection> {
     // Use the inner Arc<Mutex<...>> with its AsyncStorageExtensions implementation

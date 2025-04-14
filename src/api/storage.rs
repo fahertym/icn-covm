@@ -5,6 +5,7 @@ use crate::storage::{
 use crate::api::v1::models;
 use std::sync::Arc;
 use log::warn;
+use crate::storage::traits::JsonStorage;
 
 /// Extension trait to add async proposal methods for use with Warp
 pub trait AsyncStorage {
@@ -27,13 +28,13 @@ pub trait AsyncStorage {
     async fn get_macro(&self, id: &str) -> StorageResult<crate::storage::MacroDefinition>;
     async fn save_macro(&self, macro_def: &crate::storage::MacroDefinition) -> StorageResult<()>;
     async fn delete_macro(&self, id: &str) -> StorageResult<()>;
-    async fn list_macros(&self, page: usize, page_size: usize, sort_by: Option<&str>, category: Option<&str>) 
+    async fn list_macros(&self, page: Option<u32>, page_size: Option<u32>, sort_by: Option<String>, category: Option<String>) 
         -> StorageResult<crate::api::v1::models::MacroListResponse>;
 }
 
 // Implement the async trait for Arc<T> where T implements Storage
 impl<T> AsyncStorage for Arc<tokio::sync::Mutex<T>> 
-where T: StorageBackend + StorageExtensions + AsyncStorageExtensions + Send + Sync + 'static {
+where T: StorageBackend + StorageExtensions + AsyncStorageExtensions + JsonStorage + Send + Sync + 'static {
     async fn get_proposal(&self, id: &str) -> StorageResult<Proposal> {
         let namespace = "governance";
         let key = format!("proposals/{}", id);
@@ -196,9 +197,15 @@ where T: StorageBackend + StorageExtensions + AsyncStorageExtensions + Send + Sy
         AsyncStorageExtensions::delete_macro(&mut *guard, id).await
     }
     
-    async fn list_macros(&self, page: usize, page_size: usize, sort_by: Option<&str>, category: Option<&str>) 
+    async fn list_macros(&self, page: Option<u32>, page_size: Option<u32>, sort_by: Option<String>, category: Option<String>) 
         -> StorageResult<crate::api::v1::models::MacroListResponse> {
         let guard = self.lock().await;
-        AsyncStorageExtensions::list_macros(&*guard, page, page_size, sort_by, category).await
+        AsyncStorageExtensions::list_macros(
+            &*guard, 
+            page, 
+            page_size, 
+            sort_by.as_deref(), 
+            category.as_deref()
+        ).await
     }
 } 

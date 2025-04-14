@@ -24,7 +24,7 @@ use crate::storage::errors::{StorageError, StorageResult};
 use crate::storage::events::StorageEvent;
 use crate::storage::namespaces::NamespaceMetadata;
 use crate::storage::resource::ResourceAccount;
-use crate::storage::traits::StorageBackend;
+use crate::storage::traits::{StorageBackend, StorageExtensions, JsonStorage};
 use crate::storage::utils::now;
 use crate::storage::versioning::{VersionDiff, VersionInfo};
 
@@ -837,13 +837,290 @@ impl StorageBackend for InMemoryStorage {
 }
 
 // Add extension methods for proposal operations
-impl InMemoryStorage {
-    // Remove duplicate methods and keep only methods that don't have duplicates elsewhere
+impl StorageExtensions for InMemoryStorage {
+    fn get_identity(&self, identity_id: &str) -> StorageResult<crate::identity::Identity> {
+        let key = format!("identities/{}", identity_id);
+        self.get_json(None, "identity", &key)
+    }
+    
+    fn get_proposal_logic_path(&self, proposal_id: &str) -> StorageResult<String> {
+        let key = format!("proposals/{}/logic_path", proposal_id);
+        self.get_json(None, "governance", &key)
+    }
+    
+    fn get_proposal_logic(&self, logic_path: &str) -> StorageResult<String> {
+        // Logic path is the direct path to the DSL code
+        self.get_json(None, "dsl", logic_path)
+    }
+    
+    fn save_proposal_execution_result(&mut self, proposal_id: &str, result: &str) -> StorageResult<()> {
+        let key = format!("proposals/{}/execution_result", proposal_id);
+        self.set_json(None, "governance", &key, &result)
+    }
+    
+    fn get_proposal_execution_result(&self, proposal_id: &str) -> StorageResult<String> {
+        let key = format!("proposals/{}/execution_result", proposal_id);
+        self.get_json(None, "governance", &key)
+    }
+    
+    fn get_proposal_execution_logs(&self, proposal_id: &str) -> StorageResult<String> {
+        let key = format!("proposals/{}/execution_logs", proposal_id);
+        match self.get_json::<String>(None, "governance", &key) {
+            Ok(logs) => Ok(logs),
+            Err(StorageError::NotFound { .. }) => Ok("".to_string()),
+            Err(e) => Err(e),
+        }
+    }
+    
+    fn append_proposal_execution_log(&mut self, proposal_id: &str, log_entry: &str) -> StorageResult<()> {
+        let key = format!("proposals/{}/execution_logs", proposal_id);
+        let current = match self.get_json::<String>(None, "governance", &key) {
+            Ok(logs) => logs,
+            Err(StorageError::NotFound { .. }) => "".to_string(),
+            Err(e) => return Err(e),
+        };
+        
+        let new_logs = if current.is_empty() {
+            log_entry.to_string()
+        } else {
+            format!("{}\n{}", current, log_entry)
+        };
+        
+        self.set_json(None, "governance", &key, &new_logs)
+    }
+    
+    fn save_proposal_execution_result_versioned(&mut self, proposal_id: &str, result: &str, success: bool, summary: &str) -> StorageResult<u64> {
+        // First save the execution result itself
+        self.save_proposal_execution_result(proposal_id, result)?;
+        
+        // Now handle versioning
+        let version_key = format!("proposals/{}/execution_versions", proposal_id);
+        let latest_version: u64 = match self.get_json(None, "governance", &version_key) {
+            Ok(v) => v,
+            Err(StorageError::NotFound { .. }) => 0,
+            Err(e) => return Err(e),
+        };
+        
+        let new_version = latest_version + 1;
+        
+        // Save the new version number
+        self.set_json(None, "governance", &version_key, &new_version)?;
+        
+        // Save the version metadata
+        let version_meta = crate::storage::traits::ExecutionVersionMeta {
+            version: new_version,
+            executed_at: chrono::Utc::now().to_rfc3339(),
+            success,
+            summary: summary.to_string(),
+        };
+        
+        let version_meta_key = format!("proposals/{}/execution_version_{}", proposal_id, new_version);
+        self.set_json(None, "governance", &version_meta_key, &version_meta)?;
+        
+        // Save in the list of versions
+        let versions_list_key = format!("proposals/{}/execution_versions_list", proposal_id);
+        let mut versions: Vec<crate::storage::traits::ExecutionVersionMeta> = 
+            match self.get_json(None, "governance", &versions_list_key) {
+                Ok(v) => v,
+                Err(StorageError::NotFound { .. }) => Vec::new(),
+                Err(e) => return Err(e),
+            };
+        
+        versions.push(version_meta);
+        self.set_json(None, "governance", &versions_list_key, &versions)?;
+        
+        Ok(new_version)
+    }
+    
+    fn get_proposal_execution_result_versioned(&self, proposal_id: &str, version: u64) -> StorageResult<String> {
+        // Validate the version exists
+        let version_meta_key = format!("proposals/{}/execution_version_{}", proposal_id, version);
+        
+        // Check if this version exists
+        if !self.contains(None, "governance", &version_meta_key)? {
+            return Err(StorageError::NotFound { 
+                key: format!("Version {} not found for proposal {}", version, proposal_id) 
+            });
+        }
+        
+        // For this implementation, we only store the most recent execution result
+        // A more complete implementation would store each version separately
+        self.get_proposal_execution_result(proposal_id)
+    }
+    
+    fn get_latest_execution_result_version(&self, proposal_id: &str) -> StorageResult<u64> {
+        let version_key = format!("proposals/{}/execution_versions", proposal_id);
+        match self.get_json(None, "governance", &version_key) {
+            Ok(v) => Ok(v),
+            Err(StorageError::NotFound { .. }) => Ok(0),
+            Err(e) => Err(e),
+        }
+    }
+    
+    fn get_latest_execution_result(&self, proposal_id: &str) -> StorageResult<String> {
+        self.get_proposal_execution_result(proposal_id)
+    }
+    
+    fn list_execution_versions(&self, proposal_id: &str) -> StorageResult<Vec<crate::storage::traits::ExecutionVersionMeta>> {
+        let versions_list_key = format!("proposals/{}/execution_versions_list", proposal_id);
+        match self.get_json(None, "governance", &versions_list_key) {
+            Ok(v) => Ok(v),
+            Err(StorageError::NotFound { .. }) => Ok(Vec::new()),
+            Err(e) => Err(e),
+        }
+    }
+    
+    fn get_proposal_retry_history(&self, proposal_id: &str) -> StorageResult<Vec<crate::storage::traits::RetryHistoryRecord>> {
+        let history_key = format!("proposals/{}/retry_history", proposal_id);
+        match self.get_json(None, "governance", &history_key) {
+            Ok(v) => Ok(v),
+            Err(StorageError::NotFound { .. }) => Ok(Vec::new()),
+            Err(e) => Err(e),
+        }
+    }
 }
 
-// Extension methods for macros
-impl InMemoryStorage {
-    // remove the existing macro methods
+// Implement JsonStorage for InMemoryStorage
+impl JsonStorage for InMemoryStorage {
+    fn get_json<T: DeserializeOwned>(
+        &self,
+        auth: Option<&AuthContext>,
+        namespace: &str,
+        key: &str,
+    ) -> StorageResult<T> {
+        let data = self.get(auth, namespace, key)?;
+        serde_json::from_slice(&data).map_err(|e| StorageError::SerializationError {
+            details: format!("Failed to deserialize JSON: {}", e),
+        })
+    }
+
+    fn set_json<T: Serialize>(
+        &mut self,
+        auth: Option<&AuthContext>,
+        namespace: &str,
+        key: &str,
+        value: &T,
+    ) -> StorageResult<()> {
+        let serialized =
+            serde_json::to_vec(value).map_err(|e| StorageError::SerializationError {
+                details: e.to_string(),
+            })?;
+        self.set(auth, namespace, key, serialized)
+    }
+
+    fn get_version_json<T: DeserializeOwned>(
+        &self,
+        auth: Option<&AuthContext>,
+        namespace: &str,
+        key: &str,
+        version: u64,
+    ) -> StorageResult<Option<T>> {
+        if let Some(data) = self.get_version(auth, namespace, key, version)? {
+            let deserialized = serde_json::from_slice(&data).map_err(|e| StorageError::SerializationError {
+                details: format!("Failed to deserialize JSON version {}: {}", version, e),
+            })?;
+            Ok(Some(deserialized))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+impl crate::storage::traits::AsyncStorageExtensions for InMemoryStorage {
+    async fn get_macro(&self, id: &str) -> StorageResult<crate::storage::MacroDefinition> {
+        let key = format!("macros/{}", id);
+        self.get_json(None, "dsl", &key)
+    }
+    
+    async fn save_macro(&self, macro_def: &crate::storage::MacroDefinition) -> StorageResult<()> {
+        let key = format!("macros/{}", macro_def.id);
+        // We need to clone and unlock the mutex to modify self
+        // This is a workaround since we can't use &mut self in the trait
+        // In a real implementation, we would use interior mutability pattern
+        let mut this = self.clone();
+        this.set_json(None, "dsl", &key, macro_def)
+    }
+    
+    async fn delete_macro(&self, id: &str) -> StorageResult<()> {
+        let key = format!("macros/{}", id);
+        // Same workaround as above
+        let mut this = self.clone();
+        this.delete(None, "dsl", &key)
+    }
+    
+    async fn list_macros(
+        &self,
+        page: Option<u32>,
+        page_size: Option<u32>,
+        sort_by: Option<String>,
+        category: Option<String>,
+    ) -> StorageResult<crate::api::v1::models::MacroListResponse> {
+        let page = page.unwrap_or(1) as usize;
+        let page_size = page_size.unwrap_or(20) as usize;
+        let start_idx = (page - 1) * page_size;
+        
+        // Get all macro keys
+        let macro_keys = self.list_keys(None, "dsl", Some("macros/"))?;
+        let mut all_macros = Vec::new();
+        
+        // Load each macro
+        for key in macro_keys.iter() {
+            let id = key.strip_prefix("macros/").unwrap();
+            match self.get_json::<crate::storage::MacroDefinition>(None, "dsl", key) {
+                Ok(macro_def) => {
+                    // Filter by category if provided
+                    if let Some(cat) = &category {
+                        if macro_def.category.as_deref() != Some(cat) {
+                            continue;
+                        }
+                    }
+                    all_macros.push(macro_def);
+                }
+                Err(_) => continue,
+            }
+        }
+        
+        // Sort the macros if requested
+        if let Some(sort_field) = &sort_by {
+            all_macros.sort_by(|a, b| {
+                match sort_field.as_str() {
+                    "name" => a.name.cmp(&b.name),
+                    "created_at" => a.created_at.cmp(&b.created_at),
+                    "updated_at" => a.updated_at.cmp(&b.updated_at),
+                    _ => a.id.cmp(&b.id), // Default to id
+                }
+            });
+        } else {
+            // Default sort by id
+            all_macros.sort_by(|a, b| a.id.cmp(&b.id));
+        }
+        
+        // Count total before pagination
+        let total = all_macros.len();
+        
+        // Apply pagination
+        let macros = all_macros
+            .into_iter()
+            .skip(start_idx)
+            .take(page_size)
+            .map(|m| crate::api::v1::models::MacroSummary {
+                id: m.id,
+                name: m.name,
+                description: m.description,
+                category: m.category,
+                created_at: m.created_at,
+                updated_at: m.updated_at,
+                // Note: MacroSummary doesn't have a has_visual_representation field according to the definition
+            })
+            .collect::<Vec<_>>();
+        
+        Ok(crate::api::v1::models::MacroListResponse {
+            macros,
+            total,
+            page,
+            page_size,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -1085,104 +1362,5 @@ mod tests {
             .unwrap();
         // We didn't perform any read operations on this namespace yet
         assert!(log_filtered.is_empty());
-    }
-}
-
-// Add after the tests module
-#[async_trait::async_trait]
-impl crate::storage::traits::AsyncStorageExtensions for InMemoryStorage {
-    async fn get_macro(&self, id: &str) -> StorageResult<crate::storage::MacroDefinition> {
-        let key = format!("macros/{}", id);
-        self.get_json(None, "dsl", &key)
-    }
-    
-    async fn save_macro(&self, macro_def: &crate::storage::MacroDefinition) -> StorageResult<()> {
-        let key = format!("macros/{}", macro_def.id);
-        // We need to clone and unlock the mutex to modify self
-        // This is a workaround since we can't use &mut self in the trait
-        // In a real implementation, we would use interior mutability pattern
-        let mut this = self.clone();
-        this.set_json(None, "dsl", &key, macro_def)
-    }
-    
-    async fn delete_macro(&self, id: &str) -> StorageResult<()> {
-        let key = format!("macros/{}", id);
-        // Same workaround as above
-        let mut this = self.clone();
-        this.delete(None, "dsl", &key)
-    }
-    
-    async fn list_macros(
-        &self,
-        page: Option<u32>,
-        page_size: Option<u32>,
-        sort_by: Option<String>,
-        category: Option<String>,
-    ) -> StorageResult<crate::api::v1::models::MacroListResponse> {
-        let page = page.unwrap_or(1) as usize;
-        let page_size = page_size.unwrap_or(20) as usize;
-        let start_idx = (page - 1) * page_size;
-        
-        // Get all macro keys
-        let macro_keys = self.list_keys(None, "dsl", Some("macros/"))?;
-        let mut all_macros = Vec::new();
-        
-        // Load each macro
-        for key in macro_keys.iter() {
-            let id = key.strip_prefix("macros/").unwrap();
-            match self.get_json::<crate::storage::MacroDefinition>(None, "dsl", key) {
-                Ok(macro_def) => {
-                    // Filter by category if provided
-                    if let Some(cat) = &category {
-                        if macro_def.category.as_deref() != Some(cat) {
-                            continue;
-                        }
-                    }
-                    all_macros.push(macro_def);
-                }
-                Err(_) => continue,
-            }
-        }
-        
-        // Sort the macros if requested
-        if let Some(sort_field) = &sort_by {
-            all_macros.sort_by(|a, b| {
-                match sort_field.as_str() {
-                    "name" => a.name.cmp(&b.name),
-                    "created_at" => a.created_at.cmp(&b.created_at),
-                    "updated_at" => a.updated_at.cmp(&b.updated_at),
-                    _ => a.id.cmp(&b.id), // Default to id
-                }
-            });
-        } else {
-            // Default sort by id
-            all_macros.sort_by(|a, b| a.id.cmp(&b.id));
-        }
-        
-        // Count total before pagination
-        let total = all_macros.len();
-        
-        // Apply pagination
-        let macros = all_macros
-            .into_iter()
-            .skip(start_idx)
-            .take(page_size)
-            .map(|m| crate::api::v1::models::MacroSummary {
-                id: m.id,
-                name: m.name,
-                description: m.description,
-                category: m.category,
-                created_at: m.created_at,
-                updated_at: m.updated_at,
-                // Note: MacroSummary doesn't have a has_visual_representation field according to the definition
-            })
-            .collect::<Vec<_>>();
-        
-        Ok(crate::api::v1::models::MacroListResponse {
-            macros,
-            total,
-            page,
-            page_size,
-        })
     }
 }
