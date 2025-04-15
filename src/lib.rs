@@ -1,3 +1,7 @@
+//! Cooperative Value Network Modules
+//!
+//! This library provides the core functionality for Cooperative Value Networks.
+
 pub mod api;
 pub mod bytecode;
 pub mod cli;
