@@ -94,6 +94,8 @@ pub struct ProposalComment {
 /// - simulate: Simulate the execution of a proposal without making persistent changes
 /// - summary: Get high-level summary of a proposal's activity and state
 /// - execute: Execute the logic of a passed proposal
+/// - view-comments: View all comments for a proposal
+/// - export: Export a complete proposal and its lifecycle data to a JSON file
 ///
 /// # Returns
 /// A configured `Command` object ready to be used in a CLI application
@@ -239,19 +241,17 @@ pub fn proposal_command() -> Command {
                         .required(true)
                 )
                 .arg(
-                    Arg::new("text")
-                        .long("text")
+                    Arg::new("content")
+                        .long("content")
                         .value_name("TEXT")
                         .help("Text content of the comment")
                         .required(true)
                 )
                 .arg(
-                    Arg::new("reply-to")
-                        .long("reply-to")
+                    Arg::new("parent")
+                        .long("parent")
                         .value_name("COMMENT_ID")
-                        .help("ID of the comment to reply to")
-                        // Not required, optional for replies
-                        // No value_parser needed for String
+                        .help("ID of the parent comment (for threading)")
                 )
                 .arg(
                     Arg::new("tag")
@@ -564,6 +564,40 @@ pub fn proposal_command() -> Command {
                         .value_name("PROPOSAL_ID")
                         .help("ID of the proposal to execute")
                         .required(true)
+                )
+        )
+        .subcommand(
+            Command::new("view-comments")
+                .about("View all comments for a proposal")
+                .arg(
+                    Arg::new("id")
+                        .long("id")
+                        .value_name("PROPOSAL_ID")
+                        .help("ID of the proposal to view comments for")
+                        .required(true)
+                )
+                .arg(
+                    Arg::new("threaded")
+                        .long("threaded")
+                        .action(ArgAction::SetTrue)
+                        .help("Show comments in a threaded view with replies indented")
+                )
+        )
+        .subcommand(
+            Command::new("export")
+                .about("Export a complete proposal and its lifecycle data to a JSON file")
+                .arg(
+                    Arg::new("id")
+                        .long("id")
+                        .value_name("PROPOSAL_ID")
+                        .help("ID of the proposal to export")
+                        .required(true)
+                )
+                .arg(
+                    Arg::new("output")
+                        .long("output")
+                        .value_name("FILE_PATH")
+                        .help("File path for the exported JSON (default: proposal_<id>.json)")
                 )
         )
 }
@@ -885,60 +919,11 @@ where
             vm.execute(&ops)?;
         }
         Some(("comment", comment_matches)) => {
-            println!("Adding comment to proposal...");
             let proposal_id = comment_matches.get_one::<String>("id").unwrap().clone();
-            let comment_text = comment_matches.get_one::<String>("text").unwrap().clone();
-            let reply_to = comment_matches.get_one::<String>("reply-to").cloned();
-
-            // Get tags if provided
-            let tags = if let Some(tag_values) = comment_matches.get_many::<String>("tag") {
-                tag_values.cloned().collect()
-            } else {
-                Vec::new()
-            };
-
-            // Create a new comment with tags
-            let comment_id = uuid::Uuid::new_v4().to_string();
-            let comment = ProposalComment {
-                id: comment_id.clone(),
-                author: user_did.to_string(),
-                timestamp: Utc::now(),
-                content: comment_text.clone(),
-                reply_to: reply_to.clone(),
-                tags,
-                reactions: HashMap::new(),
-            };
-
-            // Get storage backend
-            let storage = vm
-                .storage_backend
-                .as_mut()
-                .ok_or_else(|| "Storage backend not configured for adding comment")?;
-
-            // First, verify the proposal exists
-            let namespace = "governance";
-            let proposal_key = format!("governance/proposals/{}", proposal_id);
-
-            let proposal: Proposal = storage
-                .get_json(Some(auth_context), namespace, &proposal_key)
-                .map_err(|_| format!("Proposal with ID {} not found", proposal_id))?;
-
-            // Store the comment
-            let comment_key = format!(
-                "governance/proposals/{}/comments/{}",
-                proposal_id, comment_id
-            );
-            storage.set_json(Some(auth_context), namespace, &comment_key, &comment)?;
-
-            println!("Added comment {} to proposal {}", comment_id, proposal_id);
-
-            // Award reputation for contribution
-            let rep_dsl = format!(
-                "increment_reputation \"{}\" reason=\"Commented on proposal {}\"",
-                user_did, proposal_id
-            );
-            let ops = parse_dsl(&rep_dsl)?;
-            vm.execute(&ops)?;
+            let content = comment_matches.get_one::<String>("content").unwrap().clone();
+            let parent_id = comment_matches.get_one::<String>("parent").map(|s| s.as_str());
+            
+            return handle_comment_command(vm, &proposal_id, &content, parent_id, auth_context);
         }
         Some(("view", view_matches)) => {
             let proposal_id = view_matches.get_one::<String>("id").unwrap();
@@ -1488,6 +1473,19 @@ where
             println!("Executing proposal logic...");
             let proposal_id = execute_matches.get_one::<String>("id").unwrap().clone();
             return handle_execute_command(vm, &proposal_id, auth_context);
+        }
+        Some(("view-comments", view_comments_matches)) => {
+            let proposal_id = view_comments_matches.get_one::<String>("id").unwrap().clone();
+            let threaded = view_comments_matches.get_flag("threaded");
+            
+            return handle_view_comments_command(vm, &proposal_id, threaded, auth_context);
+        }
+        Some(("export", export_matches)) => {
+            println!("Handling proposal export...");
+            let proposal_id = export_matches.get_one::<String>("id").unwrap().clone();
+            let output_path = export_matches.get_one::<String>("output").cloned();
+            
+            return handle_export_command(vm, &proposal_id, output_path, auth_context);
         }
         _ => unreachable!("Subcommand should be required"),
     }
@@ -2223,7 +2221,7 @@ where
         voter_id.clone()
     };
     
-    // Validate that the proposal exists and is active
+    // Get storage backend
     let storage = vm
         .storage_backend
         .as_ref()
@@ -2233,6 +2231,30 @@ where
     let proposal_key = format!("governance_proposals/{}", proposal_id);
     if !storage.contains(Some(auth_context), "default", &proposal_key)? {
         return Err(format!("Proposal with ID '{}' not found", proposal_id).into());
+    }
+    
+    // Load the proposal lifecycle to check deliberation period
+    let lifecycle_key = format!("governance_proposals/{}/lifecycle", proposal_id);
+    let proposal_lifecycle: ProposalLifecycle = match storage.get_json(Some(auth_context), "default", &lifecycle_key) {
+        Ok(lifecycle) => lifecycle,
+        Err(e) => return Err(format!("Failed to load proposal lifecycle: {}", e).into()),
+    };
+    
+    // Check if the minimum deliberation period has passed
+    if let Some(min_deliberation) = proposal_lifecycle.discussion_duration {
+        let now = Utc::now();
+        let elapsed = now.signed_duration_since(proposal_lifecycle.created_at);
+        
+        if elapsed < min_deliberation {
+            // Calculate hours for both required and elapsed time
+            let required_hours = min_deliberation.num_hours();
+            let elapsed_hours = elapsed.num_hours();
+            
+            return Err(format!(
+                "⏳ Proposal '{}' is still in deliberation.\n   Required: {} hours\n   Elapsed: {} hours",
+                proposal_id, required_hours, elapsed_hours
+            ).into());
+        }
     }
     
     // Validate vote choice
@@ -2536,6 +2558,378 @@ where
 {
     let metadata_key = format!("governance_proposals/{}/lifecycle", proposal_id);
     storage.get_json(Some(auth_context), namespace, &metadata_key)
+}
+
+/// Handle the comment command to add a comment to a proposal
+pub fn handle_comment_command<S>(
+    vm: &mut VM<S>,
+    proposal_id: &str,
+    content: &str,
+    parent_id: Option<&str>,
+    auth_context: &AuthContext,
+) -> Result<(), Box<dyn Error>>
+where
+    S: Storage + StorageExtensions + Send + Sync + Clone + Debug + 'static,
+{
+    // Get the author ID from auth context
+    let author_id = auth_context.identity_did().to_string();
+    
+    // Get reference to storage
+    let storage = vm
+        .storage_backend
+        .as_ref()
+        .ok_or_else(|| "Storage backend not configured for adding proposal comment")?;
+    
+    // Use default namespace as in the proposal creation
+    let namespace = "default";
+    
+    // Load the proposal to verify it exists
+    let base_key = format!("governance_proposals/{}", proposal_id);
+    
+    // First check if proposal exists
+    if !storage.contains(Some(auth_context), namespace, &base_key)? {
+        return Err(format!("Proposal with ID '{}' not found", proposal_id).into());
+    }
+    
+    // Generate timestamp for the comment ID and the comment itself
+    let timestamp = chrono::Utc::now();
+    let timestamp_str = timestamp.to_rfc3339();
+    
+    // Create the comment data structure
+    let comment = serde_json::json!({
+        "author": author_id,
+        "timestamp": timestamp_str,
+        "content": content,
+        "parent": parent_id
+    });
+    
+    // Generate a unique key for the comment using timestamp and author
+    let comment_key = format!("{}/comments/{}_{}", 
+                             base_key, 
+                             timestamp.timestamp(), 
+                             author_id);
+    
+    // Store the comment
+    let storage = vm
+        .storage_backend
+        .as_mut()
+        .ok_or_else(|| "Storage backend not configured for adding proposal comment")?;
+    
+    storage.set_json(Some(auth_context), namespace, &comment_key, &comment)?;
+    
+    println!("✅ Comment added to proposal '{}' by '{}'", proposal_id, author_id);
+    
+    Ok(())
+}
+
+/// Comment structure for parsing stored comments
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StoredComment {
+    author: String,
+    timestamp: String,
+    content: String,
+    parent: Option<String>,
+}
+
+/// Handle the view-comments command to display all comments for a proposal
+pub fn handle_view_comments_command<S>(
+    vm: &mut VM<S>,
+    proposal_id: &str,
+    threaded: bool,
+    auth_context: &AuthContext,
+) -> Result<(), Box<dyn Error>>
+where
+    S: Storage + StorageExtensions + Send + Sync + Clone + Debug + 'static,
+{
+    // Get reference to storage
+    let storage = vm
+        .storage_backend
+        .as_ref()
+        .ok_or_else(|| "Storage backend not configured for viewing comments")?;
+    
+    // Use default namespace as in the proposal creation
+    let namespace = "default";
+    
+    // Load the proposal to verify it exists
+    let base_key = format!("governance_proposals/{}", proposal_id);
+    
+    // First check if proposal exists
+    if !storage.contains(Some(auth_context), namespace, &base_key)? {
+        return Err(format!("Proposal with ID '{}' not found", proposal_id).into());
+    }
+    
+    // List all comment keys for this proposal
+    let comments_prefix = format!("{}/comments/", base_key);
+    let comment_keys = storage.list_keys(Some(auth_context), namespace, Some(&comments_prefix))?;
+    
+    if comment_keys.is_empty() {
+        println!("No comments found for proposal '{}'", proposal_id);
+        return Ok(());
+    }
+    
+    // Load all comments
+    let mut comments = Vec::new();
+    for key in comment_keys {
+        match storage.get_json::<StoredComment>(Some(auth_context), namespace, &key) {
+            Ok(comment) => {
+                comments.push(comment);
+            },
+            Err(e) => {
+                eprintln!("Warning: Failed to parse comment at {}: {}", key, e);
+                // Continue with other comments
+            }
+        }
+    }
+    
+    // Sort comments by timestamp
+    comments.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+    
+    println!("Comments for proposal '{}':", proposal_id);
+    println!();
+    
+    if threaded {
+        // Display threaded comments
+        display_threaded_comments(&comments);
+    } else {
+        // Display flat comments
+        for comment in &comments {
+            let author_short = shorten_did(&comment.author);
+            println!("🗣️  {} at {}", author_short, comment.timestamp);
+            println!("    {}", comment.content);
+            println!();
+        }
+    }
+    
+    Ok(())
+}
+
+/// Helper function to display comments in a threaded view
+fn display_threaded_comments(comments: &[StoredComment]) {
+    // First, create a map of parent -> children
+    let mut children_map: HashMap<Option<String>, Vec<usize>> = HashMap::new();
+    
+    // Initialize with an empty vec for root comments (no parent)
+    children_map.insert(None, Vec::new());
+    
+    // Fill the map
+    for (i, comment) in comments.iter().enumerate() {
+        children_map
+            .entry(comment.parent.clone())
+            .or_insert_with(Vec::new)
+            .push(i);
+    }
+    
+    // Now recursively display comments, starting with the root comments
+    if let Some(root_indices) = children_map.get(&None) {
+        for &idx in root_indices {
+            display_comment(comments, idx, &children_map, 0);
+        }
+    }
+}
+
+/// Helper function to display a single comment with its replies
+fn display_comment(
+    comments: &[StoredComment],
+    index: usize,
+    children_map: &HashMap<Option<String>, Vec<usize>>,
+    depth: usize
+) {
+    let comment = &comments[index];
+    let indent = "    ".repeat(depth);
+    let author_short = shorten_did(&comment.author);
+    
+    // Print the current comment
+    if depth == 0 {
+        println!("{}🗣️  {} at {}", indent, author_short, comment.timestamp);
+    } else {
+        println!("{}↳   {} replied:", indent, author_short);
+    }
+    println!("{}    {}", indent, comment.content);
+    println!();
+    
+    // Print replies if any
+    let comment_id = format!("{}_{}", 
+        match DateTime::parse_from_rfc3339(&comment.timestamp) {
+            Ok(dt) => dt.timestamp(),
+            Err(_) => Utc::now().timestamp(),
+        },
+        comment.author);
+    
+    if let Some(reply_indices) = children_map.get(&Some(comment_id)) {
+        for &reply_idx in reply_indices {
+            display_comment(comments, reply_idx, children_map, depth + 1);
+        }
+    }
+}
+
+/// Helper function to shorten DIDs for display
+fn shorten_did(did: &str) -> String {
+    if did.starts_with("did:") {
+        // For DIDs like did:coop:user123, extract just the user123 part
+        if let Some(last_part) = did.split(':').last() {
+            return last_part.to_string();
+        }
+    }
+    // If not a DID or couldn't extract, just return as is
+    did.to_string()
+}
+
+/// A struct to represent the complete proposal export data
+#[derive(Debug, Serialize, Deserialize)]
+struct ProposalExport {
+    id: String,
+    title: String,
+    creator: String,
+    state: String,
+    created_at: String,
+    expires_at: Option<String>,
+    quorum: f64,
+    threshold: f64,
+    description: Option<String>,
+    logic: Option<String>,
+    execution_status: Option<String>,
+    votes: Vec<VoteExport>,
+    comments: Vec<CommentExport>,
+}
+
+/// A struct to represent a vote in the export
+#[derive(Debug, Serialize, Deserialize)]
+struct VoteExport {
+    voter: String,
+    vote: String,
+    timestamp: String,
+    delegated_by: Option<String>,
+}
+
+/// A struct to represent a comment in the export
+#[derive(Debug, Serialize, Deserialize)]
+struct CommentExport {
+    author: String,
+    timestamp: String,
+    content: String,
+    parent: Option<String>,
+}
+
+/// Handle the export command to export proposal data to a JSON file
+pub fn handle_export_command<S>(
+    vm: &mut VM<S>,
+    proposal_id: &str,
+    output_path: Option<String>,
+    auth_context: &AuthContext,
+) -> Result<(), Box<dyn Error>>
+where
+    S: Storage + StorageExtensions + Send + Sync + Clone + Debug + 'static,
+{
+    // Get storage backend
+    let storage = vm
+        .storage_backend
+        .as_ref()
+        .ok_or_else(|| "Storage backend not configured for proposal export")?;
+    
+    // Use default namespace as in the proposal creation
+    let namespace = "default";
+    
+    // First load the proposal lifecycle
+    let lifecycle_key = format!("governance_proposals/{}/lifecycle", proposal_id);
+    let proposal_lifecycle: ProposalLifecycle = match storage.get_json(Some(auth_context), namespace, &lifecycle_key) {
+        Ok(lifecycle) => lifecycle,
+        Err(e) => return Err(format!("Failed to load proposal lifecycle: {}", e).into()),
+    };
+    
+    // Load proposal description if available
+    let description_key = format!("governance_proposals/{}/description", proposal_id);
+    let description = match storage.get(Some(auth_context), namespace, &description_key) {
+        Ok(bytes) => Some(String::from_utf8(bytes)?),
+        Err(_) => None,
+    };
+    
+    // Load proposal logic if available
+    let logic_key = format!("governance_proposals/{}/logic", proposal_id);
+    let logic = match storage.get(Some(auth_context), namespace, &logic_key) {
+        Ok(bytes) => Some(String::from_utf8(bytes)?),
+        Err(_) => None,
+    };
+    
+    // Load votes
+    let votes_prefix = format!("governance_proposals/{}/votes/", proposal_id);
+    let vote_keys = storage.list_keys(Some(auth_context), namespace, Some(&votes_prefix))?;
+    
+    let mut votes = Vec::new();
+    for key in vote_keys {
+        match storage.get_json::<serde_json::Value>(Some(auth_context), namespace, &key) {
+            Ok(vote_data) => {
+                // Extract relevant fields from the vote data
+                let voter = vote_data["voter"].as_str().unwrap_or("unknown").to_string();
+                let vote = vote_data["vote"].as_str().unwrap_or("unknown").to_string();
+                let timestamp = vote_data["timestamp"].as_str().unwrap_or("unknown").to_string();
+                let delegated_by = vote_data["delegated_by"].as_str().map(|s| s.to_string());
+                
+                votes.push(VoteExport {
+                    voter,
+                    vote,
+                    timestamp,
+                    delegated_by,
+                });
+            },
+            Err(e) => {
+                eprintln!("Warning: Failed to parse vote at {}: {}", key, e);
+                // Continue with other votes
+            }
+        }
+    }
+    
+    // Load comments
+    let comments_prefix = format!("governance_proposals/{}/comments/", proposal_id);
+    let comment_keys = storage.list_keys(Some(auth_context), namespace, Some(&comments_prefix))?;
+    
+    let mut comments = Vec::new();
+    for key in comment_keys {
+        match storage.get_json::<StoredComment>(Some(auth_context), namespace, &key) {
+            Ok(comment) => {
+                comments.push(CommentExport {
+                    author: comment.author,
+                    timestamp: comment.timestamp,
+                    content: comment.content,
+                    parent: comment.parent,
+                });
+            },
+            Err(e) => {
+                eprintln!("Warning: Failed to parse comment at {}: {}", key, e);
+                // Continue with other comments
+            }
+        }
+    }
+    
+    // Build the export structure
+    let export = ProposalExport {
+        id: proposal_lifecycle.id.clone(),
+        title: proposal_lifecycle.title.clone(),
+        creator: proposal_lifecycle.creator.did().to_string(),
+        state: format!("{:?}", proposal_lifecycle.state),
+        created_at: proposal_lifecycle.created_at.to_rfc3339(),
+        expires_at: proposal_lifecycle.expires_at.map(|dt| dt.to_rfc3339()),
+        quorum: proposal_lifecycle.quorum as f64 / 100.0, // Convert from percentage to decimal
+        threshold: proposal_lifecycle.threshold as f64 / 100.0, // Convert from percentage to decimal
+        description,
+        logic,
+        execution_status: proposal_lifecycle.execution_status.map(|status| format!("{:?}", status)),
+        votes,
+        comments,
+    };
+    
+    // Determine output file path
+    let output_file_path = match output_path {
+        Some(path) => path,
+        None => format!("proposal_{}.json", proposal_id),
+    };
+    
+    // Write to file
+    let file = std::fs::File::create(&output_file_path)?;
+    serde_json::to_writer_pretty(file, &export)?;
+    
+    println!("✅ Exported proposal '{}' to {}", proposal_id, output_file_path);
+    
+    Ok(())
 }
 
 #[cfg(test)]
