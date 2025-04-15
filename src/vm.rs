@@ -685,6 +685,15 @@ pub struct VMEvent {
     pub timestamp: u64,
 }
 
+/// Context for VM execution, providing additional information like the caller
+#[derive(Debug, Clone, Default)]
+pub struct ExecutionContext {
+    /// Optional ID of the proposal being executed
+    pub proposal_id: Option<String>,
+    /// Optional identity of the caller (e.g., another contract or user)
+    pub caller: Option<String>,
+}
+
 /// Virtual Machine for executing ICN-COVM bytecode
 #[derive(Debug, Clone)]
 pub struct VM<S>

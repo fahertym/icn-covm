@@ -38,6 +38,7 @@ pub enum ProposalState {
     Executed,
     Rejected,
     Expired,
+    Failed,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -454,7 +455,7 @@ impl ProposalLifecycle {
             Ok(result) => {
                 println!("[EXEC] Execution successful: {:?}", result);
                 println!("[EXEC] Committing transaction...");
-                vm.commit_transaction()?; // Commit to original VM's storage
+                vm.commit_fork_transaction()?; // Commit to original VM's storage
                 
                 // Convert result to string for storage
                 let result_str = serde_json::to_string(&result)
@@ -471,7 +472,7 @@ impl ProposalLifecycle {
             Err(e) => {
                 println!("[EXEC] Execution failed: {}", e);
                 println!("[EXEC] Rolling back transaction...");
-                vm.rollback_transaction()?; // Rollback original VM's storage
+                vm.rollback_fork_transaction()?; // Rollback original VM's storage
                 
                 // Save failure info to storage
                 if let Some(storage) = vm.storage_backend.as_mut() {

@@ -165,6 +165,81 @@ pub struct Proposal {
     pub attachments: Vec<ProposalAttachment>,
 }
 
+/// Response structure for proposal API endpoints
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProposalResponse {
+    /// Unique identifier for the proposal
+    pub id: String,
+    /// Title of the proposal
+    pub title: String,
+    /// Creator of the proposal
+    pub creator: String,
+    /// Current status of the proposal
+    pub status: String,
+    /// Creation timestamp in ISO 8601 format
+    pub created_at: String,
+    /// Vote statistics
+    pub votes: VoteCounts,
+    /// Percentage of quorum reached (0.0-100.0)
+    pub quorum_percentage: f64,
+    /// Percentage of threshold reached (0.0-100.0)
+    pub threshold_percentage: f64,
+    /// Result of proposal execution (if executed)
+    pub execution_result: Option<String>,
+}
+
+/// Proposal summary for API responses
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProposalSummary {
+    /// Unique identifier for the proposal
+    pub id: String,
+    /// Title of the proposal
+    pub title: String,
+    /// Current status of the proposal
+    pub status: String,
+    /// Number of comments on the proposal
+    pub comment_count: usize,
+    /// Total number of votes
+    pub vote_count: u32,
+    /// Detailed vote information
+    pub vote_details: VoteCounts,
+    /// Most active participants
+    pub top_participants: Vec<Participant>,
+    /// Timestamp of last activity
+    pub last_activity: String,
+}
+
+/// Participant information for proposal summaries
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Participant {
+    /// Participant identifier
+    pub id: String,
+    /// Number of comments made by this participant
+    pub comment_count: u32,
+}
+
+/// Vote type for proposals
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum VoteType {
+    /// Affirmative vote
+    Yes,
+    /// Negative vote
+    No,
+    /// Abstain from voting
+    Abstain,
+}
+
+/// Vote record for proposals
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Vote {
+    /// Voter identifier
+    pub voter: String,
+    /// Type of vote cast
+    pub vote: VoteType,
+    /// Timestamp when the vote was cast
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+}
+
 /// Model for creating a new proposal
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateProposalRequest {
@@ -196,6 +271,15 @@ pub struct ProposalAttachment {
 /// Vote count information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VoteCounts {
+    /// Total number of votes cast
+    pub vote_count: u32,
+    /// Detailed breakdown of votes by type
+    pub breakdown: VoteBreakdown,
+}
+
+/// Vote breakdown by type
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VoteBreakdown {
     /// Number of yes votes
     pub yes: u32,
     /// Number of no votes
@@ -271,6 +355,38 @@ pub struct ProposalExecution {
     pub execution_logs: String,
     /// Timestamp when execution occurred
     pub executed_at: String,
+}
+
+/// Comment response model for API
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommentResponse {
+    /// Unique identifier for the comment
+    pub id: String,
+    /// Author of the comment
+    pub author: String,
+    /// Timestamp in ISO 8601 format
+    pub timestamp: String,
+    /// Content of the comment
+    pub content: String,
+    /// ID of the parent comment if this is a reply
+    pub reply_to: Option<String>,
+    /// Tags associated with the comment
+    pub tags: Vec<String>,
+    /// Reactions to the comment
+    pub reactions: HashMap<String, u32>,
+    /// Whether the comment is hidden
+    pub hidden: bool,
+    /// Number of edits
+    pub edit_count: usize,
+}
+
+/// Comment version history for API
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommentVersionResponse {
+    /// Content of the comment version
+    pub content: String,
+    /// Timestamp when this version was created
+    pub timestamp: String,
 }
 
 // Removed duplicated models 

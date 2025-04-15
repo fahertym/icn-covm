@@ -8,6 +8,7 @@ use log::warn;
 use crate::storage::traits::JsonStorage;
 
 /// Extension trait to add async proposal methods for use with Warp
+#[async_trait::async_trait]
 pub trait AsyncStorage {
     async fn get_proposal(&self, id: &str) -> StorageResult<Proposal>;
     async fn save_proposal(&self, proposal: &Proposal) -> StorageResult<()>;
@@ -33,6 +34,7 @@ pub trait AsyncStorage {
 }
 
 // Implement the async trait for Arc<T> where T implements Storage
+#[async_trait::async_trait]
 impl<T> AsyncStorage for Arc<tokio::sync::Mutex<T>> 
 where T: StorageBackend + StorageExtensions + AsyncStorageExtensions + JsonStorage + Send + Sync + 'static {
     async fn get_proposal(&self, id: &str) -> StorageResult<Proposal> {

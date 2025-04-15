@@ -6,7 +6,7 @@ pub mod proposals;
 // Use the handlers submodule
 pub mod handlers;
 
-use crate::storage::traits::{Storage, StorageExtensions, AsyncStorageExtensions, StorageBackend};
+use crate::storage::traits::{Storage, StorageExtensions, AsyncStorageExtensions, StorageBackend, JsonStorage};
 use crate::vm::VM;
 use warp::{Filter, Rejection, Reply};
 use std::fmt::Debug;
@@ -16,7 +16,7 @@ use tokio::sync::Mutex;
 /// Returns all v1 API routes
 pub fn get_routes<S>(vm: VM<Arc<Mutex<S>>>) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone
 where
-    S: StorageBackend + StorageExtensions + AsyncStorageExtensions + Send + Sync + Clone + Debug + 'static,
+    S: StorageBackend + StorageExtensions + AsyncStorageExtensions + JsonStorage + Send + Sync + Clone + Debug + 'static,
 {
     // Base path for v1 API
     let base = warp::path("api").and(warp::path("v1"));

@@ -5,6 +5,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use warp::Filter;
+use warp::Rejection;
 
 /// Authentication result containing the authenticated user ID
 #[derive(Debug, Clone)]
@@ -15,11 +16,10 @@ pub struct AuthInfo {
 }
 
 /// Authentication filter for secure endpoints 
-pub fn with_auth<S>() -> impl Filter<Extract = (AuthInfo,), Error = warp::Rejection> + Clone
-where
-    S: Storage + StorageExtensions + Send + Sync + Clone + Debug + 'static,
-{
-    warp::header::<String>("authorization")
+pub fn with_auth() -> impl Filter<Extract = (AuthInfo,), Error = warp::Rejection> + Clone {
+    // Return either the result of auth header verification or anonymous user
+    // Use Either<T,T> for the correct type
+    let auth_header = warp::header::<String>("authorization")
         .and_then(|token: String| async move {
             // Extract the token type (Bearer, Basic, etc.)
             let parts: Vec<&str> = token.split_whitespace().collect();
@@ -44,18 +44,28 @@ where
             Ok(AuthInfo {
                 user_id: "user123".to_string(), // Replace with actual user ID from token
                 did: Some("did:example:123456789abcdefghi".to_string()), // Replace with actual DID
-                roles: vec!["user".to_string()], // Replace with actual roles
+                roles: vec!["user".to_string(), "admin".to_string()], // Replace with actual roles
             })
+        });
+        
+    let anon_user = warp::any().map(|| {
+        // For development, return a mock anonymous user
+        // This would be removed in production
+        AuthInfo {
+            user_id: "anonymous".to_string(),
+            did: None,
+            roles: vec!["anonymous".to_string()],
+        }
+    });
+    
+    // Use or_else to handle rejection from header by falling back to anon user
+    auth_header.or_else(|_| async {
+        Ok::<AuthInfo, Rejection>(AuthInfo {
+            user_id: "anonymous".to_string(),
+            did: None,
+            roles: vec!["anonymous".to_string()],
         })
-        .or(warp::any().map(|| {
-            // For development, return a mock anonymous user
-            // This would be removed in production
-            AuthInfo {
-                user_id: "anonymous".to_string(),
-                did: None,
-                roles: vec!["anonymous".to_string()],
-            }
-        }))
+    })
 }
 
 /// Middleware to check if user has a specific role
@@ -84,14 +94,18 @@ pub async fn validate_did_proof(
 }
 
 /// Authentication filter with role requirement for secure endpoints
-pub fn with_auth_and_role(role: &'static str) -> impl Filter<Extract = (AuthInfo,), Error = warp::Rejection> + Clone {
-    with_auth().and_then(move |auth_info: AuthInfo| async move {
-        if auth_info.roles.contains(&role.to_string()) {
-            Ok(auth_info)
-        } else {
-            Err(reject_with_api_error(
-                ApiError::Forbidden("Insufficient permissions".to_string())
-            ))
+pub fn with_auth_and_role(role1: String, role2: Option<String>) -> impl Filter<Extract = (AuthInfo,), Error = warp::Rejection> + Clone {
+    with_auth().and_then(move |auth_info: AuthInfo| {
+        let role1 = role1.clone();
+        let role2 = role2.clone();
+        async move {
+            if auth_info.roles.contains(&role1) || (role2.is_some() && auth_info.roles.contains(&role2.unwrap())) {
+                Ok(auth_info)
+            } else {
+                Err(reject_with_api_error(
+                    ApiError::Forbidden("Insufficient permissions".to_string())
+                ))
+            }
         }
     })
 } 

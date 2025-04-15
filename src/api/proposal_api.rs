@@ -16,38 +16,45 @@ use warp::{Filter, Rejection, Reply};
 /// Represents a proposal with all of its metadata for API responses
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ProposalResponse {
-    id: String,
-    title: String,
-    creator: String,
-    status: String,
-    created_at: String,
-    votes: VoteCounts,
-    quorum_percentage: f64,
-    threshold_percentage: f64,
-    execution_result: Option<String>,
+    pub id: String,
+    pub title: String,
+    pub creator: String,
+    pub status: String,
+    pub created_at: String,
+    pub votes: VoteCounts,
+    pub quorum_percentage: f64,
+    pub threshold_percentage: f64,
+    pub execution_result: Option<String>,
 }
 
 /// Vote count information
 #[derive(Debug, Serialize, Deserialize)]
 pub struct VoteCounts {
-    yes: u32,
-    no: u32,
-    abstain: u32,
-    total: u32,
+    pub vote_count: u32,
+    pub breakdown: VoteBreakdown,
+}
+
+/// Vote breakdown information
+#[derive(Debug, Serialize, Deserialize)]
+pub struct VoteBreakdown {
+    pub yes: u32,
+    pub no: u32,
+    pub abstain: u32,
+    pub total: u32,
 }
 
 /// Comment metadata for API responses
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CommentResponse {
-    id: String,
-    author: String,
-    timestamp: String,
-    content: String,
-    reply_to: Option<String>,
-    tags: Vec<String>,
-    reactions: HashMap<String, u32>,
-    hidden: bool,
-    edit_count: usize,
+    pub id: String,
+    pub author: String,
+    pub timestamp: String,
+    pub content: String,
+    pub reply_to: Option<String>,
+    pub tags: Vec<String>,
+    pub reactions: HashMap<String, u32>,
+    pub hidden: bool,
+    pub edit_count: usize,
 }
 
 /// Comment version history for API
@@ -145,7 +152,7 @@ where
     S: StorageBackend + StorageExtensions + AsyncStorageExtensions + JsonStorage + Send + Sync + Clone + Debug + 'static,
 {
     let storage_mutex = vm.storage_backend.clone();
-    let storage = storage_mutex.lock().await;
+    let storage = storage_mutex.expect("Storage backend not available").lock().await;
 
     // Load proposal
     let proposal_result = load_proposal_from_governance(&vm, &id).await;
@@ -165,6 +172,15 @@ where
             };
 
             // Build response
+            let vote_count = total_votes as u32;
+            
+            let breakdown = VoteBreakdown {
+                yes: yes_votes as u32,
+                no: no_votes as u32,
+                abstain: abstain_votes as u32,
+                total: total_votes as u32,
+            };
+
             let response = ProposalResponse {
                 id: proposal.id,
                 title: "".to_string(), // Would need to fetch from lifecycle
@@ -172,10 +188,8 @@ where
                 status: format!("{:?}", proposal.status),
                 created_at: proposal.created_at.to_rfc3339(),
                 votes: VoteCounts {
-                    yes: yes_votes as u32,
-                    no: no_votes as u32,
-                    abstain: abstain_votes as u32,
-                    total: total_votes as u32,
+                    vote_count,
+                    breakdown,
                 },
                 quorum_percentage,
                 threshold_percentage,
@@ -203,7 +217,7 @@ where
     S: StorageBackend + StorageExtensions + AsyncStorageExtensions + JsonStorage + Send + Sync + Clone + Debug + 'static,
 {
     let storage_mutex = vm.storage_backend.clone();
-    let storage = storage_mutex.lock().await;
+    let storage = storage_mutex.expect("Storage backend not available").lock().await;
 
     // Create a null auth context for read-only operations
     let auth_context = None;
@@ -250,7 +264,7 @@ where
     S: StorageBackend + StorageExtensions + AsyncStorageExtensions + JsonStorage + Send + Sync + Clone + Debug + 'static,
 {
     let storage_mutex = vm.storage_backend.clone();
-    let storage = storage_mutex.lock().await;
+    let storage = storage_mutex.expect("Storage backend not available").lock().await;
 
     // Load proposal and comments
     let proposal_result = load_proposal_from_governance(&vm, &id).await;
@@ -299,12 +313,15 @@ where
             title: "".to_string(), // Would need to fetch from lifecycle
             status: format!("{:?}", proposal.status),
             comment_count: comments.len(),
-            vote_count: total_votes,
+            vote_count: total_votes as u32,
             vote_details: VoteCounts {
-                yes: yes_votes,
-                no: no_votes,
-                abstain: abstain_votes,
-                total: total_votes,
+                vote_count: total_votes as u32,
+                breakdown: VoteBreakdown {
+                    yes: yes_votes as u32,
+                    no: no_votes as u32,
+                    abstain: abstain_votes as u32,
+                    total: total_votes as u32,
+                },
             },
             top_participants,
             last_activity,
@@ -346,7 +363,7 @@ where
     S: StorageBackend + StorageExtensions + AsyncStorageExtensions + JsonStorage + Send + Sync + Clone + Debug + 'static,
 {
     let storage_mutex = vm.storage_backend.clone();
-    let storage = storage_mutex.lock().await;
+    let storage = storage_mutex.expect("Storage backend not available").lock().await;
     
     let proposal_key = format!("proposals/{}/metadata", id);
     
@@ -375,7 +392,7 @@ where
     S: StorageBackend + StorageExtensions + AsyncStorageExtensions + JsonStorage + Send + Sync + Clone + Debug + 'static,
 {
     let storage_mutex = vm.storage_backend.clone();
-    let storage = storage_mutex.lock().await;
+    let storage = storage_mutex.expect("Storage backend not available").lock().await;
     
     let votes_key = format!("proposals/{}/votes", proposal_id);
     let mut yes_votes = 0;
@@ -411,7 +428,7 @@ where
     S: StorageBackend + StorageExtensions + AsyncStorageExtensions + JsonStorage + Send + Sync + Clone + Debug + 'static,
 {
     let storage_mutex = vm.storage_backend.clone();
-    let storage = storage_mutex.lock().await;
+    let storage = storage_mutex.expect("Storage backend not available").lock().await;
     
     // ... existing code ...
 }
@@ -425,7 +442,7 @@ where
     S: StorageBackend + StorageExtensions + AsyncStorageExtensions + JsonStorage + Send + Sync + Clone + Debug + 'static,
 {
     let storage_mutex = vm.storage_backend.clone();
-    let mut storage = storage_mutex.lock().await;
+    let mut storage = storage_mutex.expect("Storage backend not available").lock().await;
     
     // ... existing code ...
 }
