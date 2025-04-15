@@ -18,6 +18,7 @@ use crate::storage::auth::AuthContext;
 use crate::storage::implementations::in_memory::InMemoryStorage;
 use crate::storage::traits::{Storage, StorageBackend, StorageExtensions};
 use crate::vm::VM;
+use crate::vm::Op;
 
 // Implement Clone for InMemoryStorage to satisfy VM's constraints
 impl Clone for InMemoryStorage {
@@ -605,7 +606,7 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
         let logic_str = String::from_utf8(logic_bytes)?;
 
         // Parse and execute
-        let ops = parse_dsl(&logic_str)?;
+        let (ops, _) = parse_dsl(&logic_str)?;
         let execution_result = match vm.execute(&ops) {
             Ok(_) => format!("Successfully executed logic at {}", logic_path),
             Err(e) => format!("Logic execution failed: {}", e),
@@ -684,6 +685,12 @@ where
     }
 
     Ok(())
+}
+
+fn load_dsl_from_file(file_path: &str) -> Result<Vec<Op>, Box<dyn Error>> {
+    let content = std::fs::read_to_string(file_path)?;
+    let (ops, _) = parse_dsl(&content)?;
+    Ok(ops)
 }
 
 #[cfg(test)]

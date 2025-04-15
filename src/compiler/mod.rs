@@ -11,6 +11,7 @@ pub mod line_parser;
 pub mod loop_block;
 pub mod macros;
 pub mod match_block;
+pub mod parse_dsl;
 pub mod proposal_block;
 pub mod while_block;
 
@@ -20,6 +21,8 @@ pub use if_block::parse_if_block;
 pub use line_parser::parse_line;
 pub use loop_block::parse_loop_block;
 pub use match_block::parse_match_block;
+pub use parse_dsl::LifecycleConfig;
+pub use parse_dsl::parse_dsl;
 pub use while_block::parse_while_block;
 
 /// Standard library support
@@ -58,7 +61,8 @@ pub fn parse_dsl_with_stdlib(source: &str) -> Result<Vec<Op>, CompilerError> {
     let combined_code = format!("{}\n\n{}", stdlib_code, source);
 
     // Parse the combined code
-    parse_dsl(&combined_code)
+    let (ops, _) = parse_dsl::parse_dsl(&combined_code)?;
+    Ok(ops)
 }
 
 /// Errors that can occur during compilation of DSL code
@@ -205,35 +209,8 @@ impl SourcePosition {
     }
 }
 
-/// Parse DSL source into a vector of operations
-///
-/// This function parses the provided DSL source code into a vector of
-/// executable operations. The DSL is a simple stack-based language with
-/// support for basic operations like arithmetic, memory access, and
-/// control flow.
-///
-/// # Arguments
-///
-/// * `source` - The DSL source code to parse
-///
-/// # Returns
-///
-/// * `Result<Vec<Op>, CompilerError>` - The parsed operations or an error
-///
-/// # Example
-///
-/// ```
-/// use icn_covm::compiler::parse_dsl;
-///
-/// let source = "
-///     push 10
-///     push 20
-///     add
-/// ";
-///
-/// let ops = parse_dsl(source).unwrap();
-/// ```
-pub fn parse_dsl(source: &str) -> Result<Vec<Op>, CompilerError> {
+// Original parse_dsl function renamed to parse_dsl_internal to avoid name conflicts
+fn parse_dsl_internal(source: &str) -> Result<Vec<Op>, CompilerError> {
     let lines: Vec<String> = source.lines().map(|s| s.to_string()).collect();
     let mut current_line = 0;
     let mut ops = Vec::new();

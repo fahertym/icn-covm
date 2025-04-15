@@ -14,6 +14,7 @@
 //! - Listing and filtering proposals
 
 use crate::compiler::parse_dsl;
+use crate::compiler::parse_dsl::LifecycleConfig;
 use crate::governance::comments::{self as comments};
 use crate::governance::proposal::{
     Proposal, ProposalStatus, ProposalStatus as LocalProposalStatus,
@@ -655,21 +656,21 @@ fn did_to_identity(did: &str) -> Identity {
 /// Parses DSL code from a file or storage path
 ///
 /// Loads DSL code from either a filesystem path or a storage path,
-/// then parses it into a vector of operations.
+/// then parses it into a vector of operations and extracts any lifecycle configuration.
 ///
 /// # Parameters
 /// * `vm` - The virtual machine with access to storage
 /// * `path` - Path to the DSL content, either a filesystem path or a storage path
 ///
 /// # Returns
-/// * `Result<Vec<Op>, Box<dyn Error>>` - The parsed operations on success, or an error
+/// * `Result<(Vec<Op>, LifecycleConfig), Box<dyn Error>>` - The parsed operations and lifecycle configuration on success, or an error
 ///
 /// # Errors
 /// Returns an error if:
 /// * Storage backend is not configured
 /// * File can't be read
 /// * Content can't be parsed as DSL
-fn parse_dsl_from_file<S>(vm: &VM<S>, path: &str) -> Result<Vec<Op>, Box<dyn Error>>
+fn parse_dsl_from_file<S>(vm: &VM<S>, path: &str) -> Result<(Vec<Op>, LifecycleConfig), Box<dyn Error>>
 where
     S: Storage + Send + Sync + Clone + Debug + 'static,
 {
@@ -695,9 +696,9 @@ where
         }
     };
 
-    // Parse the DSL content
-    match parse_dsl(&contents) {
-        Ok(ops) => Ok(ops),
+    // Parse the DSL content using the new parse_dsl function
+    match crate::compiler::parse_dsl::parse_dsl(&contents) {
+        Ok((ops, config)) => Ok((ops, config)),
         Err(e) => Err(format!("Failed to parse DSL: {}", e).into()),
     }
 }
@@ -729,144 +730,149 @@ where
 
     match matches.subcommand() {
         Some(("create", create_matches)) => {
-            // New proposal create implementation
-            if let Some(proposal_id) = create_matches.get_one::<String>("id") {
-                // Validate required parameters
-                let title = match create_matches.get_one::<String>("title") {
-                    Some(t) => t.clone(),
-                    None => return Err("Title is required".into()),
-                };
-                
-                let description = match create_matches.get_one::<String>("description") {
-                    Some(d) => d.clone(),
-                    None => return Err("Description is required".into()),
-                };
-                
-                // Get and validate quorum (must be between 0.0 and 1.0)
-                let quorum = match create_matches.get_one::<f64>("quorum") {
-                    Some(q) => {
-                        if *q < 0.0 || *q > 1.0 {
-                            return Err("Quorum must be between 0.0 and 1.0".into());
-                        }
-                        // Convert to unsigned integer (store as percentage multiplied by 100)
-                        (q * 100.0) as u64
-                    },
-                    None => return Err("Quorum is required".into()),
-                };
-                
-                // Get and validate threshold (must be between 0.0 and 1.0)
-                let threshold = match create_matches.get_one::<f64>("threshold") {
-                    Some(t) => {
-                        if *t < 0.0 || *t > 1.0 {
-                            return Err("Threshold must be between 0.0 and 1.0".into());
-                        }
-                        // Convert to unsigned integer (store as percentage multiplied by 100)
-                        (t * 100.0) as u64
-                    },
-                    None => return Err("Threshold is required".into()),
-                };
-                
-                // Get logic file path and read the content
-                let logic_path = match create_matches.get_one::<String>("logic") {
-                    Some(path) => path,
-                    None => create_matches.get_one::<String>("logic-path")
-                        .ok_or("Logic file path is required")?,
-                };
-                
-                // Check if the file exists and read its content
-                let logic_file_path = Path::new(logic_path);
-                if !logic_file_path.exists() || !logic_file_path.is_file() {
-                    return Err(format!("Logic file not found or is not a file: {}", logic_path).into());
-                }
-                
-                let logic_content = match fs::read_to_string(logic_file_path) {
-                    Ok(content) => content,
-                    Err(e) => return Err(format!("Failed to read logic file: {}", e).into()),
-                };
-                
-                // Parse the expires-in parameter
-                let expires_in = create_matches.get_one::<String>("expires-in")
-                    .map(|s| s.as_str())
-                    .unwrap_or("30d"); // Default to 30 days
-                
-                let expires_duration = parse_duration_string(expires_in)?;
-                
-                // Get the creator (default to the authenticated user)
-                let creator = create_matches
-                    .get_one::<String>("creator")
-                    .map(|s| s.clone())
-                    .unwrap_or_else(|| user_did.to_string());
-                
-                // Get current time
-                let now = Utc::now();
-                
-                // Create the ProposalLifecycle object
-                let mut proposal = ProposalLifecycle::new(
-                    proposal_id.clone(),
-                    did_to_identity(&creator),
-                    title,
-                    quorum,
-                    threshold,
-                    Some(expires_duration),  // Pass as discussion_duration
-                    None,                   // required_participants
-                );
-                
-                // Set expiration time explicitly
-                proposal.expires_at = Some(now + expires_duration);
-                
-                // Store the description and logic in separate storage keys
-                let namespace = "default"; // Use default namespace as a fallback
-                let base_key = format!("governance_proposals/{}", proposal_id);
-                let description_key = format!("{}/description", base_key);
-                let logic_key = format!("{}/logic", base_key);
-                
-                // Check if the proposal already exists to avoid overwriting
-                let storage = vm
-                    .storage_backend
-                    .as_ref()
-                    .ok_or_else(|| "Storage backend not configured for proposal creation")?;
-                
-                if storage.contains(Some(auth_context), namespace, &base_key)? {
-                    return Err(format!("Proposal with ID '{}' already exists", proposal_id).into());
-                }
-                
-                // Store the proposal and its metadata
-                let storage = vm
-                    .storage_backend
-                    .as_mut()
-                    .ok_or_else(|| "Storage backend not configured for proposal creation")?;
-                
-                // Try to store the proposal, but fallback to demo mode if it fails
-                let store_result = storage.set_json(Some(auth_context), namespace, &base_key, &proposal);
-                
-                if let Ok(_) = store_result {
-                    // Try to store additional data
-                    let _ = storage.set(
-                        Some(auth_context), 
-                        namespace, 
-                        &description_key, 
-                        description.into_bytes()
-                    );
-                    
-                    let _ = storage.set(
-                        Some(auth_context), 
-                        namespace, 
-                        &logic_key, 
-                        logic_content.into_bytes()
-                    );
-                    
-                    println!("✅ Proposal '{}' created successfully.", proposal_id);
-                } else {
-                    // Fall back to demo mode
-                    eprintln!("Note: Storage access failed (possibly due to permissions). Running in demo mode.");
-                    println!("✅ Proposal '{}' created successfully (demo mode).", proposal_id);
-                }
-                
-                return Ok(());
+            let storage = vm.storage_backend.as_ref().ok_or("Storage not available")?;
+            
+            let proposal_id = create_matches
+                .get_one::<String>("id")
+                .ok_or("Proposal ID is required")?;
+            
+            // Check user authorization
+            let creator_did = auth_context.identity_did();
+            
+            // Get the logic path if provided
+            let logic_path = create_matches.get_one::<String>("logic");
+            
+            // Set expiration if provided
+            let expires_at = if let Some(expires_str) = create_matches.get_one::<String>("expires") {
+                Some(
+                    parse_duration_string(expires_str)
+                        .map(|duration| Utc::now() + duration)?,
+                )
+            } else {
+                None
+            };
+            
+            // Optional metadata
+            let title = create_matches
+                .get_one::<String>("title")
+                .unwrap_or(&format!("Proposal {}", proposal_id))
+                .clone();
+            
+            let description = create_matches.get_one::<String>("description").cloned();
+            
+            // Parse the DSL content if a logic file is provided
+            let (logic_ops, lifecycle_config) = if let Some(logic_path) = logic_path {
+                parse_dsl_from_file(vm, logic_path)?
+            } else {
+                (Vec::new(), LifecycleConfig::default())
+            };
+            
+            // Set the quorum and threshold from command line arguments or lifecycle config
+            let quorum = create_matches
+                .get_one::<f64>("quorum")
+                .copied()
+                .or(lifecycle_config.quorum)
+                .unwrap_or(0.6);
+            
+            let threshold = create_matches
+                .get_one::<f64>("threshold")
+                .copied()
+                .or(lifecycle_config.threshold)
+                .unwrap_or(0.5);
+
+            // Set min_deliberation from command line arguments or lifecycle config
+            let min_deliberation_hours = create_matches
+                .get_one::<u64>("min-deliberation")
+                .map(|hours| *hours as i64)
+                .or_else(|| lifecycle_config.min_deliberation.map(|d| d.num_hours()));
+
+            // Set expires_at from command line arguments or lifecycle config
+            let expires_at = expires_at.or_else(|| {
+                lifecycle_config.expires_in.map(|d| Utc::now() + d)
+            });
+            
+            // Prepare creator identity
+            let creator_identity = did_to_identity(&creator_did);
+            
+            // Set up the proposal lifecycle in storage
+            let mut proposal = ProposalLifecycle::new(
+                proposal_id.clone(),
+                creator_identity,
+                title.clone(),
+                (quorum * 100.0) as u64, // Convert from fraction to percentage for storage
+                (threshold * 100.0) as u64, // Convert from fraction to percentage for storage
+                min_deliberation_hours.map(Duration::hours),
+                None, // required_participants not used here
+            );
+                        
+            // Store the proposal lifecycle in storage
+            let proposal_key = format!("proposals/{}/lifecycle", proposal_id);
+            let proposal_json = serde_json::to_string(&proposal)?;
+            let storage = vm
+                .storage_backend
+                .as_mut()
+                .ok_or_else(|| "Storage backend not configured for proposal creation")?;
+            storage.set(
+                Some(auth_context),
+                "governance",
+                &proposal_key,
+                proposal_json.into_bytes(),
+            )?;
+            
+            // Store the logic separately if provided
+            if !logic_ops.is_empty() {
+                let logic_json = serde_json::to_string(&logic_ops)?;
+                let logic_key = format!("proposals/{}/attachments/logic", proposal_id);
+                storage.set(
+                    Some(auth_context),
+                    "governance",
+                    &logic_key,
+                    logic_json.into_bytes(),
+                )?;
             }
             
-            // Existing code for other formats (kept for backward compatibility)
-            // ... existing code for other format ...
+            // Store description if provided
+            if let Some(desc) = description {
+                let desc_key = format!("proposals/{}/attachments/description", proposal_id);
+                storage.set(
+                    Some(auth_context),
+                    "governance",
+                    &desc_key,
+                    desc.into_bytes(),
+                )?;
+            }
+            
+            // Store required roles if provided
+            if !lifecycle_config.required_roles.is_empty() {
+                let roles_key = format!("proposals/{}/required_roles", proposal_id);
+                let roles_json = serde_json::to_string(&lifecycle_config.required_roles)?;
+                storage.set(
+                    Some(auth_context),
+                    "governance",
+                    &roles_key,
+                    roles_json.into_bytes(),
+                )?;
+            }
+            
+            println!("Created proposal {} by {}", proposal_id, creator_did);
+            println!("Title: {}", title);
+            println!("Quorum: {}%", quorum * 100.0);
+            println!("Threshold: {}%", threshold * 100.0);
+            
+            if let Some(hours) = min_deliberation_hours {
+                println!("Minimum deliberation period: {} hours", hours);
+            }
+            
+            if let Some(expiry) = expires_at {
+                println!("Expires at: {}", expiry);
+            }
+            
+            if !lifecycle_config.required_roles.is_empty() {
+                println!("Required roles: {}", lifecycle_config.required_roles.join(", "));
+            }
+            
+            // Return success
+            return Ok(());
         }
         Some(("attach", attach_matches)) => {
             println!("Handling proposal attach...");
@@ -915,7 +921,7 @@ where
                 "increment_reputation \"{}\" reason=\"Attached {} to proposal {}\"",
                 user_did, sanitized_attachment_name, proposal_id
             );
-            let ops = parse_dsl(&rep_dsl)?;
+            let (ops, _) = parse_dsl(&rep_dsl)?;
             vm.execute(&ops)?;
         }
         Some(("comment", comment_matches)) => {
@@ -1014,7 +1020,7 @@ where
                     "increment_reputation \"{}\" reason=\"Edited proposal {}\"",
                     user_did, proposal_id
                 );
-                let ops = parse_dsl(&rep_dsl)?;
+                let (ops, _) = parse_dsl(&rep_dsl)?;
                 vm.execute(&ops)?;
             } else {
                 println!("No changes specified for proposal {}.", proposal_id);
@@ -1194,7 +1200,7 @@ where
 
                             // Parse the DSL directly
                             let ops = match parse_dsl(&logic_content) {
-                                Ok(ops) => ops,
+                                Ok((ops, _)) => ops,
                                 Err(e) => {
                                     let error_msg =
                                         format!("Failed to parse proposal logic: {}", e);
@@ -1307,7 +1313,7 @@ where
                 "increment_reputation \"{}\" reason=\"Transitioned proposal {}\"",
                 user_did, proposal_id
             );
-            let ops = parse_dsl(&rep_dsl)?;
+            let (ops, _) = parse_dsl(&rep_dsl)?;
             vm.execute(&ops)?;
         }
         Some(("list", list_matches)) => {
@@ -2290,7 +2296,7 @@ where
         "increment_reputation \"{}\" reason=\"Voted on proposal {}\"",
         voter_id, proposal_id
     );
-    let ops = parse_dsl(&rep_dsl)?;
+    let (ops, _) = parse_dsl(&rep_dsl)?;
     vm.execute(&ops)?;
     
     Ok(())
@@ -2429,7 +2435,7 @@ where
     
     // Parse the DSL content
     let ops = match parse_dsl(&logic_content) {
-        Ok(ops) => ops,
+        Ok((ops, _)) => ops,
         Err(e) => {
             let error_msg = format!("Failed to parse DSL: {}", e);
             update_proposal_execution_status(

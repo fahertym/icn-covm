@@ -7,6 +7,7 @@ use crate::storage::implementations::in_memory::InMemoryStorage;
 use crate::storage::traits::{Storage, StorageBackend, StorageExtensions};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use chrono::Duration;
 
 use thiserror::Error;
 
@@ -306,6 +307,31 @@ pub enum Op {
     /// decisions before accepting the results.
     QuorumThreshold(f64),
 
+    /// Minimum deliberation period before a proposal can be voted on
+    ///
+    /// This operation specifies how long a proposal must be in the deliberation
+    /// state before it can transition to voting. It helps ensure that community
+    /// members have adequate time to discuss the proposal.
+    ///
+    /// The deliberation period is represented as a Duration.
+    MinDeliberation(Duration),
+
+    /// Define when a proposal expires after being opened for voting
+    ///
+    /// This operation sets the timeframe within which votes must be cast.
+    /// After this duration has passed, the proposal will automatically expire
+    /// if it has not been executed.
+    ///
+    /// The expiration period is represented as a Duration.
+    ExpiresIn(Duration),
+
+    /// Require a specific role to participate in the proposal
+    ///
+    /// This operation specifies that only members with a certain role
+    /// can vote on the proposal. It can be used to restrict voting to
+    /// specific community members.
+    RequireRole(String),
+
     /// Pop a value and store it in persistent storage with the given key
     ///
     /// This operation takes the top value from the stack and stores it in
@@ -586,6 +612,23 @@ impl std::fmt::Display for Op {
             Op::LiquidDelegate { from, to } => write!(f, "LiquidDelegate {} -> {}", from, to),
             Op::VoteThreshold(t) => write!(f, "VoteThreshold {}", t),
             Op::QuorumThreshold(q) => write!(f, "QuorumThreshold {}", q),
+            Op::MinDeliberation(d) => {
+                let hours = d.num_hours();
+                if hours % 24 == 0 {
+                    write!(f, "MinDeliberation {}d", hours / 24)
+                } else {
+                    write!(f, "MinDeliberation {}h", hours)
+                }
+            },
+            Op::ExpiresIn(d) => {
+                let days = d.num_days();
+                if days % 7 == 0 {
+                    write!(f, "ExpiresIn {}w", days / 7)
+                } else {
+                    write!(f, "ExpiresIn {}d", days)
+                }
+            },
+            Op::RequireRole(role) => write!(f, "RequireRole \"{}\"", role),
             Op::StoreP(key) => write!(f, "StoreP {}", key),
             Op::LoadP(key) => write!(f, "LoadP {}", key),
             Op::LoadVersionP { key, version } => write!(f, "LoadVersionP {}:{}", key, version),
@@ -1529,9 +1572,21 @@ where
                     self.stack.push(quorum);
                     Ok(())
                 }
+                Op::MinDeliberation(_) => {
+                    // This is a parsing-only opcode, doesn't do anything during execution
+                    Ok(())
+                },
+                Op::ExpiresIn(_) => {
+                    // This is a parsing-only opcode, doesn't do anything during execution
+                    Ok(())
+                },
+                Op::RequireRole(_) => {
+                    // This is a parsing-only opcode, doesn't do anything during execution
+                    Ok(())
+                },
                 Op::AssertEqualStack { .. } => {
                     Err(VMError::NotImplemented("AssertEqualStack Op".to_string()))
-                }
+                },
                 Op::IfPassed(_) => Err(VMError::NotImplemented("IfPassed Op".to_string())),
                 Op::Else(_) => Err(VMError::NotImplemented("Else Op".to_string())),
                 Op::Macro(_) => Err(VMError::NotImplemented(
