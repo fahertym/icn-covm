@@ -5,6 +5,23 @@ All notable changes to the ICN Cooperative Virtual Machine (icn-covm) will be do
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Governance Templates**: Implemented support for reusable governance lifecycle templates
+  - Added `template` and `governance use` syntax to DSL
+  - Enhanced `LifecycleConfig` with merge functionality for combining templates
+  - Extended DSL parser to store and apply templates during parsing
+  - Created comprehensive documentation in `docs/governance_templates.md`
+  - Added usage examples in `docs/examples/template_example.md`
+  - Integrated with proposal CLI for seamless template application
+
+### Changed
+
+- Modified `parse_dsl()` function signature to return `(Vec<Op>, LifecycleConfig)` tuple
+- Updated proposal CLI to respect governance config from DSL templates
+
 ## [0.4.0] - 2024-04-02
 
 ### Added

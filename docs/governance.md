@@ -174,6 +174,18 @@ Each proposal includes configurable parameters for:
 - **Threshold**: The minimum proportion of "yes" votes required for a proposal to pass
 - **Required Participants**: Optional minimum number of unique participants in deliberation
 
+## Governance Templates
+
+ICN-COVM supports reusable governance templates that allow organizations to define standardized governance configurations. These templates can specify common parameters such as quorum thresholds, voting thresholds, deliberation periods, and required roles.
+
+Templates provide several benefits:
+- Consistency across similar types of proposals
+- Simplified proposal creation with predefined settings
+- Standardized governance processes for different organizational contexts
+- Reduced configuration errors
+
+For more information on governance templates, see the [Governance Templates documentation](governance_templates.md).
+
 ## Federation Governance
 
 For multi-cooperative federations, additional governance features are available:
