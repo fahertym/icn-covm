@@ -337,7 +337,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let bootstrap_nodes = run_matches
                 .get_many::<String>("bootstrap-nodes")
                 .unwrap_or_default()
-                .map(|s| s.parse().expect("Invalid multiaddress format"))
+                .map(|s| s.parse()
+                    .map_err(|_| AppError::Federation(format!("Invalid multiaddress format: {}", s)))?)
                 .collect::<Vec<_>>();
             let node_name = run_matches
                 .get_one::<String>("node-name")
@@ -726,7 +727,7 @@ fn create_demo_auth_context() -> AuthContext {
     // Register the identity
     auth.register_identity(
         Identity::new(user_id.to_string(), None, "user".to_string(), None)
-            .expect("Failed to create identity"),
+            .map_err(|e| AppError::Other(format!("Failed to create identity: {}", e)))?,
     );
 
     // Add user roles directly to the auth context
@@ -1117,7 +1118,7 @@ fn register_identity(
                 .unwrap_or_default(),
         ),
     )
-    .expect("Failed to create identity");
+    .map_err(|e| AppError::Other(format!("Failed to create identity: {}", e)))?;
 
     // Create a basic auth context to simulate registration
     let mut auth = AuthContext::new("system");
@@ -1278,7 +1279,7 @@ fn create_admin_auth_context() -> AuthContext {
 
     // Set up admin identity
     let mut identity = Identity::new("admin".to_string(), None, "admin".to_string(), None)
-        .expect("Failed to create admin identity");
+        .map_err(|e| AppError::Other(format!("Failed to create admin identity: {}", e)))?;
     identity.profile.other_fields.insert(
         "description".to_string(),
         serde_json::Value::String("Storage CLI Admin".to_string()),
@@ -1354,10 +1355,14 @@ async fn broadcast_proposal(
         namespace,
         options,
         creator,
-        created_at: now() as i64,
+        created_at: now().map_err(|e| AppError::Other(format!("Failed to get current time: {}", e)))? as i64,
         scope,
         voting_model,
-        expires_at: expires_in.map(|seconds| (now() as i64) + (seconds as i64)),
+        expires_at: expires_in.map(|seconds| {
+            now().map(|n| n as i64 + seconds as i64)
+                .map_err(|e| AppError::Other(format!("Failed to get current time: {}", e)))
+                .unwrap_or_else(|_| 0) // Fallback to 0 on error
+        }),
         status: ProposalStatus::Open,
     };
 

@@ -499,7 +499,8 @@ mod tests {
 
     // Helper to create a dummy Identity for testing
     fn test_identity(username: &str) -> Identity {
-        Identity::new(username.to_string(), None, "test_member".to_string(), None).unwrap()
+        Identity::new(username.to_string(), None, "test_member".to_string(), None)
+            .expect("Failed to create test identity")
     }
 
     // Helper to create a basic proposal for tests
@@ -554,7 +555,8 @@ mod tests {
         assert_eq!(proposal.history.len(), 3);
         assert_eq!(proposal.history[2].1, ProposalState::Voting);
         assert!(proposal.expires_at.is_some());
-        let expires_at = proposal.expires_at.unwrap();
+        let expires_at = proposal.expires_at
+            .expect("Expiry time should be set after start_voting");
         assert!(
             expires_at > expected_expiry_min && expires_at < expected_expiry_max,
             "Expiry time not within expected range"

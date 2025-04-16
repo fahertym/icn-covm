@@ -504,11 +504,14 @@ impl StorageBackend for InMemoryStorage {
     ) -> StorageResult<Vec<StorageEvent>> {
         // Permission Check: Only global admin or namespace admin (for that namespace)
         let effective_ns = namespace.unwrap_or("global");
-        if !auth.unwrap().has_role("global", "admin")
-            && !auth.unwrap().has_role(effective_ns, "admin")
-        {
+        
+        let auth = auth.ok_or_else(|| StorageError::AuthenticationError {
+            details: format!("Authentication required for view_audit_log on {}", effective_ns),
+        })?;
+        
+        if !auth.has_role("global", "admin") && !auth.has_role(effective_ns, "admin") {
             return Err(StorageError::PermissionDenied {
-                user_id: auth.unwrap().user_id_cloneable(),
+                user_id: auth.user_id_cloneable(),
                 action: "view_audit_log".to_string(),
                 key: effective_ns.to_string(),
             });
