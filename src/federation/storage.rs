@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
+use crate::federation::error::FederationError;
 
 // Storage namespace constants
 pub const FEDERATION_NAMESPACE: &str = "federation";
@@ -98,7 +99,9 @@ impl FederationStorage {
 
         // Add to the cache
         let mut cache = self.cache.lock()
-            .map_err(|_| StorageError::Other { details: "Cache mutex poisoned".into() })?;
+            .map_err(|e| StorageError::Other { 
+                details: format!("Failed to lock federation cache: poisoned mutex - {}", e) 
+            })?;
 
         cache
             .proposals
@@ -127,7 +130,9 @@ impl FederationStorage {
 
         // Add to the cache
         let mut cache = self.cache.lock()
-            .map_err(|_| StorageError::Other { details: "Cache mutex poisoned".into() })?;
+            .map_err(|e| StorageError::Other { 
+                details: format!("Failed to lock federation cache: poisoned mutex - {}", e) 
+            })?;
 
         cache
             .proposals
@@ -462,10 +467,21 @@ impl FederationStorage {
     }
 }
 
-// Helper function to get current Unix timestamp
-fn current_timestamp() -> i64 {
+// Replace the current_timestamp function:
+fn current_timestamp() -> Result<i64, FederationError> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
+        .map_err(|e| FederationError::ClockError(format!("Failed to get current timestamp: {}", e)))
+}
+
+// Add a fallback version that logs errors:
+fn current_timestamp_or_default(default: i64) -> i64 {
+    match current_timestamp() {
+        Ok(ts) => ts,
+        Err(e) => {
+            warn!("Error getting timestamp, using default: {}", e);
+            default
+        }
+    }
 }

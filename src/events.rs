@@ -62,8 +62,11 @@ impl Event {
     }
 
     pub fn emit(&self) -> io::Result<()> {
-        let format = LOG_FORMAT.lock().unwrap();
-        let log_file = LOG_FILE.lock().unwrap().clone();
+        let format = LOG_FORMAT.lock()
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Failed to lock LOG_FORMAT: {:?}", e)))?;
+        let log_file = LOG_FILE.lock()
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Failed to lock LOG_FILE: {:?}", e)))?
+            .clone();
 
         match *format {
             LogFormat::Pretty => self.emit_pretty(log_file),
@@ -79,16 +82,19 @@ impl Event {
             _ => "\x1b[0m",        // Default
         };
 
+        // Safely extract the time portion from the timestamp
+        let time_str = self.timestamp
+            .split('T')
+            .nth(1)
+            .unwrap_or(&self.timestamp)
+            .split('.')
+            .next()
+            .unwrap_or("");
+
         let pretty_line = format!(
             "{}{} [{}] [{}] {}\x1b[0m",
             level_color,
-            self.timestamp
-                .split('T')
-                .nth(1)
-                .unwrap_or(&self.timestamp)
-                .split('.')
-                .next()
-                .unwrap_or(""),
+            time_str,
             self.level.to_uppercase(),
             self.tag,
             self.message
@@ -114,7 +120,8 @@ impl Event {
     }
 
     fn emit_json(&self, log_file: Option<String>) -> io::Result<()> {
-        let json = serde_json::to_string(&self).unwrap();
+        let json = serde_json::to_string(&self)
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Failed to serialize event: {}", e)))?;
 
         // Always print to stdout
         println!("{}", json);
@@ -128,14 +135,18 @@ impl Event {
     }
 }
 
-pub fn set_log_format(format: LogFormat) {
-    let mut log_format = LOG_FORMAT.lock().unwrap();
+pub fn set_log_format(format: LogFormat) -> io::Result<()> {
+    let mut log_format = LOG_FORMAT.lock()
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Failed to lock LOG_FORMAT: {:?}", e)))?;
     *log_format = format;
+    Ok(())
 }
 
-pub fn set_log_file(file_path: Option<String>) {
-    let mut log_file = LOG_FILE.lock().unwrap();
+pub fn set_log_file(file_path: Option<String>) -> io::Result<()> {
+    let mut log_file = LOG_FILE.lock()
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Failed to lock LOG_FILE: {:?}", e)))?;
     *log_file = file_path;
+    Ok(())
 }
 
 fn append_to_file(file_path: &str, content: &str) -> io::Result<()> {
