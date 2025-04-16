@@ -242,9 +242,9 @@ pub trait StorageExtensions: StorageBackend {
                 // Check for version mismatch
                 if version_info.version != expected {
                     return Err(StorageError::VersionConflict {
-                        key: key.to_string(),
+                        current: version_info.version,
                         expected,
-                        actual: version_info.version,
+                        resource: key.to_string(),
                     });
                 }
             }
@@ -266,6 +266,7 @@ impl<S: StorageBackend> StorageExtensions for S {
         let bytes = self.get(None, "identity", &key)?;
         serde_json::from_slice(&bytes).map_err(|e| {
             crate::storage::errors::StorageError::SerializationError {
+                data_type: "Identity".to_string(),
                 details: e.to_string(),
             }
         })
@@ -280,6 +281,7 @@ impl<S: StorageBackend> StorageExtensions for S {
         let bytes = self.get(auth, namespace, key)?;
         serde_json::from_slice(&bytes).map_err(|e| {
             crate::storage::errors::StorageError::SerializationError {
+                data_type: "Identity".to_string(),
                 details: e.to_string(),
             }
         })
@@ -294,6 +296,7 @@ impl<S: StorageBackend> StorageExtensions for S {
     ) -> StorageResult<()> {
         let bytes = serde_json::to_vec(value).map_err(|e| {
             crate::storage::errors::StorageError::SerializationError {
+                data_type: "Identity".to_string(),
                 details: e.to_string(),
             }
         })?;
@@ -310,6 +313,7 @@ impl<S: StorageBackend> StorageExtensions for S {
         match self.get_version(auth, namespace, key, version) {
             Ok((bytes, _)) => serde_json::from_slice(&bytes).map(Some).map_err(|e| {
                 crate::storage::errors::StorageError::SerializationError {
+                    data_type: "Identity".to_string(),
                     details: e.to_string(),
                 }
             }),
@@ -426,8 +430,7 @@ pub trait EconomicOperations: StorageBackend {
         // Check if sufficient balance
         if from_balance < amount {
             return Err(StorageError::InsufficientBalance(
-                from.to_string(),
-                resource.to_string(),
+                format!("Account {} has insufficient balance for resource {}", from, resource),
             ));
         }
 
@@ -510,8 +513,7 @@ pub trait EconomicOperations: StorageBackend {
         // Check if sufficient balance
         if current_balance < amount {
             return Err(StorageError::InsufficientBalance(
-                account.to_string(),
-                resource.to_string(),
+                format!("Account {} has insufficient balance for resource {}", account, resource),
             ));
         }
 

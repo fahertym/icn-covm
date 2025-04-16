@@ -1226,9 +1226,9 @@ where
                         && !auth.has_role(&self.vm.executor.namespace, &role)
                     {
                         return Err(VMError::PermissionDenied {
-                            user_id: auth.user_id().to_string(),
+                            user: auth.user_id().to_string(),
                             action: "require_role".to_string(),
-                            key: role.clone(),
+                            resource: role.clone(),
                         });
                     }
                 } else {

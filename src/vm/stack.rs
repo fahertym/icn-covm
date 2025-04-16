@@ -83,9 +83,7 @@ impl StackOps for VMStack {
 
     /// Pop a value from the stack
     fn pop(&mut self, op_name: &str) -> Result<f64, VMError> {
-        self.stack.pop().ok_or_else(|| VMError::StackUnderflow {
-            op_name: op_name.to_string(),
-        })
+        self.stack.pop().ok_or(VMError::StackUnderflow)
     }
 
     /// Pop two values from the stack
@@ -107,9 +105,7 @@ impl StackOps for VMStack {
 
     /// Duplicate the top value on the stack
     fn dup(&mut self, op_name: &str) -> Result<(), VMError> {
-        let value = self.top().ok_or_else(|| VMError::StackUnderflow {
-            op_name: op_name.to_string(),
-        })?;
+        let value = self.top().ok_or(VMError::StackUnderflow)?;
         self.push(value);
         Ok(())
     }
@@ -117,9 +113,7 @@ impl StackOps for VMStack {
     /// Swap the top two values on the stack
     fn swap(&mut self, op_name: &str) -> Result<(), VMError> {
         if self.stack.len() < 2 {
-            return Err(VMError::StackUnderflow {
-                op_name: op_name.to_string(),
-            });
+            return Err(VMError::StackUnderflow);
         }
 
         let len = self.stack.len();
@@ -130,9 +124,7 @@ impl StackOps for VMStack {
     /// Copy the second value to the top of the stack
     fn over(&mut self, op_name: &str) -> Result<(), VMError> {
         if self.stack.len() < 2 {
-            return Err(VMError::StackUnderflow {
-                op_name: op_name.to_string(),
-            });
+            return Err(VMError::StackUnderflow);
         }
 
         let len = self.stack.len();
@@ -144,9 +136,7 @@ impl StackOps for VMStack {
     /// Check if all values in the specified depth are equal
     fn assert_equal_stack(&self, depth: usize, op_name: &str) -> Result<bool, VMError> {
         if self.stack.len() < depth {
-            return Err(VMError::StackUnderflow {
-                op_name: op_name.to_string(),
-            });
+            return Err(VMError::StackUnderflow);
         }
 
         let start_idx = self.stack.len() - depth;
@@ -203,7 +193,7 @@ mod tests {
     fn test_pop_empty() {
         let mut stack = VMStack::new();
         let result = stack.pop("test");
-        assert!(matches!(result, Err(VMError::StackUnderflow { .. })));
+        assert!(matches!(result, Err(VMError::StackUnderflow)));
     }
 
     #[test]

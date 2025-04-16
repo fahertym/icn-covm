@@ -200,6 +200,7 @@ impl FileStorage {
                 })?;
             let metadata: NamespaceMetadata = serde_json::from_str(&metadata_str).map_err(|e| {
                 StorageError::SerializationError {
+                    data_type: "NamespaceMetadata".to_string(),
                     details: e.to_string(),
                 }
             })?;
@@ -266,6 +267,7 @@ impl FileStorage {
                 let account: FileResourceAccount =
                     serde_json::from_str(&account_str).map_err(|e| {
                         StorageError::SerializationError {
+                            data_type: "FileResourceAccount".to_string(),
                             details: e.to_string(),
                         }
                     })?;
@@ -713,9 +715,9 @@ impl FileStorage {
                     },
                 }
             }
-            std::io::ErrorKind::AlreadyExists => StorageError::TransactionError {
-                details: format!(
-                    "Resource already exists: {}:{} (during {})",
+            std::io::ErrorKind::AlreadyExists => StorageError::SerializationError {
+                data_type: "VersionData".to_string(),
+                details: format!("Resource already exists: {}:{} (during {})",
                     namespace,
                     key.unwrap_or(""),
                     operation
@@ -832,9 +834,9 @@ impl StorageBackend for FileStorage {
             if let Some(account) = self.account_cache.get_mut(&user_id) {
                 if account.used_bytes + additional_bytes > account.quota_bytes {
                     return Err(StorageError::QuotaExceeded {
-                        account_id: user_id.clone(),
-                        requested: additional_bytes,
-                        available: account.quota_bytes.saturating_sub(account.used_bytes),
+                        limit_type: format!("Storage for user '{}'", user_id),
+                        current: account.used_bytes + additional_bytes,
+                        maximum: account.quota_bytes,
                     });
                 }
 
@@ -846,8 +848,9 @@ impl StorageBackend for FileStorage {
                     .root_path
                     .join("accounts")
                     .join(format!("{}.json", user_id));
-                let account_str = serde_json::to_string(account).map_err(|e| {
+                let account_str = serde_json::to_string_pretty(account).map_err(|e| {
                     StorageError::SerializationError {
+                        data_type: "FileResourceAccount".to_string(),
                         details: e.to_string(),
                     }
                 })?;
@@ -1513,14 +1516,12 @@ impl StorageBackend for FileStorage {
             .insert(user_id.to_string(), account.clone());
 
         // Serialize to JSON and write to file
-        let account_json = match serde_json::to_string_pretty(&account) {
-            Ok(json) => json,
-            Err(e) => {
-                return Err(StorageError::SerializationError {
-                    details: format!("Failed to serialize account: {}", e),
-                })
+        let account_json = serde_json::to_string_pretty(&account).map_err(|e| {
+            StorageError::SerializationError {
+                data_type: "FileResourceAccount".to_string(),
+                details: e.to_string(),
             }
-        };
+        })?;
 
         fs::write(account_path, account_json)?;
 
