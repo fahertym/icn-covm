@@ -24,6 +24,7 @@ use crate::storage::errors::{StorageError, StorageResult};
 use crate::storage::traits::Storage;
 use crate::vm::errors::VMError;
 use crate::vm::types::{LoopControl, Op, VMEvent};
+use crate::vm::MissingKeyBehavior;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::marker::{Send, Sync};
@@ -90,7 +91,7 @@ where
     fn execute_store_p(&mut self, key: &str, value: f64) -> Result<(), VMError>;
 
     /// Load a value from storage
-    fn execute_load_p(&mut self, key: &str) -> Result<f64, VMError>;
+    fn execute_load_p(&mut self, key: &str, missing_key_behavior: MissingKeyBehavior) -> Result<f64, VMError>;
 
     /// Fork the VM for transaction support
     fn fork(&mut self) -> Result<Self, VMError>
@@ -556,8 +557,8 @@ where
     }
 
     /// Load a value from storage
-    fn execute_load_p(&mut self, key: &str) -> Result<f64, VMError> {
-        let bytes = self
+    fn execute_load_p(&mut self, key: &str, missing_key_behavior: MissingKeyBehavior) -> Result<f64, VMError> {
+        let bytes = match self
             .storage_operation("load_p", |backend, auth, namespace| {
                 backend.load(auth, namespace, key).map(|(data, event_opt)| {
                     // Log any event generated
@@ -574,16 +575,22 @@ where
                         (data, None)
                     }
                 })
-            })?
-            .0; // Extract just the data part from the tuple
-
-        // Process any events that were returned
-        if let Some(event) = self
-            .storage_operation("load_p", |_, _, _| Ok(((), None)))?
-            .1
-        {
-            self.events.push(event);
-        }
+            }) {
+                Ok(result) => {
+                    // Process any events that were returned
+                    if let Some(event) = result.1 {
+                        self.events.push(event);
+                    }
+                    Ok(result.0) // Extract just the data part from the tuple
+                },
+                Err(VMError::StorageError(ref err_msg)) if err_msg.contains("not found") => {
+                    match missing_key_behavior {
+                        MissingKeyBehavior::Default => Ok(vec![48, 46, 48]) /* "0.0" in ASCII */,
+                        MissingKeyBehavior::Error => Err(VMError::StorageError(format!("Key '{}' not found during load_p", key)))
+                    }
+                },
+                Err(e) => Err(e)
+            }?;
 
         let value_str = String::from_utf8(bytes).map_err(|_| {
             VMError::Deserialization(format!("Failed to parse value for key '{}'", key))

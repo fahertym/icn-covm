@@ -31,6 +31,15 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::marker::{Send, Sync};
 
+/// Defines behavior when a key is not found in storage operations
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum MissingKeyBehavior {
+    /// Return a default value (0.0) when a key is not found
+    Default,
+    /// Return an error when a key is not found
+    Error,
+}
+
 /// The Virtual Machine for cooperative value networks
 ///
 /// This struct coordinates the stack, memory, and execution components
@@ -48,6 +57,9 @@ where
 
     /// Execution logic
     pub executor: VMExecution<S>,
+    
+    /// Behavior when a key is not found in storage
+    pub missing_key_behavior: MissingKeyBehavior,
 }
 
 impl<S> VM<S>
@@ -60,6 +72,7 @@ where
             stack: VMStack::new(),
             memory: VMMemory::new(),
             executor: VMExecution::new(),
+            missing_key_behavior: MissingKeyBehavior::Default,
         }
     }
 
@@ -83,6 +96,11 @@ where
     /// Set the namespace
     pub fn set_namespace(&mut self, namespace: &str) {
         self.executor.set_namespace(namespace);
+    }
+
+    /// Set the behavior when a key is not found in storage
+    pub fn set_missing_key_behavior(&mut self, behavior: MissingKeyBehavior) {
+        self.missing_key_behavior = behavior;
     }
 
     /// Get the authentication context
@@ -135,6 +153,7 @@ where
             stack: self.stack.clone(),
             memory: self.memory.clone(),
             executor: forked_executor,
+            missing_key_behavior: self.missing_key_behavior,
         })
     }
 
@@ -190,6 +209,7 @@ where
             stack: self.stack.clone(),
             memory: self.memory.clone(),
             executor: VMExecution::new(), // Can't clone the executor directly due to generics
+            missing_key_behavior: self.missing_key_behavior,
         })
     }
 
@@ -544,7 +564,7 @@ where
                 }
 
                 Op::LoadP(key) => {
-                    let value = self.executor.execute_load_p(&key)?;
+                    let value = self.executor.execute_load_p(&key, self.missing_key_behavior)?;
                     self.stack.push(value);
                 }
 
@@ -636,7 +656,7 @@ pub mod tests {
     #[cfg(test)]
     fn setup_identity_context() -> AuthContext {
         let member = create_test_identity("test_member", "member");
-        let member_did = member.id.clone();
+        let member_did = member.did.clone();
 
         let mut auth_ctx = AuthContext::new(&member_did);
         auth_ctx.register_identity(member);

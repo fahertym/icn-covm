@@ -58,6 +58,7 @@ pub use execution::VMExecution;
 pub use memory::VMMemory;
 pub use stack::VMStack;
 pub use types::{CallFrame, LoopControl, Op, VMEvent};
+pub use vm::MissingKeyBehavior;
 
 // Re-export the traits for public use
 pub use execution::ExecutorOps;

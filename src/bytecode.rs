@@ -1210,7 +1210,7 @@ where
                 Ok(())
             }
             BytecodeOp::LoadStorage(key) => {
-                let value = self.vm.executor.execute_load_p(key)?;
+                let value = self.vm.executor.execute_load_p(key, crate::vm::MissingKeyBehavior::Default)?;
                 self.vm.stack.push(value);
                 self.pc += 1;
                 Ok(())
