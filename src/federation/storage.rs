@@ -90,13 +90,14 @@ impl FederationStorage {
         let key = Self::make_proposal_key(&proposal.proposal_id);
 
         // Store in the backend
-        storage.set_json(None, &proposal.namespace, &key, &proposal)?;
+        storage.set_json(None, &proposal.namespace, &key, &proposal)
+            .map_err(|e| StorageError::Other { details: format!("Failed to save proposal to storage: {}", e) })?;
 
         // Add to the cache
         let mut cache = match self.cache.lock() {
             Ok(guard) => guard,
             Err(poisoned) => {
-                // If the mutex is poisoned, get a consistent state
+                // If the mutex is poisoned, get a consistent state and log a warning
                 warn!("Cache mutex was poisoned, recovering the guard");
                 poisoned.into_inner()
             }
@@ -121,13 +122,14 @@ impl FederationStorage {
         let key = Self::make_proposal_key(&proposal.proposal_id);
 
         // Store in the backend with auth
-        storage.set_json(auth, &proposal.namespace, &key, &proposal)?;
+        storage.set_json(auth, &proposal.namespace, &key, &proposal)
+            .map_err(|e| StorageError::Other { details: format!("Failed to save proposal to storage: {}", e) })?;
 
         // Add to the cache
         let mut cache = match self.cache.lock() {
             Ok(guard) => guard,
             Err(poisoned) => {
-                // If the mutex is poisoned, get a consistent state
+                // If the mutex is poisoned, get a consistent state and log a warning
                 warn!("Cache mutex was poisoned, recovering the guard");
                 poisoned.into_inner()
             }
@@ -290,13 +292,16 @@ impl FederationStorage {
         votes.push(vote.clone());
 
         // Store the updated votes list
-        storage.set_json(None, VOTES_NAMESPACE, &key, &votes)?;
+        storage.set_json(None, VOTES_NAMESPACE, &key, &votes)
+            .map_err(|e| StorageError::Other { 
+                details: format!("Failed to save vote for proposal {}: {}", vote.proposal_id, e) 
+            })?;
 
         // Update the cache
         let mut cache = match self.cache.lock() {
             Ok(guard) => guard,
             Err(poisoned) => {
-                // If the mutex is poisoned, get a consistent state
+                // If the mutex is poisoned, get a consistent state and log a warning
                 warn!("Cache mutex was poisoned, recovering the guard");
                 poisoned.into_inner()
             }
@@ -361,7 +366,7 @@ impl FederationStorage {
             let cache = match self.cache.lock() {
                 Ok(guard) => guard,
                 Err(poisoned) => {
-                    // If the mutex is poisoned, get a consistent state
+                    // If the mutex is poisoned, get a consistent state and log a warning
                     warn!("Cache mutex was poisoned, recovering the guard");
                     poisoned.into_inner()
                 }
@@ -375,6 +380,9 @@ impl FederationStorage {
         // If not in cache, check storage
         let key = Self::make_proposal_key(proposal_id);
         storage.get_json(None, FEDERATION_NAMESPACE, &key)
+            .map_err(|e| StorageError::Other { 
+                details: format!("Failed to retrieve proposal {}: {}", proposal_id, e) 
+            })
     }
 
     /// Get all votes for a proposal
@@ -388,7 +396,7 @@ impl FederationStorage {
             let cache = match self.cache.lock() {
                 Ok(guard) => guard,
                 Err(poisoned) => {
-                    // If the mutex is poisoned, get a consistent state
+                    // If the mutex is poisoned, get a consistent state and log a warning
                     warn!("Cache mutex was poisoned, recovering the guard");
                     poisoned.into_inner()
                 }
@@ -402,6 +410,9 @@ impl FederationStorage {
         // If not in cache, check storage
         let key = Self::make_votes_key(proposal_id);
         storage.get_json(None, VOTES_NAMESPACE, &key)
+            .map_err(|e| StorageError::Other { 
+                details: format!("Failed to retrieve votes for proposal {}: {}", proposal_id, e) 
+            })
     }
 
     /// Convert votes to a format suitable for the ranked vote algorithm

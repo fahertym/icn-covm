@@ -310,7 +310,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
             // Get basic configuration
             let verbose = run_matches.get_flag("verbose");
-            let program_path = run_matches.get_one::<String>("program").unwrap();
+            let program_path = run_matches
+                .get_one::<String>("program")
+                .ok_or_else(|| "Missing required argument: program")?;
             let use_stdlib = run_matches.get_flag("stdlib");
             let use_bytecode = run_matches.get_flag("bytecode");
 
@@ -329,9 +331,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let enable_federation = run_matches.get_flag("enable-federation");
             let federation_port = run_matches
                 .get_one::<String>("federation-port")
-                .unwrap()
+                .unwrap_or(&"0".to_string())
                 .parse::<u16>()
-                .unwrap_or(0);
+                .map_err(|e| format!("Invalid federation port: {}", e))?;
             let bootstrap_nodes = run_matches
                 .get_many::<String>("bootstrap-nodes")
                 .unwrap_or_default()
@@ -339,7 +341,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .collect::<Vec<_>>();
             let node_name = run_matches
                 .get_one::<String>("node-name")
-                .unwrap()
+                .unwrap_or(&"unknown-node".to_string())
                 .to_string();
             let capabilities = run_matches
                 .get_many::<String>("capabilities")
@@ -389,8 +391,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
         Some(("identity", identity_matches)) => match identity_matches.subcommand() {
             Some(("register", register_matches)) => {
-                let id_file = register_matches.get_one::<String>("file").unwrap();
-                let id_type = register_matches.get_one::<String>("type").unwrap();
+                let id_file = register_matches
+                    .get_one::<String>("file")
+                    .ok_or_else(|| "Missing required argument: file")?;
+                let id_type = register_matches
+                    .get_one::<String>("type")
+                    .ok_or_else(|| "Missing required argument: type")?;
                 let output_file = register_matches.get_one::<String>("output");
                 register_identity(id_file, id_type, output_file)
             }
@@ -407,18 +413,26 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Some(("storage", storage_matches)) => {
             let storage_backend = storage_matches
                 .get_one::<String>("storage-backend")
-                .unwrap();
-            let storage_path = storage_matches.get_one::<String>("storage-path").unwrap();
+                .ok_or_else(|| "Missing required argument: storage-backend")?;
+            let storage_path = storage_matches
+                .get_one::<String>("storage-path")
+                .ok_or_else(|| "Missing required argument: storage-path")?;
 
             match storage_matches.subcommand() {
                 Some(("list-keys", list_keys_matches)) => {
-                    let namespace = list_keys_matches.get_one::<String>("namespace").unwrap();
+                    let namespace = list_keys_matches
+                        .get_one::<String>("namespace")
+                        .ok_or_else(|| "Missing required argument: namespace")?;
                     let prefix = list_keys_matches.get_one::<String>("prefix");
                     list_keys_command(namespace, prefix, storage_backend, storage_path)
                 }
                 Some(("get-value", get_value_matches)) => {
-                    let namespace = get_value_matches.get_one::<String>("namespace").unwrap();
-                    let key = get_value_matches.get_one::<String>("key").unwrap();
+                    let namespace = get_value_matches
+                        .get_one::<String>("namespace")
+                        .ok_or_else(|| "Missing required argument: namespace")?;
+                    let key = get_value_matches
+                        .get_one::<String>("key")
+                        .ok_or_else(|| "Missing required argument: key")?;
                     get_value_command(namespace, key, storage_backend, storage_path)
                 }
                 _ => Err("Unknown storage subcommand".into()),
@@ -434,7 +448,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .map_err(|e| e.into())
         }
         Some(("api", api_matches)) => {
-            let port = *api_matches.get_one::<u16>("port").unwrap_or(&3030);
+            let port = api_matches.get_one::<u16>("port").copied().unwrap_or(3030);
             println!("Starting API server on port {}...", port);
 
             // Initialize VM with storage
