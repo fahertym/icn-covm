@@ -52,7 +52,10 @@ fn parse_duration(duration_str: &str) -> Result<Duration, CompilerError> {
         });
     }
 
-    let last_char = duration_str.chars().last().unwrap();
+    let last_char = duration_str.chars().last()
+        .ok_or(CompilerError::SyntaxError {
+            details: "Empty duration string".to_string(),
+        })?;
     let value = &duration_str[0..duration_str.len() - 1];
 
     let value: i64 = value.parse().map_err(|_| CompilerError::SyntaxError {

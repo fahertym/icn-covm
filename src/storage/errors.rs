@@ -103,6 +103,12 @@ pub enum StorageError {
         details: String,
     },
     
+    /// Time error
+    TimeError {
+        /// Details about the time error
+        details: String,
+    },
+    
     /// IO error during storage operation
     IoError {
         /// Details about the operation that failed
@@ -111,9 +117,12 @@ pub enum StorageError {
         details: String,
     },
     
-    /// Clock or timestamp error
-    TimeError {
-        /// Details about the time error
+    /// IO error during storage operation (backwards compatibility alias for IoError)
+    #[deprecated(since = "0.5.0", note = "Use IoError instead")]
+    IOError {
+        /// Details about the operation that failed
+        operation: String,
+        /// Error message
         details: String,
     },
     
@@ -131,6 +140,22 @@ pub enum StorageError {
     Other {
         /// Details about the error
         details: String,
+    },
+    
+    /// Resource not found error
+    ResourceNotFound(String),
+    
+    /// Insufficient balance for operation
+    InsufficientBalance(String),
+    
+    /// Version conflict during update
+    VersionConflict {
+        /// Current version
+        current: u64,
+        /// Expected version
+        expected: u64,
+        /// Resource identifier
+        resource: String,
     },
 }
 
@@ -173,9 +198,6 @@ impl fmt::Display for StorageError {
             Self::ValidationError { rule, details } => {
                 write!(f, "Validation failed for rule '{}': {}", rule, details)
             }
-            Self::IoError { operation, details } => {
-                write!(f, "IO error: {}", details)
-            }
             Self::TimeError { details } => {
                 write!(f, "Time error: {}", details)
             }
@@ -185,6 +207,21 @@ impl fmt::Display for StorageError {
             }
             Self::Other { details } => {
                 write!(f, "Storage error: {}", details)
+            }
+            Self::IoError { operation, details } => {
+                write!(f, "IO error: {}", details)
+            }
+            Self::IOError { operation, details } => {
+                write!(f, "IO error: {}", details)
+            }
+            Self::ResourceNotFound(key) => {
+                write!(f, "Resource not found: {}", key)
+            }
+            Self::InsufficientBalance(reason) => {
+                write!(f, "Insufficient balance: {}", reason)
+            }
+            Self::VersionConflict { current, expected, resource } => {
+                write!(f, "Version conflict: current {}, expected {}: {}", current, expected, resource)
             }
         }
     }
@@ -214,6 +251,19 @@ impl From<std::time::SystemTimeError> for StorageError {
     fn from(err: std::time::SystemTimeError) -> Self {
         Self::TimeError {
             details: format!("System time error: {}", err),
+        }
+    }
+}
+
+/// Backwards compatibility methods for StorageError
+impl StorageError {
+    /// Create a QuotaExceeded error with legacy field names
+    #[deprecated(since = "0.5.0", note = "Use QuotaExceeded with limit_type, current, maximum fields")]
+    pub fn quota_exceeded(account_id: String, requested: u64, available: u64) -> Self {
+        Self::QuotaExceeded {
+            limit_type: format!("Account '{}'", account_id),
+            current: requested,
+            maximum: available + requested,
         }
     }
 }

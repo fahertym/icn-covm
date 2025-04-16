@@ -151,6 +151,44 @@ pub enum VMError {
     /// Other/unknown error
     #[error("VM error: {0}")]
     Other(String),
+    
+    /// Operation not implemented
+    #[error("Operation not implemented: {0}")]
+    NotImplemented(String),
+    
+    /// Error when an assertion fails
+    #[error("Assertion failed: {message}")]
+    AssertionFailed {
+        message: String,
+    },
+    
+    /// Alternative name for StorageUnavailable (for backward compatibility)
+    #[error("Storage backend not available")]
+    StorageNotAvailable,
+    
+    /// Error when a variable is not found
+    #[error("Variable not found: {0}")]
+    VariableNotFound(String),
+    
+    /// Error when a function is not found
+    #[error("Function not found: {0}")]
+    FunctionNotFound(String),
+    
+    /// Error when a parameter is not found
+    #[error("Parameter not found: {0}")]
+    ParameterNotFound(String),
+    
+    /// Error when identity context is not available
+    #[error("Identity context not available")]
+    IdentityContextUnavailable,
+    
+    /// Error when permission is denied
+    #[error("Permission denied for {user} to {action} on {resource}")]
+    PermissionDenied {
+        user: String,
+        action: String,
+        resource: String,
+    },
 }
 
 impl From<StorageError> for VMError {
@@ -185,10 +223,19 @@ impl From<StorageError> for VMError {
                 VMError::ValidationError(format!("Validation failed for rule '{}': {}", rule, details)),
             StorageError::IoError { operation, details } => 
                 VMError::IoError(io::Error::new(io::ErrorKind::Other, details)),
+            StorageError::IOError { operation, details } => 
+                VMError::IoError(io::Error::new(io::ErrorKind::Other, details)),
             StorageError::TimeError { details } => VMError::TimeError(details),
             StorageError::SchemaVersionError { current_version, required_version, details } => 
                 VMError::StorageError(format!("Schema version error: current {}, required {}: {}", 
                     current_version, required_version, details)),
+            StorageError::ResourceNotFound(resource) => 
+                VMError::ResourceNotFound(resource),
+            StorageError::InsufficientBalance(details) => 
+                VMError::StorageError(format!("Insufficient balance: {}", details)),
+            StorageError::VersionConflict { current, expected, resource } => 
+                VMError::StorageError(format!("Version conflict on '{}': current {}, expected {}", 
+                    resource, current, expected)),
             StorageError::Other { details } => VMError::StorageError(details),
         }
     }

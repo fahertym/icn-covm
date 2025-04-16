@@ -582,7 +582,8 @@ where
         self.execute_inner(body)?;
 
         // Pop the call frame
-        let frame = self.memory.pop_call_frame().unwrap();
+        let frame = self.memory.pop_call_frame()
+            .ok_or_else(|| VMError::ContextMismatch(format!("Expected call frame for function '{}' but none found", name)))?;
 
         // If there's a return value, push it onto the stack
         if let Some(return_value) = frame.return_value {
@@ -621,7 +622,9 @@ pub mod tests {
 
     #[cfg(test)]
     fn create_test_identity(id: &str, identity_type: &str) -> Identity {
-        Identity::new(id.to_string(), None, identity_type.to_string(), None).unwrap()
+        // This is only used in tests, so we can use expect() with context
+        Identity::new(id.to_string(), None, identity_type.to_string(), None)
+            .expect("Failed to create test identity")
     }
 
     #[cfg(test)]

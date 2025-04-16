@@ -26,6 +26,7 @@ use crate::storage::namespaces::NamespaceMetadata;
 use crate::storage::resource::ResourceAccount;
 use crate::storage::traits::StorageBackend;
 use crate::storage::utils::now;
+use crate::storage::utils::now_with_default;
 use crate::storage::versioning::{VersionDiff, VersionInfo};
 
 /// Helper function for tests to convert string to bytes
@@ -145,7 +146,7 @@ impl InMemoryStorage {
             user_id: auth.user_id_cloneable(),
             namespace: namespace.to_string(),
             key: key.to_string(),
-            timestamp: now(),
+            timestamp: now_with_default(),
             details: details.to_string(),
         });
     }
@@ -181,6 +182,7 @@ impl InMemoryStorage {
     ) -> StorageResult<()> {
         let serialized =
             serde_json::to_vec(value).map_err(|e| StorageError::SerializationError {
+                data_type: "JSON".to_string(),
                 details: e.to_string(),
             })?;
         self.set(auth, namespace, key, serialized)
@@ -215,6 +217,7 @@ impl InMemoryStorage {
     ) -> StorageResult<T> {
         let data = self.get(auth, namespace, key)?;
         serde_json::from_slice(&data).map_err(|e| StorageError::SerializationError {
+            data_type: "JSON".to_string(),
             details: format!("Failed to deserialize JSON: {}", e),
         })
     }

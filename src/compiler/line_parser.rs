@@ -346,7 +346,12 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
             ))?;
 
             // Extract message parameter from quoted string
-            let rest_of_line = line[line.find(identity_id).unwrap() + identity_id.len()..].trim();
+            let rest_of_line = line[line.find(identity_id)
+                .ok_or(CompilerError::InvalidFunctionFormat(
+                    format!("Cannot find identity_id '{}' in line", identity_id),
+                    pos.line,
+                    pos.column,
+                ))? + identity_id.len()..].trim();
 
             // Use a simple parser to extract two quoted strings
             if let Some(quote1_start) = rest_of_line.find('"') {

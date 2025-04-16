@@ -3,7 +3,7 @@ use crate::storage::errors::{StorageError, StorageResult};
 use crate::storage::events::StorageEvent;
 use crate::storage::namespaces::NamespaceMetadata;
 use crate::storage::traits::StorageBackend;
-use crate::storage::utils::{now, Timestamp};
+use crate::storage::utils::{now, now_with_default, Timestamp};
 use crate::storage::versioning::{DiffChange, VersionDiff, VersionInfo};
 use chrono::{DateTime, Utc};
 use fs2::FileExt;
@@ -332,6 +332,7 @@ impl FileStorage {
         // Parse the JSON
         let metadata: KeyMetadata =
             serde_json::from_str(&metadata_str).map_err(|e| StorageError::SerializationError {
+                data_type: "KeyMetadata".to_string(),
                 details: e.to_string(),
             })?;
 
@@ -359,6 +360,7 @@ impl FileStorage {
         // Serialize metadata to JSON
         let metadata_str =
             serde_json::to_string(metadata).map_err(|e| StorageError::SerializationError {
+                data_type: "KeyMetadata".to_string(),
                 details: e.to_string(),
             })?;
 
@@ -512,6 +514,7 @@ impl FileStorage {
         // Serialize metadata to JSON
         let metadata_str =
             serde_json::to_string(metadata).map_err(|e| StorageError::SerializationError {
+                data_type: "NamespaceMetadata".to_string(),
                 details: e.to_string(),
             })?;
 
@@ -559,7 +562,7 @@ impl FileStorage {
         key: Option<&str>,
         message: &str,
     ) -> StorageResult<()> {
-        let now = now();
+        let now = now_with_default();
         let date = DateTime::<Utc>::from_timestamp(now as i64, 0)
             .ok_or_else(|| StorageError::TransactionError {
                 details: "Invalid timestamp".to_string(),
@@ -583,6 +586,7 @@ impl FileStorage {
 
         let log_str =
             serde_json::to_string(&log_entry).map_err(|e| StorageError::SerializationError {
+                data_type: "AuditLogEntry".to_string(),
                 details: e.to_string(),
             })?;
 
@@ -719,9 +723,9 @@ impl FileStorage {
             },
             std::io::ErrorKind::OutOfMemory | std::io::ErrorKind::StorageFull => {
                 StorageError::QuotaExceeded {
-                    account_id: "system".to_string(),
-                    requested: 0, // Unknown at this level
-                    available: 0, // Unknown at this level
+                    limit_type: "Storage space".to_string(),
+                    current: 0, // Unknown at this level
+                    maximum: 0, // Unknown at this level
                 }
             }
             _ => StorageError::IOError {
@@ -883,7 +887,7 @@ impl StorageBackend for FileStorage {
             let version_info = VersionInfo {
                 version: new_version,
                 created_by: user_id.clone(),
-                timestamp: now(),
+                timestamp: now_with_default(),
                 prev_version: metadata.versions.last().cloned().map(Box::new),
             };
 
@@ -896,14 +900,14 @@ impl StorageBackend for FileStorage {
             let version_info = VersionInfo {
                 version: 1,
                 created_by: user_id.clone(),
-                timestamp: now(),
+                timestamp: now_with_default(),
                 prev_version: None,
             };
 
             let metadata = KeyMetadata {
                 key: key.to_string(),
                 created_by: user_id.clone(),
-                created_at: now(),
+                created_at: now_with_default(),
                 versions: vec![version_info.clone()],
             };
 
@@ -1120,11 +1124,11 @@ impl StorageBackend for FileStorage {
                         let metadata = KeyMetadata {
                             key: key.clone(),
                             created_by: "SYSTEM_ROLLBACK".to_string(),
-                            created_at: now(),
+                            created_at: now_with_default(),
                             versions: vec![VersionInfo {
                                 version: previous_version,
                                 created_by: "SYSTEM_ROLLBACK".to_string(),
-                                timestamp: now(),
+                                timestamp: now_with_default(),
                                 prev_version: None,
                             }],
                         };
@@ -1158,6 +1162,7 @@ impl StorageBackend for FileStorage {
                     let metadata_path = self.namespace_metadata_path(&namespace);
                     let metadata_str = serde_json::to_string(&metadata).map_err(|e| {
                         StorageError::SerializationError {
+                            data_type: "NamespaceMetadata".to_string(),
                             details: e.to_string(),
                         }
                     })?;
@@ -1295,7 +1300,7 @@ impl StorageBackend for FileStorage {
             old_version: v1,
             new_version: v2,
             created_by: user_id,
-            timestamp: now(),
+            timestamp: now_with_default(),
             changes,
         })
     }
@@ -1499,8 +1504,8 @@ impl StorageBackend for FileStorage {
             user_id: user_id.to_string(),
             quota_bytes,
             used_bytes: 0,
-            created_at: now(),
-            last_updated: now(),
+            created_at: now_with_default(),
+            last_updated: now_with_default(),
         };
 
         // Store it in cache

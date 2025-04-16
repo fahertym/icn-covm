@@ -1,4 +1,4 @@
-use crate::storage::utils::{now, Timestamp};
+use crate::storage::utils::{now_with_default, Timestamp};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 
@@ -19,7 +19,7 @@ impl VersionInfo {
         Self {
             version: 1,
             created_by: created_by.to_string(),
-            timestamp: now(),
+            timestamp: now_with_default(),
             prev_version: None,
         }
     }
@@ -29,7 +29,7 @@ impl VersionInfo {
         Self {
             version: self.version.saturating_add(1),
             created_by: created_by.to_string(),
-            timestamp: now(),
+            timestamp: now_with_default(),
             // Clone the current version info and box it as the previous one
             prev_version: Some(Box::new(self.clone())),
         }

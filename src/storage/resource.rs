@@ -1,5 +1,5 @@
 use crate::storage::errors::StorageError;
-use crate::storage::utils::{now, Timestamp};
+use crate::storage::utils::{now_with_default, Timestamp};
 use serde::{Deserialize, Serialize};
 
 // Resource accounting
@@ -17,7 +17,7 @@ impl ResourceAccount {
             owner_id: owner_id.to_string(),
             storage_quota_bytes,
             storage_used_bytes: 0,
-            last_updated: now(),
+            last_updated: now_with_default(),
         }
     }
 
@@ -30,21 +30,19 @@ impl ResourceAccount {
     pub fn add_usage(&mut self, bytes: u64) -> Result<(), StorageError> {
         if !self.can_store(bytes) {
             return Err(StorageError::QuotaExceeded {
-                account_id: self.owner_id.clone(),
-                requested: bytes,
-                available: self
-                    .storage_quota_bytes
-                    .saturating_sub(self.storage_used_bytes),
+                limit_type: format!("Storage for account '{}'", self.owner_id),
+                current: self.storage_used_bytes,
+                maximum: self.storage_quota_bytes,
             });
         }
         self.storage_used_bytes = self.storage_used_bytes.saturating_add(bytes);
-        self.last_updated = now();
+        self.last_updated = now_with_default();
         Ok(())
     }
 
     // Reduce storage usage (e.g., when data is deleted)
     pub fn reduce_usage(&mut self, bytes: u64) {
         self.storage_used_bytes = self.storage_used_bytes.saturating_sub(bytes);
-        self.last_updated = now();
+        self.last_updated = now_with_default();
     }
 }

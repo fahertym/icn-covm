@@ -14,7 +14,7 @@ use icn_covm::storage::auth::AuthContext;
 use icn_covm::storage::implementations::file_storage::FileStorage;
 use icn_covm::storage::implementations::in_memory::InMemoryStorage;
 use icn_covm::storage::traits::StorageBackend;
-use icn_covm::storage::utils::now;
+use icn_covm::storage::utils::now_with_default;
 use icn_covm::vm::{VMError, VM};
 
 use clap::{Arg, ArgAction, Command};
@@ -1355,13 +1355,11 @@ async fn broadcast_proposal(
         namespace,
         options,
         creator,
-        created_at: now().map_err(|e| AppError::Other(format!("Failed to get current time: {}", e)))? as i64,
+        created_at: now_with_default() as i64,
         scope,
         voting_model,
         expires_at: expires_in.map(|seconds| {
-            now().map(|n| n as i64 + seconds as i64)
-                .map_err(|e| AppError::Other(format!("Failed to get current time: {}", e)))
-                .unwrap_or_else(|_| 0) // Fallback to 0 on error
+            (now_with_default() as i64) + (seconds as i64)
         }),
         status: ProposalStatus::Open,
     };

@@ -662,7 +662,7 @@ impl BytecodeCompiler {
                     let event = crate::vm::VMEvent {
                         category: "macro".to_string(),
                         message: format!("Macro '{}' execution not implemented", name),
-                        timestamp: crate::storage::utils::now(),
+                        timestamp: crate::storage::utils::now_with_default(),
                     };
                     self.program.instructions.push(BytecodeOp::Nop);
                 }

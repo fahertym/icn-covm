@@ -347,10 +347,12 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
     println!("\n--- Executing proposal logic ---");
 
     // Get the DSL logic
-    let logic_path = proposal.logic_path.unwrap();
+    let logic_path = proposal.logic_path
+        .ok_or("Proposal does not have a logic path specified")?;
     let logic_content =
         vm.with_storage(|storage| storage.get(Some(&auth), "governance", &logic_path))??;
-    let logic_str = std::str::from_utf8(&logic_content).unwrap();
+    let logic_str = std::str::from_utf8(&logic_content)
+        .map_err(|e| format!("Failed to parse logic content as UTF-8: {}", e))?;
 
     // Parse the DSL
     let (ops, _) = parse_dsl(logic_str)?;
@@ -366,7 +368,8 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
     // Check the stored values from DSL execution
     let budget_value =
         vm.with_storage(|storage| storage.get(Some(&auth), "governance", "repair_budget"))??;
-    let budget_str = std::str::from_utf8(&budget_value).unwrap();
+    let budget_str = std::str::from_utf8(&budget_value)
+        .map_err(|e| format!("Failed to parse budget value as UTF-8: {}", e))?;
     println!("Stored budget value: {}", budget_str);
 
     println!("\n--- Proposal lifecycle demo completed successfully ---");
