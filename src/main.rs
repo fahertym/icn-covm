@@ -336,24 +336,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .map_err(|e| format!("Invalid federation port: {}", e))?;
             let bootstrap_nodes = run_matches
                 .get_many::<String>("bootstrap-nodes")
+                .map(|values| values.map(|s| s.to_string()).collect::<Vec<String>>())
                 .unwrap_or_default()
-                .map_or_else(
-                    || Vec::new(),
-                    |nodes| {
-                        let mut addresses = Vec::new();
-                        for node in nodes {
-                            match node.parse() {
-                                Ok(addr) => addresses.push(addr),
-                                Err(_) => {
-                                    println!("Warning: Invalid multiaddress format: {}", node);
-                                    // Just skip invalid addresses
-                                    continue;
-                                }
-                            }
+                .iter()
+                .filter_map(|addr| {
+                    match addr.parse::<libp2p::Multiaddr>() {
+                        Ok(addr) => Some(addr),
+                        Err(e) => {
+                            println!("Warning: failed to parse multiaddr {}: {}", addr, e);
+                            None
                         }
-                        addresses
-                    },
-                );
+                    }
+                })
+                .collect();
             let node_name = run_matches
                 .get_one::<String>("node-name")
                 .unwrap_or(&"unknown-node".to_string())
@@ -623,11 +618,8 @@ fn run_program(
     if use_bytecode {
         // Bytecode execution with FileStorage
         let mut compiler = BytecodeCompiler::new();
-        let ops_vec = match &ops {
-            (ops_vec, _lc) => ops_vec,
-            _ => &ops, // Already a Vec<Op>
-        };
-        let program = compiler.compile(ops_vec);
+        let (ops_vector, _) = ops.clone();
+        let program = compiler.compile(&ops_vector);
 
         if verbose {
             println!("Compiled bytecode program:\n{}", program.dump());
@@ -683,11 +675,8 @@ fn run_program(
             println!("-----------------------------------");
         }
 
-        let ops_vec = match &ops {
-            (ops_vec, _lc) => ops_vec,
-            _ => &ops, // Already a Vec<Op>
-        };
-        vm.execute(ops_vec)?;
+        let (ops_vector, _) = ops.clone();
+        vm.execute(&ops_vector)?;
 
         if verbose {
             println!("-----------------------------------");
@@ -1041,27 +1030,15 @@ fn run_interactive(
                         if use_bytecode {
                             // Compile to bytecode and execute
                             let mut compiler = BytecodeCompiler::new();
-                            let ops_vec = match &ops {
-                                (ops_vec, _lc) => ops_vec,
-                                _ => &ops, // Already a Vec<Op>
-                            };
-                            let program = compiler.compile(ops_vec);
+                            let (ops_vector, _) = ops.clone();
+                            let program = compiler.compile(&ops_vector);
 
                             if verbose {
                                 println!("Compiled to bytecode:");
                                 println!("{}", program.dump());
                             }
 
-                            let mut interpreter = BytecodeInterpreter::new(
-                                VM::<InMemoryStorage>::new(),
-                                program,
-                            );
-
-                            // Copy VM state to interpreter
-                            let memory_map = vm.memory.get_memory_map();
-                            for (key, value) in memory_map {
-                                vm.store(&key, value);
-                            }
+                            let mut interpreter = BytecodeInterpreter::new(VM::<InMemoryStorage>::new(), program);
 
                             // Execute with bytecode
                             let bytecode_start = Instant::now();
@@ -1080,11 +1057,8 @@ fn run_interactive(
                             }
                         } else {
                             // Execute directly with AST interpreter
-                            let ops_vec = match &ops {
-                                (ops_vec, _lc) => ops_vec,
-                                _ => &ops, // Already a Vec<Op>
-                            };
-                            match vm.execute(ops_vec) {
+                            let (ops_vector, _) = ops.clone();
+                            match vm.execute(&ops_vector) {
                                 Ok(()) => {
                                     if let Some(result) = vm.top() {
                                         println!("Result: {}", result);
@@ -1717,10 +1691,8 @@ async fn execute_proposal(
 
     // Prepare the stack with ballot data
     for ballot in &ballots {
-        for pref_opt in ballot {
-            if let Some(pref) = pref_opt {
-                vm.stack.push(*pref);
-            }
+        for &pref in ballot {
+            vm.stack.push(pref);
         }
     }
 

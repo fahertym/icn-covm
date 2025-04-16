@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use crate::federation::error::FederationError;
+use crate::utils;
 
 // Storage namespace constants
 pub const FEDERATION_NAMESPACE: &str = "federation";
@@ -475,12 +476,19 @@ fn current_timestamp() -> Result<i64, FederationError> {
         .map_err(|e| FederationError::ClockError(format!("Failed to get current timestamp: {}", e)))
 }
 
-// Add a fallback version that logs errors:
+// Similar to storage::utils::now_with_default() but with a custom default value
+// instead of the hardcoded January 1, 2022 timestamp.
+#[allow(dead_code)]
 fn current_timestamp_or_default(default: i64) -> i64 {
-    match SystemTime::now().duration_since(UNIX_EPOCH) {
-        Ok(duration) => duration.as_secs() as i64,
+    // Try to get current timestamp first
+    match current_timestamp() {
+        Ok(timestamp) => timestamp,
         Err(e) => {
+            // First log the error
             warn!("Error getting timestamp, using default: {}", e);
+            
+            // If storage::utils::now_with_default() would also fail,
+            // use the provided default instead of the hardcoded one
             default
         }
     }
