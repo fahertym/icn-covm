@@ -146,14 +146,24 @@ mod tests {
         };
         
         // Store the proposal
-        let storage = vm.storage_backend.as_mut().unwrap();
+        let mut storage = vm.get_storage_backend().unwrap().clone();
         let storage_key = format!("{}/{}", FEDERATION_PROPOSALS_PATH, federated_proposal.proposal_id);
         let proposal_data = serde_json::to_vec(&federated_proposal).unwrap();
         
-        storage.write(&storage_key, &proposal_data, Some(&auth_context), "federation").unwrap();
+        storage.set(
+            Some(&auth_context), 
+            "federation", 
+            &storage_key, 
+            proposal_data
+        ).unwrap();
         
         // Retrieve the proposal
-        let retrieved_data = storage.read(&storage_key, Some(&auth_context), "federation").unwrap();
+        let storage_ref = vm.get_storage_backend().unwrap();
+        let retrieved_data = storage_ref.get(
+            Some(&auth_context), 
+            "federation", 
+            &storage_key
+        ).unwrap();
         let retrieved: FederatedProposal = serde_json::from_slice(&retrieved_data).unwrap();
         
         // Verify

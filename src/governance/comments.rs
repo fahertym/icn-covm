@@ -130,9 +130,8 @@ where
 
     // Ensure the proposal exists before fetching comments
     let storage = vm
-        .storage_backend
-        .as_ref()
-        .ok_or("Storage backend not available")?;
+        .get_storage_backend()
+        .ok_or_else(|| format!("Storage backend not available"))?;
     let _ = storage
         .get(auth, "governance", &proposal_path)
         .map_err(|_| format!("Proposal {} does not exist", proposal_id))?;
@@ -176,9 +175,8 @@ where
 
     // Ensure the proposal exists
     let storage = vm
-        .storage_backend
-        .as_ref()
-        .ok_or("Storage backend not available")?;
+        .get_storage_backend()
+        .ok_or_else(|| "Storage backend not available")?;
     let _ = storage
         .get(Some(auth_context), "governance", &proposal_path)
         .map_err(|_| format!("Proposal {} does not exist", proposal_id))?;
@@ -196,10 +194,11 @@ where
         "governance/proposals/{}/comments/{}",
         proposal_id, comment.id
     );
-    vm.storage_backend
-        .as_mut()
-        .ok_or("Storage backend not available")?
-        .set_json(Some(auth_context), "governance", &comment_path, &comment)?;
+    
+    // Clone the storage to get a mutable version
+    let mut storage = vm.get_storage_backend()
+        .ok_or_else(|| "Storage backend not available")?.clone();
+    storage.set_json(Some(auth_context), "governance", &comment_path, &comment)?;
 
     Ok(comment)
 }
@@ -220,9 +219,8 @@ where
     );
 
     let storage = vm
-        .storage_backend
-        .as_ref()
-        .ok_or("Storage backend not available")?;
+        .get_storage_backend()
+        .ok_or_else(|| "Storage backend not available")?;
     let comment_data = storage.get(auth_context, "governance", &comment_path)?;
 
     // Try to deserialize as the new format
@@ -268,7 +266,7 @@ where
             // Save the migrated comment back to storage with the new format
             // This is a read-only operation, so we'll need to clone the VM and get a mutable reference
             if let Some(mut vm_clone) = vm.try_clone() {
-                if let Some(storage_mut) = vm_clone.storage_backend.as_mut() {
+                if let Some(mut storage_mut) = vm_clone.get_storage_backend().cloned() {
                     let _ = storage_mut.set_json(
                         auth_context,
                         "governance",
@@ -301,9 +299,8 @@ where
     );
 
     let storage = vm
-        .storage_backend
-        .as_mut()
-        .ok_or("Storage backend not available")?;
+        .get_storage_backend()
+        .ok_or_else(|| "Storage backend not available")?;
     let mut comment =
         storage.get_json::<ProposalComment>(Some(auth_context), "governance", &comment_path)?;
 
@@ -316,7 +313,8 @@ where
     comment.add_version(new_content.to_string());
 
     // Save the updated comment
-    storage.set_json(Some(auth_context), "governance", &comment_path, &comment)?;
+    let mut storage_mut = storage.clone();
+    storage_mut.set_json(Some(auth_context), "governance", &comment_path, &comment)?;
 
     // Also save the version history
     let version_id = comment.edit_history.len() - 1;
@@ -325,7 +323,7 @@ where
         proposal_id, comment_id, version_id
     );
 
-    storage.set_json(
+    storage_mut.set_json(
         Some(auth_context),
         "governance",
         &version_path,
@@ -352,9 +350,8 @@ where
     );
 
     let storage = vm
-        .storage_backend
-        .as_mut()
-        .ok_or("Storage backend not available")?;
+        .get_storage_backend()
+        .ok_or_else(|| "Storage backend not available")?;
     let mut comment =
         storage.get_json::<ProposalComment>(Some(auth_context), "governance", &comment_path)?;
 
@@ -367,7 +364,8 @@ where
     comment.hide();
 
     // Save the updated comment
-    storage.set_json(Some(auth_context), "governance", &comment_path, &comment)?;
+    let mut storage_mut = storage.clone();
+    storage_mut.set_json(Some(auth_context), "governance", &comment_path, &comment)?;
 
     Ok(())
 }
@@ -389,9 +387,8 @@ where
     );
 
     let storage = vm
-        .storage_backend
-        .as_ref()
-        .ok_or("Storage backend not available")?;
+        .get_storage_backend()
+        .ok_or_else(|| "Storage backend not available")?;
     let comment = storage.get_json::<ProposalComment>(auth_context, "governance", &comment_path)?;
 
     Ok(comment.edit_history.clone())

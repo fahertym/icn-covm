@@ -202,10 +202,9 @@ impl ProposalLifecycle {
             return Err(format!("Proposal {} is not in Voting state", self.id).into());
         }
         let storage = vm
-            .storage_backend
-            .as_ref()
-            .ok_or("Storage backend not configured")?;
-        let auth_context = vm.auth_context.as_ref();
+            .get_storage_backend()
+            .ok_or_else(|| "Storage backend not available")?;
+        let auth_context = vm.get_auth_context();
         let namespace = "governance";
         let prefix = format!("proposals/{}/votes/", self.id);
         let vote_keys = storage.list_keys(auth_context, namespace, Some(&prefix))?;
@@ -305,10 +304,9 @@ impl ProposalLifecycle {
         // --- Logic Loading (using fork's context) ---
         let logic_dsl = {
             let storage = fork_vm
-                .storage_backend
-                .as_ref()
-                .ok_or("Fork storage backend unavailable")?;
-            let auth_context = fork_vm.auth_context.as_ref();
+                .get_storage_backend()
+                .ok_or_else(|| "Storage backend not available")?;
+            let auth_context = fork_vm.get_auth_context();
             let namespace = "governance"; // Assuming logic is always in governance namespace
             let logic_key = format!("proposals/{}/attachments/logic", self.id);
             println!(
@@ -342,7 +340,7 @@ impl ProposalLifecycle {
         // --- Execution (within Fork) & Transaction Handling ---
         let execution_status = if let Some(dsl) = logic_dsl {
             println!("[EXEC] Parsing logic DSL within fork...");
-            let ops = parse_dsl(&dsl).map_err(|e| format!("Failed to parse logic DSL: {}", e))?;
+            let (ops, _) = parse_dsl(&dsl).map_err(|e| format!("Failed to parse logic DSL: {}", e))?;
             println!("[EXEC] Logic parsed into {} Ops within fork.", ops.len());
 
             println!("[EXEC] Executing parsed Ops within fork VM...");

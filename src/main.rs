@@ -1579,7 +1579,7 @@ async fn execute_proposal(
 
     // Get the proposal
     let federation_storage = network_node.federation_storage();
-    let proposal = match federation_storage.get_proposal(&*storage, proposal_id) {
+    let proposal = match federation_storage.get_proposal(&storage, proposal_id) {
         Ok(proposal) => proposal,
         Err(e) => {
             error!("Failed to retrieve proposal for {}: {}", proposal_id, e);
@@ -1612,7 +1612,7 @@ async fn execute_proposal(
     }
 
     // Get votes
-    let votes = match federation_storage.get_votes(&*storage, proposal_id) {
+    let votes = match federation_storage.get_votes(&storage, proposal_id) {
         Ok(v) => v,
         Err(e) => {
             error!(

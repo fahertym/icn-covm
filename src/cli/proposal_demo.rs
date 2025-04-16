@@ -80,7 +80,7 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
 
     // Store the demo logic in storage
     let logic_path = "governance/logic/repair_budget.dsl";
-    let storage_backend = vm.storage_backend.as_mut().unwrap();
+    let mut storage_backend = vm.get_storage_backend().unwrap().clone();
     storage_backend.set(
         Some(&auth),
         "governance",
@@ -100,7 +100,7 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
     );
 
     // Store the proposal
-    let storage = vm.storage_backend.as_mut().unwrap();
+    let mut storage = vm.get_storage_backend().unwrap().clone();
     storage.set_json(
         Some(&auth),
         "governance",
@@ -111,11 +111,11 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
     println!("Proposal created with ID: {}", proposal_id);
 
     // Retrieve and verify the proposal
-    let storage = vm.storage_backend.as_ref().unwrap();
-    let loaded_proposal: Proposal = storage.get_json(
+    let storage_ref = vm.get_storage_backend().unwrap();
+    let loaded_proposal: Proposal = storage_ref.get_json(
         Some(&auth),
         "governance",
-        &format!("governance/proposals/{}", proposal_id),
+        &proposal.storage_key()
     )?;
 
     println!("Retrieved proposal: {:?}", loaded_proposal);
@@ -145,15 +145,15 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
 
     // First transition: Draft -> Deliberation
     println!("Transitioning proposal to Deliberation...");
-    let mut proposal = storage.get_json::<Proposal>(
+    let mut proposal = storage_ref.get_json::<Proposal>(
         Some(&auth),
         "governance",
-        &format!("governance/proposals/{}", proposal_id),
+        &proposal.storage_key()
     )?;
 
     proposal.mark_deliberation();
 
-    let storage = vm.storage_backend.as_mut().unwrap();
+    let mut storage = vm.get_storage_backend().unwrap().clone();
     storage.set_json(
         Some(&auth),
         "governance",
@@ -162,11 +162,11 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
     )?;
 
     // Verify transition
-    let storage = vm.storage_backend.as_ref().unwrap();
-    let proposal = storage.get_json::<Proposal>(
+    let storage_ref = vm.get_storage_backend().unwrap();
+    let proposal = storage_ref.get_json::<Proposal>(
         Some(&auth),
         "governance",
-        &format!("governance/proposals/{}", proposal_id),
+        &proposal.storage_key()
     )?;
 
     if matches!(proposal.status, ProposalStatus::Deliberation) {
@@ -192,7 +192,7 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
     };
 
     // Store the comment
-    let storage = vm.storage_backend.as_mut().unwrap();
+    let mut storage = vm.get_storage_backend().unwrap().clone();
     storage.set_json(
         Some(&auth),
         "governance",
@@ -220,7 +220,8 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
     };
 
     // Store the comment
-    storage.set_json(
+    let mut storage_mut = vm.get_storage_backend().unwrap().clone();
+    storage_mut.set_json(
         Some(&auth),
         "governance",
         &format!(
@@ -244,7 +245,7 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
         reactions: HashMap::new(),
     };
 
-    storage.set_json(
+    storage_mut.set_json(
         Some(&auth),
         "governance",
         &format!(
@@ -268,7 +269,7 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
         reactions: HashMap::new(),
     };
 
-    storage.set_json(
+    storage_mut.set_json(
         Some(&auth),
         "governance",
         &format!(
@@ -294,7 +295,7 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
         reactions: HashMap::new(),
     };
 
-    storage.set_json(
+    storage_mut.set_json(
         Some(&auth),
         "governance",
         &format!(
@@ -358,7 +359,7 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
     println!("Total comments: {}", comments.len());
 
     // Get a new mutable reference for the next section
-    let storage = vm.storage_backend.as_mut().unwrap();
+    let storage = vm.get_storage_backend().as_mut().unwrap();
 
     // Modify deliberation_started_at to simulate elapsed time
     println!("\n--- Testing deliberation duration requirements ---");
@@ -378,6 +379,7 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
     proposal2.min_deliberation_hours = Some(48);
 
     // Store the second proposal
+    let mut storage = vm.get_storage_backend().unwrap().clone();
     storage.set_json(
         Some(&auth),
         "governance",
@@ -406,10 +408,10 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
     println!("Deliberation started 36 hours ago (not yet eligible for transition to Active)");
 
     // Back to original proposal - set deliberation start time to 36 hours ago
-    let mut proposal = storage.get_json::<Proposal>(
+    let mut proposal = storage_ref.get_json::<Proposal>(
         Some(&auth),
         "governance",
-        &format!("governance/proposals/{}", proposal_id),
+        &proposal.storage_key()
     )?;
 
     proposal.deliberation_started_at = Some(Utc::now() - Duration::hours(36));
@@ -431,15 +433,15 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
     println!("Transitioning proposal from Deliberation to Active...");
 
     // This should succeed since the deliberation period (36 hours) exceeds the default minimum (24 hours)
-    let mut proposal = storage.get_json::<Proposal>(
+    let mut proposal = storage_ref.get_json::<Proposal>(
         Some(&auth),
         "governance",
-        &format!("governance/proposals/{}", proposal_id),
+        &proposal.storage_key()
     )?;
 
     proposal.mark_active();
 
-    let storage = vm.storage_backend.as_mut().unwrap();
+    let mut storage = vm.get_storage_backend().unwrap().clone();
     storage.set_json(
         Some(&auth),
         "governance",
@@ -448,11 +450,11 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
     )?;
 
     // Verify transition
-    let storage = vm.storage_backend.as_ref().unwrap();
-    let proposal = storage.get_json::<Proposal>(
+    let storage_ref = vm.get_storage_backend().unwrap();
+    let proposal = storage_ref.get_json::<Proposal>(
         Some(&auth),
         "governance",
-        &format!("governance/proposals/{}", proposal_id),
+        &proposal.storage_key()
     )?;
 
     if matches!(proposal.status, ProposalStatus::Active) {
@@ -469,10 +471,10 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
 
     // In a real CLI context, this would fail with our validation error
     // Here we'll simulate the validation check
-    let proposal2 = storage.get_json::<Proposal>(
+    let proposal2 = storage_ref.get_json::<Proposal>(
         Some(&auth),
         "governance",
-        &format!("governance/proposals/{}", proposal2_id),
+        &proposal2.storage_key()
     )?;
 
     let started_at = proposal2.deliberation_started_at.unwrap();
@@ -503,7 +505,7 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
     );
 
     // Store the third proposal
-    let storage = vm.storage_backend.as_mut().unwrap();
+    let mut storage = vm.get_storage_backend().unwrap().clone();
     storage.set_json(
         Some(&auth),
         "governance",
@@ -543,11 +545,11 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
     )?;
 
     // Verify transition
-    let storage = vm.storage_backend.as_ref().unwrap();
-    let proposal3 = storage.get_json::<Proposal>(
+    let storage_ref = vm.get_storage_backend().unwrap();
+    let proposal3 = storage_ref.get_json::<Proposal>(
         Some(&auth),
         "governance",
-        &format!("governance/proposals/{}", proposal3_id),
+        &proposal3.storage_key()
     )?;
 
     if matches!(proposal3.status, ProposalStatus::Active) {
@@ -558,15 +560,15 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
 
     // Third transition: Active -> Voting
     println!("Transitioning proposal to Voting...");
-    let mut proposal = storage.get_json::<Proposal>(
+    let mut proposal = storage_ref.get_json::<Proposal>(
         Some(&auth),
         "governance",
-        &format!("governance/proposals/{}", proposal_id),
+        &proposal.storage_key()
     )?;
 
     proposal.mark_voting();
 
-    let storage = vm.storage_backend.as_mut().unwrap();
+    let mut storage = vm.get_storage_backend().unwrap().clone();
     storage.set_json(
         Some(&auth),
         "governance",
@@ -575,11 +577,11 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
     )?;
 
     // Verify transition
-    let storage = vm.storage_backend.as_ref().unwrap();
-    let proposal = storage.get_json::<Proposal>(
+    let storage_ref = vm.get_storage_backend().unwrap();
+    let proposal = storage_ref.get_json::<Proposal>(
         Some(&auth),
         "governance",
-        &format!("governance/proposals/{}", proposal_id),
+        &proposal.storage_key()
     )?;
 
     if matches!(proposal.status, ProposalStatus::Voting) {
@@ -590,10 +592,10 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
 
     // Final transition: Voting -> Executed with logic execution
     println!("Transitioning proposal to Executed with logic execution...");
-    let mut proposal = storage.get_json::<Proposal>(
+    let mut proposal = storage_ref.get_json::<Proposal>(
         Some(&auth),
         "governance",
-        &format!("governance/proposals/{}", proposal_id),
+        &proposal.storage_key()
     )?;
 
     // Parse and execute the logic
@@ -601,8 +603,8 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
         println!("Executing logic from: {}", logic_path);
 
         // Get the logic content from storage
-        let storage_backend = vm.storage_backend.as_ref().unwrap();
-        let logic_bytes = storage_backend.get(Some(&auth), "governance", logic_path)?;
+        let storage_ref = vm.get_storage_backend().unwrap();
+        let logic_bytes = storage_ref.get(Some(&auth), "governance", logic_path)?;
         let logic_str = String::from_utf8(logic_bytes)?;
 
         // Parse and execute
@@ -618,7 +620,7 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
         proposal.mark_executed("No logic path available".to_string());
     }
 
-    let storage = vm.storage_backend.as_mut().unwrap();
+    let mut storage = vm.get_storage_backend().unwrap().clone();
     storage.set_json(
         Some(&auth),
         "governance",
@@ -627,11 +629,11 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
     )?;
 
     // Verify final transition
-    let storage = vm.storage_backend.as_ref().unwrap();
-    let final_proposal = storage.get_json::<Proposal>(
+    let storage_ref = vm.get_storage_backend().unwrap();
+    let final_proposal = storage_ref.get_json::<Proposal>(
         Some(&auth),
         "governance",
-        &format!("governance/proposals/{}", proposal_id),
+        &proposal.storage_key()
     )?;
 
     if matches!(final_proposal.status, ProposalStatus::Executed) {
@@ -647,15 +649,11 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
     }
 
     // Verify that the budget value was set in storage
-    let storage_backend = vm.storage_backend.as_ref().unwrap();
-    if let Ok(budget_bytes) = storage_backend.get(Some(&auth), "governance", "repair_budget") {
+    let storage_ref = vm.get_storage_backend().unwrap();
+    if let Ok(budget_bytes) = storage_ref.get(Some(&auth), "governance", "repair_budget") {
         if let Ok(budget_str) = String::from_utf8(budget_bytes) {
             println!("✅ Budget was set in storage: {}", budget_str);
-        } else {
-            println!("❌ Budget value not readable as string");
         }
-    } else {
-        println!("❌ Budget was not set in storage");
     }
 
     println!("Proposal demo completed successfully!");
@@ -678,12 +676,12 @@ fn init_storage<S>(vm: &mut VM<S>, auth: &AuthContext) -> Result<(), Box<dyn Err
 where
     S: StorageExtensions + Clone + Send + Sync + Debug + 'static,
 {
-    if let Some(storage) = vm.storage_backend.as_mut() {
-        // Create account and namespace
-        storage.create_account(Some(auth), "demo_user", 1024 * 1024)?;
-        storage.create_namespace(Some(auth), "governance", 1024 * 1024, None)?;
-    }
-
+    let mut storage = vm.get_storage_backend().ok_or("Storage backend not available")?.clone();
+    
+    // Create account and namespace
+    storage.create_account(Some(auth), "demo_user", 1024 * 1024)?;
+    storage.create_namespace(Some(auth), "governance", 1024 * 1024, None)?;
+    
     Ok(())
 }
 

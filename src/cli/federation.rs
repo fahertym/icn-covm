@@ -539,7 +539,7 @@ where
 
     // Get the proposal using a FederationStorage instance
     let federation_storage = FederationStorage::new();
-    let federated_proposal = federation_storage.get_proposal(&*storage, proposal_id)
+    let federated_proposal = federation_storage.get_proposal(storage, proposal_id)
         .map_err(|e| {
             println!(
                 "Proposal not found locally. Please sync it first with 'federation sync' command."
@@ -655,7 +655,7 @@ where
     let storage = vm.get_storage_backend().ok_or_else(|| "Storage backend not available")?;
     let federation_storage = FederationStorage::new();
     
-    let local_exists = match federation_storage.get_proposal(&*storage, proposal_id) {
+    let local_exists = match federation_storage.get_proposal(storage, proposal_id) {
         Ok(_) => true,
         Err(_) => false
     };
