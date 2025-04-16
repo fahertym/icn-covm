@@ -148,6 +148,7 @@ mod vote_tests {
             expires_at: None,
             scope: ProposalScope::GlobalFederation,
             voting_model: VotingModel::OneMemberOneVote,
+            status: ProposalStatus::Open,
         };
 
         // Verify fields
@@ -182,11 +183,11 @@ mod vote_tests {
         let federation_storage = FederationStorage::new();
 
         // Create an admin identity with correct permissions
-        let admin_identity = Identity::new("admin", "admin");
+        let admin_identity = Identity::new("admin".to_string(), None, "admin".to_string(), None).expect("Failed to create admin identity");
 
         // Create auth context with admin identity
         let mut auth = AuthContext::new("admin");
-        auth.set_identity(admin_identity.clone());
+        auth.register_identity(admin_identity.clone());
         auth.add_role("global", "admin"); // Add admin role for namespace creation
 
         // Create account for the admin user
@@ -213,6 +214,7 @@ mod vote_tests {
             expires_at: None,
             scope: ProposalScope::GlobalFederation,
             voting_model: VotingModel::OneMemberOneVote,
+            status: ProposalStatus::Open,
         };
 
         // Save the proposal with auth context
@@ -240,12 +242,12 @@ mod vote_tests {
         let federation_storage = FederationStorage::new();
 
         // Create a voter identity
-        let mut identity = Identity::new("test-voter", "test-voter");
+        let mut identity = Identity::new("test-voter".to_string(), None, "member".to_string(), None).expect("Failed to create voter identity");
         identity.add_metadata("coop_id", "test-node"); // Match the creator cooperative ID
 
         // Save the proposal
         let mut auth = AuthContext::new("test-voter");
-        auth.set_identity(identity.clone());
+        auth.register_identity(identity.clone());
         auth.add_role("global", "admin"); // Add admin role for namespace creation
 
         // Create account for the test voter
@@ -275,6 +277,7 @@ mod vote_tests {
             expires_at: Some(expires_at),
             scope: ProposalScope::GlobalFederation,
             voting_model: VotingModel::OneMemberOneVote,
+            status: ProposalStatus::Open,
         };
 
         // Save the proposal first with auth
@@ -351,6 +354,7 @@ mod vote_tests {
             expires_at: None,
             scope: ProposalScope::GlobalFederation,
             voting_model: VotingModel::OneMemberOneVote,
+            status: ProposalStatus::Open,
         };
 
         // Create voter identities (empty for this test)

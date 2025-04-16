@@ -192,6 +192,11 @@ impl Identity {
         })
     }
 
+    /// Sets metadata in the profile's other fields
+    pub fn add_metadata(&mut self, key: &str, value: &str) {
+        self.profile.other_fields.insert(key.to_string(), serde_json::Value::String(value.to_string()));
+    }
+
     /// Returns the crypto scheme being used
     /// Currently hardcoded to ed25519, but could be extended to support multiple schemes
     pub fn crypto_scheme(&self) -> Option<String> {
