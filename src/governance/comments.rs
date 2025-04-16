@@ -194,10 +194,12 @@ where
         "governance/proposals/{}/comments/{}",
         proposal_id, comment.id
     );
-    
+
     // Clone the storage to get a mutable version
-    let mut storage = vm.get_storage_backend()
-        .ok_or_else(|| "Storage backend not available")?.clone();
+    let mut storage = vm
+        .get_storage_backend()
+        .ok_or_else(|| "Storage backend not available")?
+        .clone();
     storage.set_json(Some(auth_context), "governance", &comment_path, &comment)?;
 
     Ok(comment)

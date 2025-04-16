@@ -1,5 +1,5 @@
 //! VM Memory and scope management
-//! 
+//!
 //! This module provides memory operations and scope management for the VM.
 //!
 //! The memory system is responsible for:
@@ -28,55 +28,56 @@ use crate::vm::types::CallFrame;
 pub trait MemoryScope {
     /// Store a value in memory
     fn store(&mut self, name: &str, value: f64);
-    
+
     /// Load a value from memory
     fn load(&self, name: &str) -> Result<f64, VMError>;
-    
+
     /// Define a function in memory
     fn define_function(&mut self, name: &str, params: Vec<String>, body: Vec<crate::vm::types::Op>);
-    
+
     /// Get a function by name
-    fn get_function(&self, name: &str) -> Result<(Vec<String>, Vec<crate::vm::types::Op>), VMError>;
-    
+    fn get_function(&self, name: &str)
+        -> Result<(Vec<String>, Vec<crate::vm::types::Op>), VMError>;
+
     /// Push a new call frame onto the call stack
     fn push_call_frame(&mut self, function_name: &str, params: HashMap<String, f64>) -> usize;
-    
+
     /// Pop the current call frame
     fn pop_call_frame(&mut self) -> Option<CallFrame>;
-    
+
     /// Get a reference to the current call frame
     fn current_call_frame(&self) -> Option<&CallFrame>;
-    
+
     /// Get a mutable reference to the current call frame
     fn current_call_frame_mut(&mut self) -> Option<&mut CallFrame>;
-    
+
     /// Set the return value for the current call frame
     fn set_return_value(&mut self, value: f64) -> Result<(), VMError>;
-    
+
     /// Get the return value from the current call frame
     fn get_return_value(&self) -> Option<f64>;
-    
+
     /// Set runtime parameters
     fn set_parameters(&mut self, parameters: HashMap<String, String>);
-    
+
     /// Get a parameter by name
     fn get_parameter(&self, name: &str) -> Result<String, VMError>;
-    
+
     /// Get a copy of the current memory map
     fn get_memory_map(&self) -> HashMap<String, f64>;
-    
+
     /// Format the memory as a string for display
     fn format_memory(&self) -> String;
-    
+
     /// Format the call stack as a string for display
     fn format_call_stack(&self) -> String;
-    
+
     /// Clear all global memory
     fn clear_memory(&mut self);
-    
+
     /// Check if we're currently in a function call
     fn in_function_call(&self) -> bool;
-    
+
     /// Get call stack depth
     fn call_stack_depth(&self) -> usize;
 }
@@ -86,16 +87,16 @@ pub trait MemoryScope {
 pub struct VMMemory {
     /// Global memory for storing variables
     memory: HashMap<String, f64>,
-    
+
     /// Function map for storing subroutines (params, body)
     functions: HashMap<String, (Vec<String>, Vec<crate::vm::types::Op>)>,
-    
+
     /// Call stack for tracking function calls
     call_stack: Vec<usize>,
-    
+
     /// Call frames for function memory scoping
     call_frames: Vec<CallFrame>,
-    
+
     /// Runtime parameters
     parameters: HashMap<String, String>,
 }
@@ -123,7 +124,7 @@ impl MemoryScope for VMMemory {
                 return;
             }
         }
-        
+
         // Otherwise store in global memory
         self.memory.insert(name.to_string(), value);
     }
@@ -137,14 +138,14 @@ impl MemoryScope for VMMemory {
                 if let Some(value) = frame.params.get(name) {
                     return Ok(*value);
                 }
-                
+
                 // Check local memory
                 if let Some(value) = frame.memory.get(name) {
                     return Ok(*value);
                 }
             }
         }
-        
+
         // Fall back to global memory
         self.memory
             .get(name)
@@ -153,12 +154,20 @@ impl MemoryScope for VMMemory {
     }
 
     /// Define a function in memory
-    fn define_function(&mut self, name: &str, params: Vec<String>, body: Vec<crate::vm::types::Op>) {
+    fn define_function(
+        &mut self,
+        name: &str,
+        params: Vec<String>,
+        body: Vec<crate::vm::types::Op>,
+    ) {
         self.functions.insert(name.to_string(), (params, body));
     }
 
     /// Get a function by name
-    fn get_function(&self, name: &str) -> Result<(Vec<String>, Vec<crate::vm::types::Op>), VMError> {
+    fn get_function(
+        &self,
+        name: &str,
+    ) -> Result<(Vec<String>, Vec<crate::vm::types::Op>), VMError> {
         self.functions
             .get(name)
             .cloned()
@@ -173,7 +182,7 @@ impl MemoryScope for VMMemory {
             return_value: None,
             function_name: function_name.to_string(),
         };
-        
+
         self.call_frames.push(frame);
         self.call_stack.push(self.call_frames.len() - 1);
         self.call_frames.len() - 1
@@ -205,16 +214,18 @@ impl MemoryScope for VMMemory {
 
     /// Set the return value for the current call frame
     fn set_return_value(&mut self, value: f64) -> Result<(), VMError> {
-        let frame = self.current_call_frame_mut()
-            .ok_or_else(|| VMError::NotImplemented("Cannot return outside a function".to_string()))?;
-        
+        let frame = self.current_call_frame_mut().ok_or_else(|| {
+            VMError::NotImplemented("Cannot return outside a function".to_string())
+        })?;
+
         frame.return_value = Some(value);
         Ok(())
     }
 
     /// Get the return value from the current call frame
     fn get_return_value(&self) -> Option<f64> {
-        self.current_call_frame().and_then(|frame| frame.return_value)
+        self.current_call_frame()
+            .and_then(|frame| frame.return_value)
     }
 
     /// Set runtime parameters
@@ -240,19 +251,19 @@ impl MemoryScope for VMMemory {
         if self.memory.is_empty() {
             return "Memory: {}".to_string();
         }
-        
+
         let mut result = "Memory: {\n".to_string();
-        
+
         // Sort keys for consistent display
         let mut keys: Vec<&String> = self.memory.keys().collect();
         keys.sort();
-        
+
         for key in keys {
             if let Some(value) = self.memory.get(key) {
                 result.push_str(&format!("  {}: {}\n", key, value));
             }
         }
-        
+
         result.push_str("}");
         result
     }
@@ -262,15 +273,15 @@ impl MemoryScope for VMMemory {
         if self.call_frames.is_empty() {
             return "Call Stack: []".to_string();
         }
-        
+
         let mut result = "Call Stack: [\n".to_string();
-        
+
         for (i, frame_idx) in self.call_stack.iter().enumerate() {
             if let Some(frame) = self.call_frames.get(*frame_idx) {
                 result.push_str(&format!("  {}. {}\n", i, frame.function_name));
             }
         }
-        
+
         result.push_str("]");
         result
     }
@@ -295,17 +306,17 @@ impl fmt::Display for VMMemory {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "{}", self.format_memory())?;
         writeln!(f, "{}", self.format_call_stack())?;
-        
+
         if !self.functions.is_empty() {
             writeln!(f, "Functions: [")?;
-            
+
             for name in self.functions.keys() {
                 writeln!(f, "  {}", name)?;
             }
-            
+
             writeln!(f, "]")?;
         }
-        
+
         Ok(())
     }
 }
@@ -334,9 +345,9 @@ mod tests {
         let mut memory = VMMemory::new();
         let params = vec!["a".to_string(), "b".to_string()];
         let body = vec![Op::Add, Op::Return];
-        
+
         memory.define_function("add", params.clone(), body.clone());
-        
+
         let (retrieved_params, retrieved_body) = memory.get_function("add").unwrap();
         assert_eq!(retrieved_params, params);
         assert_eq!(retrieved_body, body);
@@ -345,29 +356,35 @@ mod tests {
     #[test]
     fn test_scoped_memory() {
         let mut memory = VMMemory::new();
-        
+
         // Store in global scope
         memory.store("global", 100.0);
-        
+
         // Create function call frame with parameters
         let mut params = HashMap::new();
         params.insert("param".to_string(), 200.0);
         memory.push_call_frame("test_function", params);
-        
+
         // Store in local scope
         memory.store("local", 300.0);
-        
+
         // All variables should be accessible in inner scope
         assert_eq!(memory.load("global").unwrap(), 100.0);
         assert_eq!(memory.load("param").unwrap(), 200.0);
         assert_eq!(memory.load("local").unwrap(), 300.0);
-        
+
         // Pop the call frame
         memory.pop_call_frame();
-        
+
         // Local and param should no longer be accessible
         assert_eq!(memory.load("global").unwrap(), 100.0);
-        assert!(matches!(memory.load("local"), Err(VMError::VariableNotFound(_))));
-        assert!(matches!(memory.load("param"), Err(VMError::VariableNotFound(_))));
+        assert!(matches!(
+            memory.load("local"),
+            Err(VMError::VariableNotFound(_))
+        ));
+        assert!(matches!(
+            memory.load("param"),
+            Err(VMError::VariableNotFound(_))
+        ));
     }
-} 
+}

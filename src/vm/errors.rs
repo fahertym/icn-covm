@@ -121,4 +121,4 @@ pub enum VMError {
     /// Deserialization error
     #[error("Deserialization error: {0}")]
     Deserialization(String),
-} 
+}

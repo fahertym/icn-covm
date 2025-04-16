@@ -174,27 +174,31 @@ fn test_identity_operations_with_storage() {
     // Set up auth context
     let auth = setup_identity_context();
     vm.set_auth_context(auth);
-    
+
     // Save an identity to storage
     let test_identity = create_test_identity("test_store", "member");
     let auth_context = setup_identity_context();
-    
+
     vm.with_storage_mut(|storage| {
         storage.set_json(
             Some(&auth_context),
             "identity",
             &format!("identities/{}", test_identity.did),
-            &test_identity
+            &test_identity,
         )
-    }).unwrap();
-    
+    })
+    .unwrap();
+
     // Retrieve the identity using StorageExtensions trait
-    let retrieved_identity = vm.with_storage(|storage| {
-        storage.get_identity(&test_identity.did)
-    }).unwrap();
-    
+    let retrieved_identity = vm
+        .with_storage(|storage| storage.get_identity(&test_identity.did))
+        .unwrap();
+
     assert_eq!(retrieved_identity.did, test_identity.did);
-    assert_eq!(retrieved_identity.identity_type, test_identity.identity_type);
+    assert_eq!(
+        retrieved_identity.identity_type,
+        test_identity.identity_type
+    );
 
     // Test with identity verification which doesn't need actual storage
     let ops = vec![Op::VerifyIdentity {

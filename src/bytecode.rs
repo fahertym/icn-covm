@@ -22,7 +22,7 @@ use std::fmt::Debug;
 use std::marker::{Send, Sync};
 use std::time::Duration;
 // Import the traits from the re-exported modules
-use crate::vm::{StackOps, MemoryScope, ExecutorOps};
+use crate::vm::{ExecutorOps, MemoryScope, StackOps};
 
 /// Bytecode operations for the ICN-COVM virtual machine
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -673,8 +673,8 @@ impl BytecodeCompiler {
                         "governance".to_string(),
                         format!("Require role: {}", role),
                     ));
-                },
-                
+                }
+
                 Op::MinDeliberation(duration) => {
                     self.program.instructions.push(BytecodeOp::Nop);
                     // Not directly implemented in bytecode yet, just log as an event
@@ -682,8 +682,8 @@ impl BytecodeCompiler {
                         "governance".to_string(),
                         format!("Minimum deliberation period: {:?}", duration),
                     ));
-                },
-                
+                }
+
                 Op::ExpiresIn(duration) => {
                     self.program.instructions.push(BytecodeOp::Nop);
                     // Not directly implemented in bytecode yet, just log as an event
@@ -691,7 +691,7 @@ impl BytecodeCompiler {
                         "governance".to_string(),
                         format!("Expires in: {:?}", duration),
                     ));
-                },
+                }
             }
         }
     }
@@ -951,10 +951,10 @@ where
 {
     /// Program counter
     pc: usize,
-    
+
     /// The program being executed
     program: BytecodeProgram,
-    
+
     /// The VM instance for execution
     vm: VM<S>,
 }
@@ -965,22 +965,18 @@ where
 {
     /// Create a new bytecode interpreter with the given VM
     pub fn new(vm: VM<S>, program: BytecodeProgram) -> Self {
-        Self {
-            pc: 0,
-            program,
-            vm,
-        }
+        Self { pc: 0, program, vm }
     }
 
     /// Execute the bytecode program
     pub fn execute(&mut self) -> Result<(), VMError> {
         self.pc = 0;
-        
+
         while self.pc < self.program.instructions.len() {
             let op = &self.program.instructions[self.pc].clone();
             self.execute_instruction(op)?;
         }
-        
+
         Ok(())
     }
 
@@ -1158,18 +1154,40 @@ where
                 self.pc += 1;
                 Ok(())
             }
-            BytecodeOp::Mint { resource, account, amount, reason } => {
-                self.vm.executor.execute_mint(resource, account, *amount, reason)?;
+            BytecodeOp::Mint {
+                resource,
+                account,
+                amount,
+                reason,
+            } => {
+                self.vm
+                    .executor
+                    .execute_mint(resource, account, *amount, reason)?;
                 self.pc += 1;
                 Ok(())
             }
-            BytecodeOp::Transfer { resource, from, to, amount, reason } => {
-                self.vm.executor.execute_transfer(resource, from, to, *amount, reason)?;
+            BytecodeOp::Transfer {
+                resource,
+                from,
+                to,
+                amount,
+                reason,
+            } => {
+                self.vm
+                    .executor
+                    .execute_transfer(resource, from, to, *amount, reason)?;
                 self.pc += 1;
                 Ok(())
             }
-            BytecodeOp::Burn { resource, account, amount, reason } => {
-                self.vm.executor.execute_burn(resource, account, *amount, reason)?;
+            BytecodeOp::Burn {
+                resource,
+                account,
+                amount,
+                reason,
+            } => {
+                self.vm
+                    .executor
+                    .execute_burn(resource, account, *amount, reason)?;
                 self.pc += 1;
                 Ok(())
             }
@@ -1204,7 +1222,9 @@ where
             BytecodeOp::RequireRole(role) => {
                 // Check if the current user has the required role
                 if let Some(auth) = self.vm.get_auth_context() {
-                    if !auth.has_role("global", &role) && !auth.has_role(&self.vm.executor.namespace, &role) {
+                    if !auth.has_role("global", &role)
+                        && !auth.has_role(&self.vm.executor.namespace, &role)
+                    {
                         return Err(VMError::PermissionDenied {
                             user_id: auth.user_id().to_string(),
                             action: "require_role".to_string(),
@@ -1226,15 +1246,15 @@ where
             }
             BytecodeOp::ExpiresIn(duration) => {
                 // This is a governance parameter that just needs to be recorded
-                self.vm.executor.emit_event(
-                    "governance",
-                    &format!("Expires in: {:?}", duration),
-                );
+                self.vm
+                    .executor
+                    .emit_event("governance", &format!("Expires in: {:?}", duration));
                 Ok(())
             }
             _ => {
                 return Err(VMError::NotImplemented(format!(
-                    "Operation not implemented in bytecode: {:?}", op
+                    "Operation not implemented in bytecode: {:?}",
+                    op
                 )));
             }
         }

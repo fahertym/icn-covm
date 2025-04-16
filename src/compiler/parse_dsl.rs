@@ -1,5 +1,5 @@
+use crate::compiler::line_parser::{parse_block, parse_line};
 use crate::compiler::{CompilerError, SourcePosition};
-use crate::compiler::line_parser::{parse_line, parse_block};
 use crate::vm::Op;
 use chrono::Duration;
 use std::collections::HashMap;
@@ -21,7 +21,7 @@ pub struct LifecycleConfig {
 
 impl LifecycleConfig {
     /// Merge values from another LifecycleConfig into this one
-    /// 
+    ///
     /// This will only overwrite fields that are None or empty in the current config.
     /// Existing values are preserved.
     pub fn merge_from(&mut self, other: &Self) {
@@ -54,7 +54,7 @@ fn parse_duration(duration_str: &str) -> Result<Duration, CompilerError> {
 
     let last_char = duration_str.chars().last().unwrap();
     let value = &duration_str[0..duration_str.len() - 1];
-    
+
     let value: i64 = value.parse().map_err(|_| CompilerError::SyntaxError {
         details: format!("Invalid duration value: {}", value),
     })?;
@@ -80,7 +80,7 @@ fn parse_duration(duration_str: &str) -> Result<Duration, CompilerError> {
 ///
 /// # Returns
 ///
-/// * `Result<(Vec<Op>, LifecycleConfig), CompilerError>` - The parsed operations, 
+/// * `Result<(Vec<Op>, LifecycleConfig), CompilerError>` - The parsed operations,
 ///   lifecycle configuration, or an error
 ///
 /// # Example
@@ -134,18 +134,18 @@ pub fn parse_dsl(source: &str) -> Result<(Vec<Op>, LifecycleConfig), CompilerErr
             // Extract template name
             let parts: Vec<&str> = trimmed_line.split_whitespace().collect();
             if parts.len() < 3 {
-                return Err(CompilerError::SyntaxError { 
-                    details: format!("Invalid template definition at line {}", pos.line) 
+                return Err(CompilerError::SyntaxError {
+                    details: format!("Invalid template definition at line {}", pos.line),
                 });
             }
-            
+
             // Remove quotes if present
             let template_name = if parts[1].starts_with('"') && parts[1].ends_with('"') {
                 parts[1][1..parts[1].len() - 1].to_string()
             } else {
                 parts[1].to_string()
             };
-            
+
             in_template_block = true;
             current_template_name = template_name;
             current_template = LifecycleConfig::default();
@@ -161,27 +161,27 @@ pub fn parse_dsl(source: &str) -> Result<(Vec<Op>, LifecycleConfig), CompilerErr
             // Extract template name to use
             let parts: Vec<&str> = trimmed_line.split_whitespace().collect();
             if parts.len() < 3 {
-                return Err(CompilerError::SyntaxError { 
-                    details: format!("Invalid governance use directive at line {}", pos.line) 
+                return Err(CompilerError::SyntaxError {
+                    details: format!("Invalid governance use directive at line {}", pos.line),
                 });
             }
-            
+
             // Remove quotes if present
             let template_name = if parts[2].starts_with('"') && parts[2].ends_with('"') {
                 parts[2][1..parts[2].len() - 1].to_string()
             } else {
                 parts[2].to_string()
             };
-            
+
             // Look up the template and merge it
             if let Some(template_config) = templates.get(&template_name) {
                 config.merge_from(template_config);
             } else {
-                return Err(CompilerError::SyntaxError { 
-                    details: format!("Unknown template '{}' at line {}", template_name, pos.line) 
+                return Err(CompilerError::SyntaxError {
+                    details: format!("Unknown template '{}' at line {}", template_name, pos.line),
                 });
             }
-            
+
             current_line += 1;
             continue;
         } else if trimmed_line == "governance {" {
@@ -205,7 +205,11 @@ pub fn parse_dsl(source: &str) -> Result<(Vec<Op>, LifecycleConfig), CompilerErr
             }
 
             // Target config is either the main config or the current template
-            let target_config = if in_template_block { &mut current_template } else { &mut config };
+            let target_config = if in_template_block {
+                &mut current_template
+            } else {
+                &mut config
+            };
 
             match parts[0] {
                 "quorumthreshold" => {
@@ -296,7 +300,11 @@ pub fn parse_dsl(source: &str) -> Result<(Vec<Op>, LifecycleConfig), CompilerErr
             } else if trimmed_line == "while:" {
                 crate::compiler::while_block::parse_while_block(&lines, &mut current_line, pos)?
             } else if trimmed_line.starts_with("def ") {
-                crate::compiler::function_block::parse_function_block(&lines, &mut current_line, pos)?
+                crate::compiler::function_block::parse_function_block(
+                    &lines,
+                    &mut current_line,
+                    pos,
+                )?
             } else if trimmed_line == "match:" {
                 crate::compiler::match_block::parse_match_block(&lines, &mut current_line, pos)?
             } else if trimmed_line.starts_with("loop ") {
@@ -335,7 +343,7 @@ mod tests {
         assert_eq!(parse_duration("72h").unwrap(), Duration::hours(72));
         assert_eq!(parse_duration("14d").unwrap(), Duration::days(14));
         assert_eq!(parse_duration("2w").unwrap(), Duration::weeks(2));
-        
+
         assert!(parse_duration("").is_err());
         assert!(parse_duration("abc").is_err());
         assert!(parse_duration("72x").is_err());
@@ -359,14 +367,14 @@ add
 "#;
 
         let (ops, config) = parse_dsl(source).unwrap();
-        
+
         // Check parsed config
         assert_eq!(config.quorum, Some(0.6));
         assert_eq!(config.threshold, Some(0.5));
         assert_eq!(config.min_deliberation, Some(Duration::hours(72)));
         assert_eq!(config.expires_in, Some(Duration::days(14)));
         assert_eq!(config.required_roles, vec!["member"]);
-        
+
         // Check regular operations were parsed
         assert_eq!(ops.len(), 3);
     }
@@ -381,18 +389,18 @@ add
 "#;
 
         let (ops, config) = parse_dsl(source).unwrap();
-        
+
         // Check default config
         assert_eq!(config.quorum, None);
         assert_eq!(config.threshold, None);
         assert_eq!(config.min_deliberation, None);
         assert_eq!(config.expires_in, None);
         assert_eq!(config.required_roles.len(), 0);
-        
+
         // Check regular operations were parsed
         assert_eq!(ops.len(), 3);
     }
-    
+
     #[test]
     fn test_parse_governance_template() {
         let source = r#"
@@ -411,18 +419,18 @@ add
 "#;
 
         let (ops, config) = parse_dsl(source).unwrap();
-        
+
         // Check template values were applied to config
         assert_eq!(config.quorum, Some(0.75));
         assert_eq!(config.threshold, Some(0.66));
         assert_eq!(config.min_deliberation, Some(Duration::hours(48)));
         assert_eq!(config.expires_in, Some(Duration::days(5)));
         assert_eq!(config.required_roles, vec!["core"]);
-        
+
         // Check regular operations were parsed
         assert_eq!(ops.len(), 3);
     }
-    
+
     #[test]
     fn test_governance_template_with_override() {
         let source = r#"
@@ -447,18 +455,18 @@ add
 "#;
 
         let (ops, config) = parse_dsl(source).unwrap();
-        
+
         // Check template values were applied, but overridden by explicit settings
         assert_eq!(config.quorum, Some(0.7)); // Overridden
         assert_eq!(config.threshold, Some(0.6)); // From template
         assert_eq!(config.min_deliberation, Some(Duration::hours(48))); // Overridden
         assert_eq!(config.expires_in, Some(Duration::days(7))); // From template
         assert_eq!(config.required_roles, vec!["member"]); // From template
-        
+
         // Check regular operations were parsed
         assert_eq!(ops.len(), 3);
     }
-    
+
     #[test]
     fn test_multiple_templates() {
         let source = r#"
@@ -480,15 +488,15 @@ push 100
 "#;
 
         let (ops, config) = parse_dsl(source).unwrap();
-        
+
         // Check emergency template was applied
         assert_eq!(config.quorum, Some(0.3));
         assert_eq!(config.threshold, Some(0.8));
         assert_eq!(config.min_deliberation, Some(Duration::hours(1)));
         assert_eq!(config.expires_in, Some(Duration::days(1)));
         assert_eq!(config.required_roles, vec!["guardian"]);
-        
+
         // Check regular operations were parsed
         assert_eq!(ops.len(), 1);
     }
-} 
+}

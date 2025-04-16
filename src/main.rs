@@ -1,5 +1,6 @@
 // pub mod storage;
 
+use icn_covm::api;
 use icn_covm::bytecode::{BytecodeCompiler, BytecodeExecution};
 use icn_covm::cli::federation::{federation_command, handle_federation_command};
 use icn_covm::cli::proposal::{handle_proposal_command, proposal_command};
@@ -15,7 +16,6 @@ use icn_covm::storage::implementations::in_memory::InMemoryStorage;
 use icn_covm::storage::traits::StorageBackend;
 use icn_covm::storage::utils::now;
 use icn_covm::vm::{VMError, VM};
-use icn_covm::api;
 
 use clap::{Arg, ArgAction, Command};
 use log::{debug, error, info, warn};

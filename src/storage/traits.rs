@@ -172,7 +172,7 @@ pub trait StorageExtensions: StorageBackend {
         key: &str,
         version: u64,
     ) -> StorageResult<Option<T>>;
-    
+
     /// Stores data as JSON in storage with authentication context from current user
     fn set_json_authed<T: Serialize>(
         &mut self,
@@ -183,7 +183,7 @@ pub trait StorageExtensions: StorageBackend {
     ) -> StorageResult<()> {
         self.set_json(Some(auth_context), namespace, key, value)
     }
-    
+
     /// Gets data as JSON from storage with authentication context from current user
     fn get_json_authed<T: DeserializeOwned>(
         &self,
@@ -193,7 +193,7 @@ pub trait StorageExtensions: StorageBackend {
     ) -> StorageResult<T> {
         self.get_json(Some(auth_context), namespace, key)
     }
-    
+
     /// Check if a key exists with authentication context
     fn contains_authed(
         &self,
@@ -203,7 +203,7 @@ pub trait StorageExtensions: StorageBackend {
     ) -> StorageResult<bool> {
         self.contains(Some(auth_context), namespace, key)
     }
-    
+
     /// List keys in a namespace with authentication context
     fn list_keys_authed(
         &self,
@@ -213,7 +213,7 @@ pub trait StorageExtensions: StorageBackend {
     ) -> StorageResult<Vec<String>> {
         self.list_keys(Some(auth_context), namespace, prefix)
     }
-    
+
     /// Delete a key with authentication context
     fn delete_authed(
         &mut self,
@@ -223,7 +223,7 @@ pub trait StorageExtensions: StorageBackend {
     ) -> StorageResult<()> {
         self.delete(Some(auth_context), namespace, key)
     }
-    
+
     /// Store versioning-aware JSON data with built-in conflict detection
     fn set_json_versioned<T: Serialize + DeserializeOwned>(
         &mut self,
@@ -238,10 +238,10 @@ pub trait StorageExtensions: StorageBackend {
             // Get the current version info
             if self.contains(auth, namespace, key)? {
                 let (_, version_info) = self.get_versioned(auth, namespace, key)?;
-                
+
                 // Check for version mismatch
                 if version_info.version != expected {
-                    return Err(StorageError::VersionConflict { 
+                    return Err(StorageError::VersionConflict {
                         key: key.to_string(),
                         expected,
                         actual: version_info.version,
@@ -249,10 +249,10 @@ pub trait StorageExtensions: StorageBackend {
                 }
             }
         }
-        
+
         // Store the value
         self.set_json(auth, namespace, key, value)?;
-        
+
         // Get the new version number
         let (_, version_info) = self.get_versioned(auth, namespace, key)?;
         Ok(version_info.version)
@@ -330,7 +330,10 @@ pub trait EconomicOperations: StorageBackend {
     ) -> StorageResult<()> {
         // Default implementation creates a resource metadata entry
         let key = format!("resources/{}/metadata", resource);
-        let metadata = format!("{{\"id\": \"{}\", \"namespace\": \"{}\"}}", resource, namespace);
+        let metadata = format!(
+            "{{\"id\": \"{}\", \"namespace\": \"{}\"}}",
+            resource, namespace
+        );
         self.set(auth, namespace, &key, metadata.as_bytes().to_vec())?;
         Ok(())
     }
@@ -365,15 +368,17 @@ pub trait EconomicOperations: StorageBackend {
         // Update balance
         let new_balance = current_balance + amount;
         self.set(
-            auth, 
-            namespace, 
-            &balance_key, 
-            new_balance.to_string().as_bytes().to_vec()
+            auth,
+            namespace,
+            &balance_key,
+            new_balance.to_string().as_bytes().to_vec(),
         )?;
 
         // Create event
         let event = StorageEvent {
-            user_id: auth.map(|a| a.user_id_string()).unwrap_or_else(|| "system".to_string()),
+            user_id: auth
+                .map(|a| a.user_id_string())
+                .unwrap_or_else(|| "system".to_string()),
             timestamp: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -381,7 +386,10 @@ pub trait EconomicOperations: StorageBackend {
             namespace: namespace.to_string(),
             key: balance_key,
             event_type: "mint".to_string(),
-            details: format!("Minted {} of {} for {}: {}", amount, resource, account, reason),
+            details: format!(
+                "Minted {} of {} for {}: {}",
+                amount, resource, account, reason
+            ),
         };
 
         Ok(((), Some(event)))
@@ -453,7 +461,9 @@ pub trait EconomicOperations: StorageBackend {
 
         // Create event
         let event = StorageEvent {
-            user_id: auth.map(|a| a.user_id_string()).unwrap_or_else(|| "system".to_string()),
+            user_id: auth
+                .map(|a| a.user_id_string())
+                .unwrap_or_else(|| "system".to_string()),
             timestamp: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -461,7 +471,10 @@ pub trait EconomicOperations: StorageBackend {
             namespace: namespace.to_string(),
             key: format!("{}->{}", from_key, to_key),
             event_type: "transfer".to_string(),
-            details: format!("Transferred {} of {} from {} to {}: {}", amount, resource, from, to, reason),
+            details: format!(
+                "Transferred {} of {} from {} to {}: {}",
+                amount, resource, from, to, reason
+            ),
         };
 
         Ok(((), Some(event)))
@@ -513,7 +526,9 @@ pub trait EconomicOperations: StorageBackend {
 
         // Create event
         let event = StorageEvent {
-            user_id: auth.map(|a| a.user_id_string()).unwrap_or_else(|| "system".to_string()),
+            user_id: auth
+                .map(|a| a.user_id_string())
+                .unwrap_or_else(|| "system".to_string()),
             timestamp: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -521,7 +536,10 @@ pub trait EconomicOperations: StorageBackend {
             namespace: namespace.to_string(),
             key: balance_key,
             event_type: "burn".to_string(),
-            details: format!("Burned {} of {} from {}: {}", amount, resource, account, reason),
+            details: format!(
+                "Burned {} of {} from {}: {}",
+                amount, resource, account, reason
+            ),
         };
 
         Ok(((), Some(event)))
@@ -554,7 +572,9 @@ pub trait EconomicOperations: StorageBackend {
 
         // Create event
         let event = StorageEvent {
-            user_id: auth.map(|a| a.user_id_string()).unwrap_or_else(|| "system".to_string()),
+            user_id: auth
+                .map(|a| a.user_id_string())
+                .unwrap_or_else(|| "system".to_string()),
             timestamp: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -562,7 +582,10 @@ pub trait EconomicOperations: StorageBackend {
             namespace: namespace.to_string(),
             key: balance_key,
             event_type: "get_balance".to_string(),
-            details: format!("Retrieved balance of {} for {}: {}", resource, account, balance),
+            details: format!(
+                "Retrieved balance of {} for {}: {}",
+                resource, account, balance
+            ),
         };
 
         Ok((balance, Some(event)))
@@ -609,7 +632,9 @@ pub trait EconomicOperations: StorageBackend {
 
         // Create event
         let event = StorageEvent {
-            user_id: auth.map(|a| a.user_id_string()).unwrap_or_else(|| "system".to_string()),
+            user_id: auth
+                .map(|a| a.user_id_string())
+                .unwrap_or_else(|| "system".to_string()),
             timestamp: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -625,18 +650,20 @@ pub trait EconomicOperations: StorageBackend {
 
     /// Store custom data
     fn store(
-        &mut self, 
+        &mut self,
         auth: Option<&AuthContext>,
         namespace: &str,
         key: &str,
-        value: Vec<u8>
+        value: Vec<u8>,
     ) -> StorageResult<((), Option<StorageEvent>)> {
         // Set the value
         self.set(auth, namespace, key, value)?;
 
         // Create event
         let event = StorageEvent {
-            user_id: auth.map(|a| a.user_id_string()).unwrap_or_else(|| "system".to_string()),
+            user_id: auth
+                .map(|a| a.user_id_string())
+                .unwrap_or_else(|| "system".to_string()),
             timestamp: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -652,17 +679,19 @@ pub trait EconomicOperations: StorageBackend {
 
     /// Load custom data
     fn load(
-        &self, 
+        &self,
         auth: Option<&AuthContext>,
         namespace: &str,
-        key: &str
+        key: &str,
     ) -> StorageResult<(Vec<u8>, Option<StorageEvent>)> {
         // Get the data
         let data = self.get(auth, namespace, key)?;
 
         // Create event
         let event = StorageEvent {
-            user_id: auth.map(|a| a.user_id_string()).unwrap_or_else(|| "system".to_string()),
+            user_id: auth
+                .map(|a| a.user_id_string())
+                .unwrap_or_else(|| "system".to_string()),
             timestamp: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()

@@ -1,5 +1,5 @@
 //! VM Operation execution logic
-//! 
+//!
 //! This module provides the execution logic for VM operations.
 //!
 //! The execution module handles:
@@ -35,19 +35,19 @@ where
 {
     /// Set the storage backend
     fn set_storage_backend(&mut self, backend: S);
-    
+
     /// Set the authentication context
     fn set_auth_context(&mut self, auth: AuthContext);
-    
+
     /// Set the namespace
     fn set_namespace(&mut self, namespace: &str);
-    
+
     /// Get the authentication context
     fn get_auth_context(&self) -> Option<&AuthContext>;
-    
+
     /// Execute a resource creation operation
     fn execute_create_resource(&mut self, resource: &str) -> Result<(), VMError>;
-    
+
     /// Execute a minting operation
     fn execute_mint(
         &mut self,
@@ -56,7 +56,7 @@ where
         amount: f64,
         reason: &Option<String>,
     ) -> Result<(), VMError>;
-    
+
     /// Execute a transfer operation
     fn execute_transfer(
         &mut self,
@@ -66,7 +66,7 @@ where
         amount: f64,
         reason: &Option<String>,
     ) -> Result<(), VMError>;
-    
+
     /// Execute a burn operation
     fn execute_burn(
         &mut self,
@@ -75,56 +75,58 @@ where
         amount: f64,
         reason: &Option<String>,
     ) -> Result<(), VMError>;
-    
+
     /// Execute a balance query operation
     fn execute_balance(&mut self, resource: &str, account: &str) -> Result<f64, VMError>;
-    
+
     /// Execute increment reputation for an identity
     fn execute_increment_reputation(
         &mut self,
         identity_id: &str,
         amount: Option<f64>,
     ) -> Result<(), VMError>;
-    
+
     /// Execute a storage operation with the given key/value
     fn execute_store_p(&mut self, key: &str, value: f64) -> Result<(), VMError>;
-    
+
     /// Load a value from storage
     fn execute_load_p(&mut self, key: &str) -> Result<f64, VMError>;
-    
+
     /// Fork the VM for transaction support
-    fn fork(&mut self) -> Result<Self, VMError> where Self: Sized;
-    
+    fn fork(&mut self) -> Result<Self, VMError>
+    where
+        Self: Sized;
+
     /// Commit a transaction from a forked VM
     fn commit_fork_transaction(&mut self) -> Result<(), VMError>;
-    
+
     /// Rollback a transaction from a forked VM
     fn rollback_fork_transaction(&mut self) -> Result<(), VMError>;
-    
+
     /// Emit a message to the output
     fn emit(&mut self, message: &str);
-    
+
     /// Emit an event with the given category and message
     fn emit_event(&mut self, category: &str, message: &str);
-    
+
     /// Get the current output buffer
     fn get_output(&self) -> &str;
-    
+
     /// Get the events as a vector
     fn get_events(&self) -> &[VMEvent];
-    
+
     /// Clear the output buffer
     fn clear_output(&mut self);
-    
+
     /// Execute arithmetic operations
     fn execute_arithmetic(&self, a: f64, b: f64, op: &str) -> Result<f64, VMError>;
-    
+
     /// Execute comparison operations
     fn execute_comparison(&self, a: f64, b: f64, op: &str) -> Result<f64, VMError>;
-    
+
     /// Execute logical operations
     fn execute_logical(&self, a: f64, op: &str) -> Result<f64, VMError>;
-    
+
     /// Execute binary logical operations
     fn execute_binary_logical(&self, a: f64, b: f64, op: &str) -> Result<f64, VMError>;
 }
@@ -171,7 +173,11 @@ where
     }
 
     /// Execute a storage operation with proper error handling
-    pub(crate) fn storage_operation<F, T>(&mut self, operation_name: &str, mut f: F) -> Result<T, VMError>
+    pub(crate) fn storage_operation<F, T>(
+        &mut self,
+        operation_name: &str,
+        mut f: F,
+    ) -> Result<T, VMError>
     where
         F: FnMut(&mut S, Option<&AuthContext>, &str) -> StorageResult<T>,
     {
@@ -181,11 +187,17 @@ where
                 match f(backend, auth_context, &self.namespace) {
                     Ok(value) => Ok(value),
                     Err(err) => Err(match err {
-                        StorageError::AuthenticationError { details } => VMError::InvalidSignature {
-                            identity_id: "unknown".to_string(),
-                            reason: details,
-                        },
-                        StorageError::PermissionDenied { user_id, action, key } => VMError::StorageError(format!(
+                        StorageError::AuthenticationError { details } => {
+                            VMError::InvalidSignature {
+                                identity_id: "unknown".to_string(),
+                                reason: details,
+                            }
+                        }
+                        StorageError::PermissionDenied {
+                            user_id,
+                            action,
+                            key,
+                        } => VMError::StorageError(format!(
                             "Permission denied for user '{}' during {}: operation '{}' on '{}'",
                             user_id, operation_name, action, key
                         )),
@@ -205,7 +217,11 @@ where
     }
 
     /// Convert a storage event to a VM event
-    fn storage_event_to_vm_event(&self, storage_event: &crate::storage::events::StorageEvent, category: &str) -> VMEvent {
+    fn storage_event_to_vm_event(
+        &self,
+        storage_event: &crate::storage::events::StorageEvent,
+        category: &str,
+    ) -> VMEvent {
         VMEvent {
             category: category.to_string(),
             message: format!("{}: {}", storage_event.event_type, storage_event.details),
@@ -246,40 +262,41 @@ where
         amount: f64,
         reason: &Option<String>,
     ) -> Result<(), VMError> {
-        let reason_str = reason.clone().unwrap_or_else(|| "No reason provided".to_string());
-        
+        let reason_str = reason
+            .clone()
+            .unwrap_or_else(|| "No reason provided".to_string());
+
         self.storage_operation("mint", |backend, auth, namespace| {
-            backend.mint(
-                auth,
-                namespace,
-                resource,
-                account,
-                amount as u64,
-                &reason_str,
-            )
-            .map(|(_, event_opt)| {
-                // Log any event generated
-                if let Some(storage_event) = event_opt {
-                    // Create VM event
-                    let vm_event = VMEvent {
-                        category: "economic".to_string(),
-                        message: format!("mint: {}", storage_event.details),
-                        timestamp: storage_event.timestamp,
-                    };
-                    // Return VMEvent for logging outside this closure
-                    Some(vm_event)
-                } else {
-                    None
-                }
-            })
+            backend
+                .mint(
+                    auth,
+                    namespace,
+                    resource,
+                    account,
+                    amount as u64,
+                    &reason_str,
+                )
+                .map(|(_, event_opt)| {
+                    // Log any event generated
+                    if let Some(storage_event) = event_opt {
+                        // Create VM event
+                        let vm_event = VMEvent {
+                            category: "economic".to_string(),
+                            message: format!("mint: {}", storage_event.details),
+                            timestamp: storage_event.timestamp,
+                        };
+                        // Return VMEvent for logging outside this closure
+                        Some(vm_event)
+                    } else {
+                        None
+                    }
+                })
         })
         .map(|event_opt| {
             // Log the event if one was generated
             if let Some(event) = event_opt {
                 self.events.push(event);
             }
-            // Return unit value
-            ()
         })
     }
 
@@ -292,41 +309,42 @@ where
         amount: f64,
         reason: &Option<String>,
     ) -> Result<(), VMError> {
-        let reason_str = reason.clone().unwrap_or_else(|| "No reason provided".to_string());
-        
+        let reason_str = reason
+            .clone()
+            .unwrap_or_else(|| "No reason provided".to_string());
+
         self.storage_operation("transfer", |backend, auth, namespace| {
-            backend.transfer(
-                auth,
-                namespace,
-                resource,
-                from,
-                to,
-                amount as u64,
-                &reason_str,
-            )
-            .map(|(_, event_opt)| {
-                // Log any event generated
-                if let Some(storage_event) = event_opt {
-                    // Create VM event
-                    let vm_event = VMEvent {
-                        category: "economic".to_string(),
-                        message: format!("transfer: {}", storage_event.details),
-                        timestamp: storage_event.timestamp,
-                    };
-                    // Return VMEvent for logging outside this closure
-                    Some(vm_event)
-                } else {
-                    None
-                }
-            })
+            backend
+                .transfer(
+                    auth,
+                    namespace,
+                    resource,
+                    from,
+                    to,
+                    amount as u64,
+                    &reason_str,
+                )
+                .map(|(_, event_opt)| {
+                    // Log any event generated
+                    if let Some(storage_event) = event_opt {
+                        // Create VM event
+                        let vm_event = VMEvent {
+                            category: "economic".to_string(),
+                            message: format!("transfer: {}", storage_event.details),
+                            timestamp: storage_event.timestamp,
+                        };
+                        // Return VMEvent for logging outside this closure
+                        Some(vm_event)
+                    } else {
+                        None
+                    }
+                })
         })
         .map(|event_opt| {
             // Log the event if one was generated
             if let Some(event) = event_opt {
                 self.events.push(event);
             }
-            // Return unit value
-            ()
         })
     }
 
@@ -338,47 +356,49 @@ where
         amount: f64,
         reason: &Option<String>,
     ) -> Result<(), VMError> {
-        let reason_str = reason.clone().unwrap_or_else(|| "No reason provided".to_string());
-        
+        let reason_str = reason
+            .clone()
+            .unwrap_or_else(|| "No reason provided".to_string());
+
         self.storage_operation("burn", |backend, auth, namespace| {
-            backend.burn(
-                auth,
-                namespace,
-                resource,
-                account,
-                amount as u64,
-                &reason_str,
-            )
-            .map(|(_, event_opt)| {
-                // Log any event generated
-                if let Some(storage_event) = event_opt {
-                    // Create VM event
-                    let vm_event = VMEvent {
-                        category: "economic".to_string(),
-                        message: format!("burn: {}", storage_event.details),
-                        timestamp: storage_event.timestamp,
-                    };
-                    // Return VMEvent for logging outside this closure
-                    Some(vm_event)
-                } else {
-                    None
-                }
-            })
+            backend
+                .burn(
+                    auth,
+                    namespace,
+                    resource,
+                    account,
+                    amount as u64,
+                    &reason_str,
+                )
+                .map(|(_, event_opt)| {
+                    // Log any event generated
+                    if let Some(storage_event) = event_opt {
+                        // Create VM event
+                        let vm_event = VMEvent {
+                            category: "economic".to_string(),
+                            message: format!("burn: {}", storage_event.details),
+                            timestamp: storage_event.timestamp,
+                        };
+                        // Return VMEvent for logging outside this closure
+                        Some(vm_event)
+                    } else {
+                        None
+                    }
+                })
         })
         .map(|event_opt| {
             // Log the event if one was generated
             if let Some(event) = event_opt {
                 self.events.push(event);
             }
-            // Return unit value
-            ()
         })
     }
 
     /// Execute a balance query operation
     fn execute_balance(&mut self, resource: &str, account: &str) -> Result<f64, VMError> {
         self.storage_operation("get_balance", |backend, auth, namespace| {
-            backend.get_balance(auth, namespace, resource, account)
+            backend
+                .get_balance(auth, namespace, resource, account)
                 .map(|(balance, event_opt)| {
                     // Log any event generated
                     if let Some(storage_event) = event_opt {
@@ -411,7 +431,7 @@ where
         let result = self.storage_operation("create_resource", |backend, auth, namespace| {
             backend.create_resource(auth, namespace, resource)
         })?;
-        
+
         // Create and log an event for resource creation
         let event = VMEvent {
             category: "economic".to_string(),
@@ -422,7 +442,7 @@ where
                 .as_secs(),
         };
         self.events.push(event);
-        
+
         Ok(())
     }
 
@@ -446,36 +466,39 @@ where
         // If we have a storage backend, persist the reputation
         if self.storage_backend.is_some() {
             // Get current reputation
-            let current = self.storage_operation("get_reputation", |backend, auth, namespace| {
-                backend.get_reputation(auth, namespace, identity_id)
-                    .map(|(rep, event_opt)| {
-                        // Log any event generated
-                        if let Some(storage_event) = event_opt {
-                            // Create VM event
-                            let vm_event = VMEvent {
-                                category: "reputation".to_string(),
-                                message: format!("get_reputation: {}", storage_event.details),
-                                timestamp: storage_event.timestamp,
-                            };
-                            // Return the reputation value and event
-                            (rep, Some(vm_event))
-                        } else {
-                            (rep, None)
-                        }
-                    })
-            })
-            .map(|(rep, event_opt)| {
-                // Log the event if one was generated
-                if let Some(event) = event_opt {
-                    self.events.push(event);
-                }
-                // Return the reputation value
-                rep
-            })?;
+            let current = self
+                .storage_operation("get_reputation", |backend, auth, namespace| {
+                    backend
+                        .get_reputation(auth, namespace, identity_id)
+                        .map(|(rep, event_opt)| {
+                            // Log any event generated
+                            if let Some(storage_event) = event_opt {
+                                // Create VM event
+                                let vm_event = VMEvent {
+                                    category: "reputation".to_string(),
+                                    message: format!("get_reputation: {}", storage_event.details),
+                                    timestamp: storage_event.timestamp,
+                                };
+                                // Return the reputation value and event
+                                (rep, Some(vm_event))
+                            } else {
+                                (rep, None)
+                            }
+                        })
+                })
+                .map(|(rep, event_opt)| {
+                    // Log the event if one was generated
+                    if let Some(event) = event_opt {
+                        self.events.push(event);
+                    }
+                    // Return the reputation value
+                    rep
+                })?;
 
             // Update reputation
             self.storage_operation("set_reputation", |backend, auth, namespace| {
-                backend.set_reputation(auth, namespace, identity_id, current + amount_val)
+                backend
+                    .set_reputation(auth, namespace, identity_id, current + amount_val)
                     .map(|(_, event_opt)| {
                         // Log any event generated
                         if let Some(storage_event) = event_opt {
@@ -506,27 +529,23 @@ where
     /// Execute a storage operation with the given key/value
     fn execute_store_p(&mut self, key: &str, value: f64) -> Result<(), VMError> {
         self.storage_operation("store_p", |backend, auth, namespace| {
-            backend.store(
-                auth,
-                namespace,
-                key,
-                value.to_string().as_bytes().to_vec()
-            )
-            .map(|(_, event_opt)| {
-                // Log any event generated
-                if let Some(storage_event) = event_opt {
-                    // Create VM event
-                    let vm_event = VMEvent {
-                        category: "storage".to_string(),
-                        message: format!("store: {}", storage_event.details),
-                        timestamp: storage_event.timestamp,
-                    };
-                    // Return the event
-                    Some(vm_event)
-                } else {
-                    None
-                }
-            })
+            backend
+                .store(auth, namespace, key, value.to_string().as_bytes().to_vec())
+                .map(|(_, event_opt)| {
+                    // Log any event generated
+                    if let Some(storage_event) = event_opt {
+                        // Create VM event
+                        let vm_event = VMEvent {
+                            category: "storage".to_string(),
+                            message: format!("store: {}", storage_event.details),
+                            timestamp: storage_event.timestamp,
+                        };
+                        // Return the event
+                        Some(vm_event)
+                    } else {
+                        None
+                    }
+                })
         })
         .map(|event_opt| {
             // Log the event if one was generated
@@ -538,9 +557,9 @@ where
 
     /// Load a value from storage
     fn execute_load_p(&mut self, key: &str) -> Result<f64, VMError> {
-        let bytes = self.storage_operation("load_p", |backend, auth, namespace| {
-            backend.load(auth, namespace, key)
-                .map(|(data, event_opt)| {
+        let bytes = self
+            .storage_operation("load_p", |backend, auth, namespace| {
+                backend.load(auth, namespace, key).map(|(data, event_opt)| {
                     // Log any event generated
                     if let Some(storage_event) = event_opt {
                         // Create VM event
@@ -555,11 +574,14 @@ where
                         (data, None)
                     }
                 })
-        })?
-        .0; // Extract just the data part from the tuple
+            })?
+            .0; // Extract just the data part from the tuple
 
         // Process any events that were returned
-        if let Some(event) = self.storage_operation("load_p", |_, _, _| Ok(((), None)))?.1 {
+        if let Some(event) = self
+            .storage_operation("load_p", |_, _, _| Ok(((), None)))?
+            .1
+        {
             self.events.push(event);
         }
 
@@ -587,13 +609,13 @@ where
                     events: Vec::new(), // Start with empty events, we'll merge later if committed
                     transaction_active: true,
                 };
-                
+
                 if let Some(backend) = &mut forked.storage_backend {
                     backend.begin_transaction().map_err(|e| {
                         VMError::StorageError(format!("Failed to begin transaction: {:?}", e))
                     })?;
                 }
-                
+
                 Some(forked)
             }
             None => None,
@@ -698,7 +720,10 @@ where
                     Ok(a % b)
                 }
             }
-            _ => Err(VMError::NotImplemented(format!("Unknown arithmetic operation: {}", op))),
+            _ => Err(VMError::NotImplemented(format!(
+                "Unknown arithmetic operation: {}",
+                op
+            ))),
         }
     }
 
@@ -709,9 +734,14 @@ where
             "eq" => (a - b).abs() < f64::EPSILON,
             "lt" => a < b,
             "gt" => a > b,
-            _ => return Err(VMError::NotImplemented(format!("Unknown comparison operation: {}", op))),
+            _ => {
+                return Err(VMError::NotImplemented(format!(
+                    "Unknown comparison operation: {}",
+                    op
+                )))
+            }
         };
-        
+
         // Convert boolean to f64 (0.0 for false, 1.0 for true)
         Ok(if result { 1.0 } else { 0.0 })
     }
@@ -721,9 +751,14 @@ where
         // For NOT operation
         let result = match op {
             "not" => a == 0.0, // NOT truthy is falsey, NOT falsey is truthy
-            _ => return Err(VMError::NotImplemented(format!("Unknown logical operation: {}", op))),
+            _ => {
+                return Err(VMError::NotImplemented(format!(
+                    "Unknown logical operation: {}",
+                    op
+                )))
+            }
         };
-        
+
         // Convert boolean to f64 (0.0 for false, 1.0 for true)
         Ok(if result { 1.0 } else { 0.0 })
     }
@@ -733,13 +768,18 @@ where
         // For binary operations (AND, OR)
         let a_truthy = a != 0.0;
         let b_truthy = b != 0.0;
-        
+
         let result = match op {
             "and" => a_truthy && b_truthy,
             "or" => a_truthy || b_truthy,
-            _ => return Err(VMError::NotImplemented(format!("Unknown binary logical operation: {}", op))),
+            _ => {
+                return Err(VMError::NotImplemented(format!(
+                    "Unknown binary logical operation: {}",
+                    op
+                )))
+            }
         };
-        
+
         // Convert boolean to f64 (0.0 for false, 1.0 for true)
         Ok(if result { 1.0 } else { 0.0 })
     }
@@ -759,13 +799,13 @@ mod tests {
     #[test]
     fn test_arithmetic_operations() {
         let exec = VMExecution::<InMemoryStorage>::new();
-        
+
         assert_eq!(exec.execute_arithmetic(5.0, 3.0, "add").unwrap(), 8.0);
         assert_eq!(exec.execute_arithmetic(5.0, 3.0, "sub").unwrap(), 2.0);
         assert_eq!(exec.execute_arithmetic(5.0, 3.0, "mul").unwrap(), 15.0);
         assert_eq!(exec.execute_arithmetic(6.0, 3.0, "div").unwrap(), 2.0);
         assert_eq!(exec.execute_arithmetic(7.0, 3.0, "mod").unwrap(), 1.0);
-        
+
         // Test division by zero
         assert!(matches!(
             exec.execute_arithmetic(5.0, 0.0, "div"),
@@ -776,15 +816,15 @@ mod tests {
     #[test]
     fn test_comparison_operations() {
         let exec = VMExecution::<InMemoryStorage>::new();
-        
+
         // Equal
         assert_eq!(exec.execute_comparison(5.0, 5.0, "eq").unwrap(), 1.0);
         assert_eq!(exec.execute_comparison(5.0, 3.0, "eq").unwrap(), 0.0);
-        
+
         // Less than
         assert_eq!(exec.execute_comparison(3.0, 5.0, "lt").unwrap(), 1.0);
         assert_eq!(exec.execute_comparison(5.0, 3.0, "lt").unwrap(), 0.0);
-        
+
         // Greater than
         assert_eq!(exec.execute_comparison(5.0, 3.0, "gt").unwrap(), 1.0);
         assert_eq!(exec.execute_comparison(3.0, 5.0, "gt").unwrap(), 0.0);
@@ -793,17 +833,17 @@ mod tests {
     #[test]
     fn test_logical_operations() {
         let exec = VMExecution::<InMemoryStorage>::new();
-        
+
         // NOT
         assert_eq!(exec.execute_logical(0.0, "not").unwrap(), 1.0);
         assert_eq!(exec.execute_logical(1.0, "not").unwrap(), 0.0);
-        
+
         // AND
         assert_eq!(exec.execute_binary_logical(0.0, 0.0, "and").unwrap(), 0.0);
         assert_eq!(exec.execute_binary_logical(1.0, 0.0, "and").unwrap(), 0.0);
         assert_eq!(exec.execute_binary_logical(0.0, 1.0, "and").unwrap(), 0.0);
         assert_eq!(exec.execute_binary_logical(1.0, 1.0, "and").unwrap(), 1.0);
-        
+
         // OR
         assert_eq!(exec.execute_binary_logical(0.0, 0.0, "or").unwrap(), 0.0);
         assert_eq!(exec.execute_binary_logical(1.0, 0.0, "or").unwrap(), 1.0);
@@ -814,12 +854,12 @@ mod tests {
     #[test]
     fn test_emit_event() {
         let mut exec = VMExecution::<InMemoryStorage>::new();
-        
+
         exec.emit_event("test", "Test message");
-        
+
         let events = exec.get_events();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].category, "test");
         assert_eq!(events[0].message, "Test message");
     }
-} 
+}

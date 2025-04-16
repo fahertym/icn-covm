@@ -1,5 +1,5 @@
 //! Virtual Machine for Cooperative Value Network Operations
-//! 
+//!
 //! This module contains the implementation of the VM that executes operations
 //! for the cooperative value network. The VM is designed with a modular architecture
 //! to improve maintainability, testability, and extensibility.
@@ -14,7 +14,7 @@
 //! - **memory.rs**: Handles variable storage, function definitions, scope management and call frames.
 //!   Defined by the `MemoryScope` trait and implemented by `VMMemory`.
 //!
-//! - **execution.rs**: Implements operation execution logic, including storage interactions and 
+//! - **execution.rs**: Implements operation execution logic, including storage interactions and
 //!   transaction management. Defined by the `ExecutorOps` trait and implemented by `VMExecution`.
 //!
 //! - **types.rs**: Defines core data structures like operations (`Op`), call frames, and events.
@@ -48,21 +48,21 @@
 
 // Re-export main VM types for backward compatibility
 pub mod errors;
-pub mod stack;
-pub mod memory;
 pub mod execution;
+pub mod memory;
+pub mod stack;
 pub mod types;
 
 pub use errors::VMError;
-pub use types::{Op, CallFrame, LoopControl, VMEvent};
-pub use stack::VMStack;
-pub use memory::VMMemory;
 pub use execution::VMExecution;
+pub use memory::VMMemory;
+pub use stack::VMStack;
+pub use types::{CallFrame, LoopControl, Op, VMEvent};
 
 // Re-export the traits for public use
-pub use stack::StackOps;
-pub use memory::MemoryScope;
 pub use execution::ExecutorOps;
+pub use memory::MemoryScope;
+pub use stack::StackOps;
 
 // Main VM struct that coordinates components
 mod vm;
@@ -72,4 +72,4 @@ pub use vm::VM;
 #[cfg(test)]
 mod tests {
     pub use crate::vm::vm::tests::*;
-} 
+}

@@ -60,54 +60,82 @@ use uuid;
 /// - Type-safe state transitions and error handling
 trait VMProposalExtensions<S: StorageExtensions + Clone + Debug> {
     /// Get the proposal lifecycle by ID
-    fn get_proposal_lifecycle(&self, proposal_id: &str) -> Result<ProposalLifecycle, Box<dyn Error>>;
-    
+    fn get_proposal_lifecycle(
+        &self,
+        proposal_id: &str,
+    ) -> Result<ProposalLifecycle, Box<dyn Error>>;
+
     /// Get the proposal metadata by ID
     fn get_proposal(&self, proposal_id: &str) -> Result<Proposal, Box<dyn Error>>;
-    
+
     /// Create a proposal in storage
-    fn create_proposal(&mut self, proposal: Proposal, lifecycle: ProposalLifecycle, description: &str, logic: &str) -> Result<(), Box<dyn Error>>;
-    
+    fn create_proposal(
+        &mut self,
+        proposal: Proposal,
+        lifecycle: ProposalLifecycle,
+        description: &str,
+        logic: &str,
+    ) -> Result<(), Box<dyn Error>>;
+
     /// Update a proposal's state
-    fn update_proposal_state(&mut self, proposal_id: &str, new_state: ProposalState) -> Result<(), Box<dyn Error>>;
-    
+    fn update_proposal_state(
+        &mut self,
+        proposal_id: &str,
+        new_state: ProposalState,
+    ) -> Result<(), Box<dyn Error>>;
+
     /// Cast a vote on a proposal
-    fn cast_vote(&mut self, proposal_id: &str, voter_id: &str, vote_value: &str, delegated_by: Option<&str>) -> Result<(), Box<dyn Error>>;
-    
+    fn cast_vote(
+        &mut self,
+        proposal_id: &str,
+        voter_id: &str,
+        vote_value: &str,
+        delegated_by: Option<&str>,
+    ) -> Result<(), Box<dyn Error>>;
+
     /// Get all votes for a proposal
-    fn get_proposal_votes(&self, proposal_id: &str) -> Result<Vec<(String, String)>, Box<dyn Error>>;
-    
+    fn get_proposal_votes(
+        &self,
+        proposal_id: &str,
+    ) -> Result<Vec<(String, String)>, Box<dyn Error>>;
+
     /// Execute a proposal
     fn execute_proposal(&mut self, proposal_id: &str) -> Result<(), Box<dyn Error>>;
-    
+
     /// Add a comment to a proposal
-    fn add_proposal_comment(&mut self, proposal_id: &str, author: &str, content: &str, parent_id: Option<&str>) -> Result<String, Box<dyn Error>>;
-    
+    fn add_proposal_comment(
+        &mut self,
+        proposal_id: &str,
+        author: &str,
+        content: &str,
+        parent_id: Option<&str>,
+    ) -> Result<String, Box<dyn Error>>;
+
     /// Get proposal key prefix (for standardized key naming)
     fn proposal_key_prefix(proposal_id: &str) -> String {
         format!("governance_proposals/{}", proposal_id)
     }
-    
+
     /// Get proposal lifecycle key
     fn proposal_lifecycle_key(proposal_id: &str) -> String {
         format!("{}/lifecycle", Self::proposal_key_prefix(proposal_id))
     }
-    
+
     /// Get proposal description key
     fn proposal_description_key(proposal_id: &str) -> String {
         format!("{}/description", Self::proposal_key_prefix(proposal_id))
     }
-    
+
     /// Get proposal logic key
     fn proposal_logic_key(proposal_id: &str) -> String {
         format!("{}/logic", Self::proposal_key_prefix(proposal_id))
     }
-    
+
     /// Get proposal votes prefix
     fn proposal_votes_prefix(proposal_id: &str) -> String {
         format!("{}/votes", Self::proposal_key_prefix(proposal_id))
     }
-    
+
     /// Get proposal comments prefix
     fn proposal_comments_prefix(proposal_id: &str) -> String {
         format!("{}/comments", Self::proposal_key_prefix(proposal_id))
@@ -115,120 +143,148 @@ trait VMProposalExtensions<S: StorageExtensions + Clone + Debug> {
 }
 
 /// Implement the VMProposalExtensions trait for VM
-impl<S> VMProposalExtensions<S> for VM<S> 
-where 
-    S: StorageExtensions + Send + Sync + Clone + Debug + 'static 
+impl<S> VMProposalExtensions<S> for VM<S>
+where
+    S: StorageExtensions + Send + Sync + Clone + Debug + 'static,
 {
-    fn get_proposal_lifecycle(&self, proposal_id: &str) -> Result<ProposalLifecycle, Box<dyn Error>> {
+    fn get_proposal_lifecycle(
+        &self,
+        proposal_id: &str,
+    ) -> Result<ProposalLifecycle, Box<dyn Error>> {
         let storage = self.get_storage_backend().ok_or("Storage not available")?;
         let auth_context_opt = self.get_auth_context();
         let namespace = self.get_namespace().unwrap_or("default");
-        
+
         let lifecycle_key = Self::proposal_lifecycle_key(proposal_id);
         storage
             .get_json(auth_context_opt, &namespace, &lifecycle_key)
             .map_err(|e| format!("Failed to get proposal lifecycle: {}", e).into())
     }
-    
+
     fn get_proposal(&self, proposal_id: &str) -> Result<Proposal, Box<dyn Error>> {
         let storage = self.get_storage_backend().ok_or("Storage not available")?;
         let auth_context_opt = self.get_auth_context();
         let namespace = self.get_namespace().unwrap_or("default");
-        
+
         let proposal_key = Self::proposal_key_prefix(proposal_id);
         storage
             .get_json(auth_context_opt, &namespace, &proposal_key)
             .map_err(|e| format!("Failed to get proposal: {}", e).into())
     }
-    
-    fn create_proposal(&mut self, proposal: Proposal, lifecycle: ProposalLifecycle, description: &str, logic: &str) -> Result<(), Box<dyn Error>> {
+
+    fn create_proposal(
+        &mut self,
+        proposal: Proposal,
+        lifecycle: ProposalLifecycle,
+        description: &str,
+        logic: &str,
+    ) -> Result<(), Box<dyn Error>> {
         let proposal_id = proposal.id.clone();
         let mut forked = self.fork()?;
-        let mut storage = forked.get_storage_backend().ok_or("Storage not available")?.clone();
+        let mut storage = forked
+            .get_storage_backend()
+            .ok_or("Storage not available")?
+            .clone();
         let auth_context_opt = forked.get_auth_context();
         let namespace = forked.get_namespace().unwrap_or("default");
-        
+
         // Store the proposal metadata
         let proposal_key = Self::proposal_key_prefix(&proposal_id);
         storage
             .set_json(auth_context_opt, &namespace, &proposal_key, &proposal)
             .map_err(|e| format!("Failed to store proposal: {}", e))?;
-            
+
         // Store lifecycle data
         let lifecycle_key = Self::proposal_lifecycle_key(&proposal_id);
         storage
             .set_json(auth_context_opt, &namespace, &lifecycle_key, &lifecycle)
             .map_err(|e| format!("Failed to store proposal lifecycle: {}", e))?;
-            
+
         // Store description
         let description_key = Self::proposal_description_key(&proposal_id);
         storage
             .set(
-                auth_context_opt, 
-                &namespace, 
-                &description_key, 
-                description.as_bytes().to_vec()
+                auth_context_opt,
+                &namespace,
+                &description_key,
+                description.as_bytes().to_vec(),
             )
             .map_err(|e| format!("Failed to store proposal description: {}", e))?;
-        
+
         // Store logic
         let logic_key = Self::proposal_logic_key(&proposal_id);
         storage
             .set(
-                auth_context_opt, 
-                &namespace, 
-                &logic_key, 
-                logic.as_bytes().to_vec()
+                auth_context_opt,
+                &namespace,
+                &logic_key,
+                logic.as_bytes().to_vec(),
             )
             .map_err(|e| format!("Failed to store proposal logic: {}", e))?;
-        
+
         // Commit the transaction
         self.commit_fork_transaction()?;
-        
+
         Ok(())
     }
-    
-    fn update_proposal_state(&mut self, proposal_id: &str, new_state: ProposalState) -> Result<(), Box<dyn Error>> {
+
+    fn update_proposal_state(
+        &mut self,
+        proposal_id: &str,
+        new_state: ProposalState,
+    ) -> Result<(), Box<dyn Error>> {
         // Create a fork for the state update transaction
         let mut forked = self.fork()?;
-        let mut storage = forked.get_storage_backend().ok_or("Storage not available")?.clone();
+        let mut storage = forked
+            .get_storage_backend()
+            .ok_or("Storage not available")?
+            .clone();
         let auth_context_opt = forked.get_auth_context();
         let namespace = forked.get_namespace().unwrap_or("default");
-        
+
         // Load the current proposal lifecycle
         let lifecycle_key = Self::proposal_lifecycle_key(proposal_id);
         let mut lifecycle = storage
             .get_json::<ProposalLifecycle>(auth_context_opt, &namespace, &lifecycle_key)
             .map_err(|e| format!("Failed to load proposal lifecycle: {}", e))?;
-        
+
         // Update the state and add to history
         lifecycle.state = new_state.clone();
         lifecycle.history.push((chrono::Utc::now(), new_state));
-        
+
         // Save the updated lifecycle
         storage
             .set_json(auth_context_opt, &namespace, &lifecycle_key, &lifecycle)
             .map_err(|e| format!("Failed to update proposal state: {}", e))?;
-            
+
         // Commit the transaction
         self.commit_fork_transaction()?;
-        
+
         Ok(())
     }
-    
-    fn cast_vote(&mut self, proposal_id: &str, voter_id: &str, vote_value: &str, delegated_by: Option<&str>) -> Result<(), Box<dyn Error>> {
+
+    fn cast_vote(
+        &mut self,
+        proposal_id: &str,
+        voter_id: &str,
+        vote_value: &str,
+        delegated_by: Option<&str>,
+    ) -> Result<(), Box<dyn Error>> {
         // Create a fork for the vote transaction
         let mut forked = self.fork()?;
-        let mut storage = forked.get_storage_backend().ok_or("Storage not available")?.clone();
+        let mut storage = forked
+            .get_storage_backend()
+            .ok_or("Storage not available")?
+            .clone();
         let auth_context_opt = forked.get_auth_context();
         let namespace = forked.get_namespace().unwrap_or("default");
-        
+
         // Check if proposal exists
         let proposal_key = Self::proposal_key_prefix(proposal_id);
         if !storage.contains(auth_context_opt, &namespace, &proposal_key)? {
             return Err(format!("Proposal with ID '{}' not found", proposal_id).into());
         }
-        
+
         // Create the vote data structure
         let vote_data = serde_json::json!({
             "voter": voter_id,
@@ -236,72 +292,80 @@ where
             "timestamp": chrono::Utc::now().to_rfc3339(),
             "delegated_by": delegated_by,
         });
-        
+
         // Create the vote key
         let vote_key = format!("{}/{}", Self::proposal_votes_prefix(proposal_id), voter_id);
-        
+
         // Store the vote
         storage
             .set_json(auth_context_opt, &namespace, &vote_key, &vote_data)
             .map_err(|e| format!("Failed to store vote: {}", e))?;
-            
+
         // Commit the transaction
         self.commit_fork_transaction()?;
-        
+
         Ok(())
     }
-    
-    fn get_proposal_votes(&self, proposal_id: &str) -> Result<Vec<(String, String)>, Box<dyn Error>> {
+
+    fn get_proposal_votes(
+        &self,
+        proposal_id: &str,
+    ) -> Result<Vec<(String, String)>, Box<dyn Error>> {
         let storage = self.get_storage_backend().ok_or("Storage not available")?;
         let auth_context_opt = self.get_auth_context();
         let namespace = self.get_namespace().unwrap_or("default");
-        
+
         // Define the votes prefix
         let votes_prefix = Self::proposal_votes_prefix(proposal_id);
-        
+
         // Get all vote keys for this proposal
         let vote_keys = storage.list_keys(auth_context_opt, &namespace, Some(&votes_prefix))?;
-        
+
         // Load each vote
         let mut votes = Vec::new();
         for key in vote_keys {
             // Get the vote data
-            let vote_data: serde_json::Value = storage.get_json(auth_context_opt, &namespace, &key)?;
-            
+            let vote_data: serde_json::Value =
+                storage.get_json(auth_context_opt, &namespace, &key)?;
+
             // Extract the vote value, defaulting to "abstain" if not found
-            let vote_value = vote_data.get("vote")
+            let vote_value = vote_data
+                .get("vote")
                 .and_then(|v| v.as_str())
                 .unwrap_or("abstain")
                 .to_string();
-            
+
             // Extract the voter ID from the key
             let voter_id = key.split('/').last().unwrap_or("unknown").to_string();
-            
+
             // Add to our results
             votes.push((voter_id, vote_value));
         }
-        
+
         Ok(votes)
     }
-    
+
     fn execute_proposal(&mut self, proposal_id: &str) -> Result<(), Box<dyn Error>> {
         // Create a fork for mutations
         let mut forked = self.fork()?;
-        let mut storage = forked.get_storage_backend().ok_or("Storage not available")?.clone();
+        let mut storage = forked
+            .get_storage_backend()
+            .ok_or("Storage not available")?
+            .clone();
         let auth_context = forked.get_auth_context();
         let namespace = forked.get_namespace().unwrap_or("default");
-        
+
         // Load the proposal lifecycle
         let lifecycle_key = Self::proposal_lifecycle_key(proposal_id);
         let mut proposal_lifecycle: ProposalLifecycle = storage
             .get_json(auth_context, &namespace, &lifecycle_key)
             .map_err(|e| format!("Failed to load proposal lifecycle: {}", e))?;
-            
+
         // Check if proposal has already been executed
         if matches!(proposal_lifecycle.state, ProposalState::Executed) {
             return Err(format!("Proposal '{}' has already been executed", proposal_id).into());
         }
-        
+
         // Load the logic content
         let logic_key = Self::proposal_logic_key(proposal_id);
         let logic_content = match storage.get(auth_context, &namespace, &logic_key) {
@@ -310,89 +374,129 @@ where
                     Ok(content) => content,
                     Err(e) => {
                         let error_msg = format!("Invalid UTF-8 in logic file: {}", e);
-                        
+
                         // Update execution status
-                        proposal_lifecycle.execution_status = Some(ExecutionStatus::Failure(error_msg.clone()));
-                        storage.set_json(auth_context, &namespace, &lifecycle_key, &proposal_lifecycle)?;
-                        
+                        proposal_lifecycle.execution_status =
+                            Some(ExecutionStatus::Failure(error_msg.clone()));
+                        storage.set_json(
+                            auth_context,
+                            &namespace,
+                            &lifecycle_key,
+                            &proposal_lifecycle,
+                        )?;
+
                         return Err(error_msg.into());
                     }
                 }
-            },
+            }
             Err(e) => {
                 let error_msg = format!("Failed to load logic file: {}", e);
-                
+
                 // Update execution status
-                proposal_lifecycle.execution_status = Some(ExecutionStatus::Failure(error_msg.clone()));
-                storage.set_json(auth_context, &namespace, &lifecycle_key, &proposal_lifecycle)?;
-                
+                proposal_lifecycle.execution_status =
+                    Some(ExecutionStatus::Failure(error_msg.clone()));
+                storage.set_json(
+                    auth_context,
+                    &namespace,
+                    &lifecycle_key,
+                    &proposal_lifecycle,
+                )?;
+
                 return Err(error_msg.into());
             }
         };
-        
+
         // Parse the DSL content
         let (ops, _) = match parse_dsl(&logic_content) {
             Ok(result) => result,
             Err(e) => {
                 let error_msg = format!("Failed to parse DSL: {}", e);
-                
+
                 // Update execution status
-                proposal_lifecycle.execution_status = Some(ExecutionStatus::Failure(error_msg.clone()));
-                storage.set_json(auth_context, &namespace, &lifecycle_key, &proposal_lifecycle)?;
-                
+                proposal_lifecycle.execution_status =
+                    Some(ExecutionStatus::Failure(error_msg.clone()));
+                storage.set_json(
+                    auth_context,
+                    &namespace,
+                    &lifecycle_key,
+                    &proposal_lifecycle,
+                )?;
+
                 return Err(error_msg.into());
             }
         };
-        
+
         // Execute the operations within the fork
         let execution_result = forked.execute(&ops);
-        
+
         // Update the proposal lifecycle based on execution result
         match execution_result {
             Ok(_) => {
                 // Update proposal state to Executed with success status
                 proposal_lifecycle.state = ProposalState::Executed;
                 proposal_lifecycle.execution_status = Some(ExecutionStatus::Success);
-                proposal_lifecycle.history.push((chrono::Utc::now(), ProposalState::Executed));
-                
+                proposal_lifecycle
+                    .history
+                    .push((chrono::Utc::now(), ProposalState::Executed));
+
                 // Save the updated lifecycle
-                storage.set_json(auth_context, &namespace, &lifecycle_key, &proposal_lifecycle)?;
-                
+                storage.set_json(
+                    auth_context,
+                    &namespace,
+                    &lifecycle_key,
+                    &proposal_lifecycle,
+                )?;
+
                 // Commit the fork transaction
                 self.commit_fork_transaction()?;
-                
+
                 Ok(())
-            },
+            }
             Err(e) => {
                 let error_msg = format!("Logic execution failed: {}", e);
-                
+
                 // Update proposal with failure status
-                proposal_lifecycle.execution_status = Some(ExecutionStatus::Failure(error_msg.clone()));
-                storage.set_json(auth_context, &namespace, &lifecycle_key, &proposal_lifecycle)?;
-                
+                proposal_lifecycle.execution_status =
+                    Some(ExecutionStatus::Failure(error_msg.clone()));
+                storage.set_json(
+                    auth_context,
+                    &namespace,
+                    &lifecycle_key,
+                    &proposal_lifecycle,
+                )?;
+
                 // We don't commit the fork since execution failed
-                
+
                 Err(error_msg.into())
             }
         }
     }
-    
-    fn add_proposal_comment(&mut self, proposal_id: &str, author: &str, content: &str, parent_id: Option<&str>) -> Result<String, Box<dyn Error>> {
+
+    fn add_proposal_comment(
+        &mut self,
+        proposal_id: &str,
+        author: &str,
+        content: &str,
+        parent_id: Option<&str>,
+    ) -> Result<String, Box<dyn Error>> {
         // Create a fork for mutations
         let mut forked = self.fork()?;
-        let mut storage = forked.get_storage_backend().ok_or("Storage not available")?.clone();
+        let mut storage = forked
+            .get_storage_backend()
+            .ok_or("Storage not available")?
+            .clone();
         let auth_context = forked.get_auth_context();
         let namespace = forked.get_namespace().unwrap_or("default");
-        
+
         // Check if proposal exists
         let proposal_key = Self::proposal_key_prefix(proposal_id);
         if !storage.contains(auth_context, &namespace, &proposal_key)? {
             return Err(format!("Proposal with ID '{}' not found", proposal_id).into());
         }
-        
+
         // Generate a comment ID
         let comment_id = uuid::Uuid::new_v4().to_string();
-        
+
         // Create the comment structure
         let comment = StoredComment {
             author: author.to_string(),
@@ -400,14 +504,18 @@ where
             content: content.to_string(),
             parent: parent_id.map(|s| s.to_string()),
         };
-        
+
         // Store the comment
-        let comment_key = format!("{}/{}", Self::proposal_comments_prefix(proposal_id), comment_id);
+        let comment_key = format!(
+            "{}/{}",
+            Self::proposal_comments_prefix(proposal_id),
+            comment_id
+        );
         storage.set_json(auth_context, &namespace, &comment_key, &comment)?;
-        
+
         // Commit the changes
         self.commit_fork_transaction()?;
-        
+
         Ok(comment_id)
     }
 }
@@ -996,31 +1104,30 @@ fn did_to_identity(did: &str) -> Identity {
 }
 
 /// Parse a DSL file from storage or filesystem
-fn parse_dsl_from_file<S>(vm: &VM<S>, path: &str) -> Result<(Vec<Op>, LifecycleConfig), Box<dyn Error>>
+fn parse_dsl_from_file<S>(
+    vm: &VM<S>,
+    path: &str,
+) -> Result<(Vec<Op>, LifecycleConfig), Box<dyn Error>>
 where
     S: Storage + Send + Sync + Clone + Debug + 'static,
 {
     let storage = vm.get_storage_backend().ok_or("Storage not available")?;
     let auth_context_opt = vm.get_auth_context();
     let namespace = vm.get_namespace().unwrap_or("default");
-    
+
     // Try to read from storage first
     let contents = match storage.get(auth_context_opt, &namespace, path) {
-        Ok(data) => {
-            match String::from_utf8(data) {
-                Ok(s) => s,
-                Err(e) => return Err(format!("Invalid UTF-8 in DSL file: {}", e).into()),
-            }
+        Ok(data) => match String::from_utf8(data) {
+            Ok(s) => s,
+            Err(e) => return Err(format!("Invalid UTF-8 in DSL file: {}", e).into()),
         },
         // If not in storage, try to read from file system
-        Err(_) => {
-            match std::fs::read_to_string(path) {
-                Ok(s) => s,
-                Err(e) => return Err(format!("Failed to read DSL file {}: {}", path, e).into()),
-            }
-        }
+        Err(_) => match std::fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(e) => return Err(format!("Failed to read DSL file {}: {}", path, e).into()),
+        },
     };
-    
+
     // Parse the content and convert error type
     match parse_dsl(&contents) {
         Ok(result) => Ok(result),
@@ -1070,13 +1177,13 @@ where
             let min_deliberation = sub_matches.get_one::<i64>("min-deliberation");
             let discussion_duration = sub_matches.get_one::<String>("discussion-duration");
             let required_participants = sub_matches.get_one::<u64>("required-participants");
-            
+
             // Special case for creator identity
             let creator = sub_matches
                 .get_one::<String>("creator")
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| auth_context.identity_did().to_string());
-            
+
             // Read and parse the DSL content
             let (logic_ops, lifecycle_config) = match parse_dsl_from_file(vm, logic_path) {
                 Ok((ops, config)) => (ops, config),
@@ -1085,7 +1192,7 @@ where
                     return Err(format!("Failed to parse DSL file: {}", e).into());
                 }
             };
-            
+
             // Calculate expiry date
             let expires_at = if let Some(expires_str) = expires_in {
                 match parse_duration_string(expires_str) {
@@ -1099,7 +1206,7 @@ where
                 // Default expiry of 30 days
                 Some(chrono::Utc::now() + chrono::Duration::days(30))
             };
-            
+
             // Calculate minimum deliberation period
             let min_delib_duration = if let Some(hours) = min_deliberation {
                 chrono::Duration::hours(*hours)
@@ -1115,53 +1222,53 @@ where
                 // Default 24 hours
                 chrono::Duration::hours(MIN_DELIBERATION_HOURS)
             };
-            
+
             // Create the proposal metadata
             let proposal = Proposal::new(
                 proposal_id.to_string(),
                 creator.clone(),
                 Some(logic_path.to_string()),
                 expires_at,
-                None, // discussion_path
+                None,       // discussion_path
                 Vec::new(), // attachments
             );
-            
+
             // Create identity from creator string
             let creator_identity = did_to_identity(&creator);
-            
+
             // Create the proposal lifecycle data
             let lifecycle = ProposalLifecycle::new(
                 proposal_id.to_string(),
                 creator_identity,
                 title.to_string(),
-                (quorum * 100.0) as u64,   // Stored as percentage (0-100)
+                (quorum * 100.0) as u64,    // Stored as percentage (0-100)
                 (threshold * 100.0) as u64, // Stored as percentage (0-100)
                 Some(min_delib_duration),
                 required_participants.copied(),
             );
-            
+
             // Read the DSL file content for storage
             let logic_content = fs::read_to_string(logic_path)
                 .map_err(|e| format!("Failed to read DSL file: {}", e))?;
-            
+
             // Store everything using the trait method
             vm.create_proposal(proposal, lifecycle, description, &logic_content)?;
-            
+
             println!("✅ Proposal '{}' created successfully", proposal_id);
-            
+
             return Ok(());
         }
         Some(("attach", attach_matches)) => {
             println!("Handling proposal attach...");
-            
+
             let proposal_id = attach_matches
                 .get_one::<String>("id")
                 .ok_or("Proposal ID is required")?;
-            
+
             let file_path = attach_matches
                 .get_one::<PathBuf>("file")
                 .ok_or("File path is required")?;
-            
+
             // Get the custom name or use the file stem (name without extension)
             let attachment_name = attach_matches
                 .get_one::<String>("name")
@@ -1172,42 +1279,54 @@ where
                         .map(|s| s.to_string_lossy().to_string())
                         .unwrap_or_else(|| "attachment".to_string())
                 });
-            
+
             // Check if the file exists
             if !file_path.exists() {
                 return Err(format!("File not found: {}", file_path.display()).into());
             }
-            
+
             // Read the file content
-            let file_content = fs::read(file_path)
-                .map_err(|e| format!("Failed to read file: {}", e))?;
-            
+            let file_content =
+                fs::read(file_path).map_err(|e| format!("Failed to read file: {}", e))?;
+
             // Create a fork for adding the attachment
             let mut forked = vm.fork()?;
-            let storage = forked.get_storage_backend().ok_or("Storage not available")?;
+            let storage: &mut S = forked
+                .get_storage_backend_mut()
+                .ok_or("Storage not available")?;
             let auth_context_opt = forked.get_auth_context();
             let namespace = forked.get_namespace().unwrap_or("default");
-            
+
             // Define key for the attachment
-            let attachment_key = format!("{}/attachments/{}", 
-                                        VM::<S>::proposal_key_prefix(proposal_id), 
-                                        attachment_name);
-            
+            let attachment_key = format!(
+                "{}/attachments/{}",
+                VM::<S>::proposal_key_prefix(proposal_id),
+                attachment_name
+            );
+
             // Store attachment bytes directly
             storage.set(auth_context_opt, namespace, &attachment_key, file_content)?;
-            
+
             // Commit the changes
             vm.commit_fork_transaction()?;
-            
-            println!("✅ Attached file '{}' to proposal '{}'", attachment_name, proposal_id);
-            
+
+            println!(
+                "✅ Attached file '{}' to proposal '{}'",
+                attachment_name, proposal_id
+            );
+
             return Ok(());
         }
         Some(("comment", comment_matches)) => {
             let proposal_id = comment_matches.get_one::<String>("id").unwrap().clone();
-            let content = comment_matches.get_one::<String>("content").unwrap().clone();
-            let parent_id = comment_matches.get_one::<String>("parent").map(|s| s.as_str());
-            
+            let content = comment_matches
+                .get_one::<String>("content")
+                .unwrap()
+                .clone();
+            let parent_id = comment_matches
+                .get_one::<String>("parent")
+                .map(|s| s.as_str());
+
             return handle_comment_command(vm, &proposal_id, &content, parent_id, auth_context);
         }
         Some(("view", view_matches)) => {
@@ -1218,32 +1337,36 @@ where
             let proposal_id = edit_matches
                 .get_one::<String>("id")
                 .ok_or("Proposal ID is required")?;
-            
+
             let title = edit_matches.get_one::<String>("title");
             let description = edit_matches.get_one::<String>("description");
-            
+
             // Check that we have at least one field to edit
             if title.is_none() && description.is_none() {
-                return Err("At least one field (title, description) must be provided for editing".into());
+                return Err(
+                    "At least one field (title, description) must be provided for editing".into(),
+                );
             }
-            
+
             // Create a fork for editing
             let mut forked = vm.fork()?;
-            let storage = forked.get_storage_backend().ok_or("Storage not available")?;
+            let storage: &mut S = forked
+                .get_storage_backend_mut()
+                .ok_or("Storage not available")?;
             let auth_context_opt = forked.get_auth_context();
             let namespace = forked.get_namespace().unwrap_or("default");
-            
+
             // Check if proposal exists
             let proposal_key = VM::<S>::proposal_key_prefix(proposal_id);
             if !storage.contains(auth_context_opt, namespace, &proposal_key)? {
                 return Err(format!("Proposal with ID '{}' not found", proposal_id).into());
             }
-            
+
             // Load the current proposal
             let mut proposal: Proposal = storage
                 .get_json(auth_context_opt, namespace, &proposal_key)
                 .map_err(|e| format!("Failed to load proposal: {}", e))?;
-            
+
             // Only allow editing in draft or feedback states
             if !matches!(proposal.status, ProposalStatus::Draft) {
                 return Err(format!(
@@ -1251,7 +1374,7 @@ where
                     proposal_id, proposal.status
                 ).into());
             }
-            
+
             // Update fields
             if let Some(new_title) = title {
                 // The title is stored in ProposalLifecycle, not in Proposal
@@ -1259,16 +1382,16 @@ where
                 let mut lifecycle: ProposalLifecycle = storage
                     .get_json(auth_context_opt, namespace, &lifecycle_key)
                     .map_err(|e| format!("Failed to load proposal lifecycle: {}", e))?;
-                
+
                 lifecycle.title = new_title.to_string();
-                
+
                 // Save updated lifecycle
                 storage.set_json(auth_context_opt, namespace, &lifecycle_key, &lifecycle)?;
             }
-            
+
             // Save updated proposal
             storage.set_json(auth_context_opt, namespace, &proposal_key, &proposal)?;
-            
+
             // Update description if provided
             if let Some(new_description) = description {
                 let description_key = VM::<S>::proposal_description_key(proposal_id);
@@ -1276,52 +1399,55 @@ where
                     auth_context_opt,
                     namespace,
                     &description_key,
-                    new_description.as_bytes().to_vec()
+                    new_description.as_bytes().to_vec(),
                 )?;
             }
-            
+
             // Commit the changes
             vm.commit_fork_transaction()?;
-            
+
             println!("✅ Updated proposal '{}'", proposal_id);
-            
+
             return Ok(());
         }
         Some(("publish", publish_matches)) => {
             let proposal_id = publish_matches
                 .get_one::<String>("id")
                 .ok_or("Proposal ID is required")?;
-            
+
             // Create a fork for publishing
             let mut forked = vm.fork()?;
-            
+
             // We'll use the update_proposal_state method from the trait to change the state
             vm.update_proposal_state(proposal_id, ProposalState::OpenForFeedback)?;
-            
+
             println!("✅ Proposal '{}' published for feedback", proposal_id);
-            
+
             return Ok(());
-        },
+        }
         Some(("vote", vote_matches)) => {
             println!("Handling proposal vote...");
             let proposal_id = vote_matches.get_one::<String>("id").unwrap().clone();
-            let vote_choice = vote_matches
-                .get_one::<String>("vote")
-                .unwrap()
-                .clone();
+            let vote_choice = vote_matches.get_one::<String>("vote").unwrap().clone();
             let delegate_identity = vote_matches.get_one::<String>("as").map(|s| s.as_str());
 
-            return handle_vote_command(vm, &proposal_id, &vote_choice, delegate_identity, auth_context);
+            return handle_vote_command(
+                vm,
+                &proposal_id,
+                &vote_choice,
+                delegate_identity,
+                auth_context,
+            );
         }
         Some(("transition", transition_matches)) => {
             let proposal_id = transition_matches
                 .get_one::<String>("id")
                 .ok_or("Proposal ID is required")?;
-            
+
             let state_str = transition_matches
                 .get_one::<String>("state")
                 .ok_or("State is required")?;
-            
+
             // Parse the new state
             let new_state = match state_str.to_lowercase().as_str() {
                 "draft" => ProposalState::Draft,
@@ -1330,47 +1456,52 @@ where
                 "executed" => ProposalState::Executed,
                 "rejected" => ProposalState::Rejected,
                 "expired" => ProposalState::Expired,
-                _ => return Err(format!("Invalid state: {}", state_str).into())
+                _ => return Err(format!("Invalid state: {}", state_str).into()),
             };
-            
+
             // Use the update_proposal_state method from the trait
             vm.update_proposal_state(proposal_id, new_state.clone())?;
-            
-            println!("✅ Proposal '{}' transitioned to '{:?}'", proposal_id, new_state);
-            
+
+            println!(
+                "✅ Proposal '{}' transitioned to '{:?}'",
+                proposal_id, new_state
+            );
+
             return Ok(());
-        },
+        }
         Some(("view", view_matches)) => {
             let proposal_id = view_matches.get_one::<String>("id").unwrap();
             return handle_view_command(vm, proposal_id);
         }
         Some(("list", list_matches)) => {
             // Optional status filter
-            let status_filter = list_matches.get_one::<String>("status").map(|s| s.to_string());
-            
+            let status_filter = list_matches
+                .get_one::<String>("status")
+                .map(|s| s.to_string());
+
             // Get storage using the accessor method
             let storage = vm.get_storage_backend().ok_or("Storage not available")?;
             let auth_context_opt = vm.get_auth_context();
             let namespace = vm.get_namespace().unwrap_or("default");
-            
+
             // List all proposals with our prefix
             let prefix = VM::<S>::proposal_key_prefix("");
             let keys = storage.list_keys(auth_context_opt, namespace, Some(&prefix))?;
-            
+
             println!("=== Proposals ===");
-            
+
             // Keep track of how many we display
             let mut count = 0;
-            
+
             for key in keys {
                 // Extract the proposal ID from the key
                 let proposal_id = key.strip_prefix(&prefix).unwrap_or(&key);
-                
+
                 // Skip anything that's not a base proposal (e.g., attachments, votes)
                 if proposal_id.contains('/') {
                     continue;
                 }
-                
+
                 // Try to load the proposal
                 match storage.get_json::<Proposal>(auth_context_opt, namespace, &key) {
                     Ok(proposal) => {
@@ -1379,24 +1510,31 @@ where
                             .as_ref()
                             .map(|s| match_status(&proposal.status, s))
                             .unwrap_or(true);
-                        
+
                         if status_match {
                             // Get the lifecycle to access the title
                             let lifecycle_key = VM::<S>::proposal_lifecycle_key(&proposal_id);
-                            if let Ok(lifecycle) = storage.get_json::<ProposalLifecycle>(auth_context_opt, namespace, &lifecycle_key) {
-                                println!("{}: {} - {:?}", proposal_id, lifecycle.title, proposal.status);
+                            if let Ok(lifecycle) = storage.get_json::<ProposalLifecycle>(
+                                auth_context_opt,
+                                namespace,
+                                &lifecycle_key,
+                            ) {
+                                println!(
+                                    "{}: {} - {:?}",
+                                    proposal_id, lifecycle.title, proposal.status
+                                );
                             } else {
                                 println!("{}: [No title] - {:?}", proposal_id, proposal.status);
                             }
                             count += 1;
                         }
-                    },
+                    }
                     Err(e) => {
                         eprintln!("Error loading proposal {}: {}", proposal_id, e);
                     }
                 }
             }
-            
+
             if count == 0 {
                 println!("No proposals found");
                 if status_filter.is_some() {
@@ -1405,7 +1543,7 @@ where
             } else {
                 println!("\nTotal: {} proposal(s)", count);
             }
-            
+
             return Ok(());
         }
         Some(("comments", comments_matches)) => {
@@ -1514,16 +1652,19 @@ where
             return handle_execute_command(vm, &proposal_id, auth_context);
         }
         Some(("view-comments", view_comments_matches)) => {
-            let proposal_id = view_comments_matches.get_one::<String>("id").unwrap().clone();
+            let proposal_id = view_comments_matches
+                .get_one::<String>("id")
+                .unwrap()
+                .clone();
             let threaded = view_comments_matches.get_flag("threaded");
-            
+
             return handle_view_comments_command(vm, &proposal_id, threaded, auth_context);
         }
         Some(("export", export_matches)) => {
             println!("Handling proposal export...");
             let proposal_id = export_matches.get_one::<String>("id").unwrap().clone();
             let output_path = export_matches.get_one::<String>("output").cloned();
-            
+
             return handle_export_command(vm, &proposal_id, output_path, auth_context);
         }
         _ => unreachable!("Subcommand should be required"),
@@ -1735,12 +1876,12 @@ where
 {
     // Get all votes using our trait method
     let votes = vm.get_proposal_votes(proposal_id)?;
-    
+
     // Count the votes by type
     let mut yes_votes = 0;
     let mut no_votes = 0;
     let mut abstain_votes = 0;
-    
+
     for (_, vote) in votes {
         match vote.to_lowercase().as_str() {
             "yes" => yes_votes += 1,
@@ -1749,7 +1890,7 @@ where
             _ => {} // Invalid vote, ignore
         }
     }
-    
+
     Ok((yes_votes, no_votes, abstain_votes))
 }
 
@@ -2196,7 +2337,7 @@ where
 {
     // Get the voter ID, which is the authenticated user's identity
     let voter_id = auth_context.identity_did().to_string();
-    
+
     // Determine the effective voter (uses delegate's identity if provided)
     let delegate = if let Some(delegate_did) = delegate_identity {
         // In a real implementation, verify the delegation relationship
@@ -2205,48 +2346,62 @@ where
     } else {
         voter_id.clone()
     };
-    
+
     // First check if the proposal exists
-    if !vm.get_storage_backend()
-            .ok_or_else(|| "Storage backend not configured for proposal vote")?
-            .contains(Some(auth_context), &vm.get_namespace().unwrap_or("default"), &VM::proposal_key_prefix(proposal_id))? {
+    if !vm
+        .get_storage_backend()
+        .ok_or_else(|| "Storage backend not configured for proposal vote")?
+        .contains(
+            Some(auth_context),
+            &vm.get_namespace().unwrap_or("default"),
+            &VM::proposal_key_prefix(proposal_id),
+        )?
+    {
         return Err(format!("Proposal with ID '{}' not found", proposal_id).into());
     }
-    
+
     // Load the proposal lifecycle to check deliberation period
     let proposal_lifecycle = vm.get_proposal_lifecycle(proposal_id)?;
-    
+
     // Check if the minimum deliberation period has passed
     if let Some(min_deliberation) = proposal_lifecycle.discussion_duration {
         let now = Utc::now();
         let elapsed = now.signed_duration_since(proposal_lifecycle.created_at);
-        
+
         if elapsed < min_deliberation {
             // Calculate hours for both required and elapsed time
             let required_hours = min_deliberation.num_hours();
             let elapsed_hours = elapsed.num_hours();
-            
+
             return Err(format!(
                 "⏳ Proposal '{}' is still in deliberation.\n   Required: {} hours\n   Elapsed: {} hours",
                 proposal_id, required_hours, elapsed_hours
             ).into());
         }
     }
-    
+
     // Validate vote choice
     let vote_value = match vote_choice.to_lowercase().as_str() {
         "yes" => "yes",
         "no" => "no",
         "abstain" => "abstain",
-        _ => return Err(format!("Invalid vote choice: '{}'. Must be yes, no, or abstain", vote_choice).into()),
+        _ => {
+            return Err(format!(
+                "Invalid vote choice: '{}'. Must be yes, no, or abstain",
+                vote_choice
+            )
+            .into())
+        }
     };
-    
+
     // Cast the vote using the trait method
     vm.cast_vote(proposal_id, &voter_id, vote_value, delegate_identity)?;
-    
-    println!("✅ Vote '{}' recorded for proposal '{}' by '{}'", 
-        vote_value, proposal_id, voter_id);
-        
+
+    println!(
+        "✅ Vote '{}' recorded for proposal '{}' by '{}'",
+        vote_value, proposal_id, voter_id
+    );
+
     // Award reputation for participation
     let rep_dsl = format!(
         "increment_reputation \"{}\" reason=\"Voted on proposal {}\"",
@@ -2254,7 +2409,7 @@ where
     );
     let (ops, _) = parse_dsl(&rep_dsl)?;
     vm.execute(&ops)?;
-    
+
     Ok(())
 }
 
@@ -2268,19 +2423,25 @@ where
     S: Storage + StorageExtensions + Send + Sync + Clone + Debug + 'static,
 {
     // First check if proposal exists
-    if !vm.get_storage_backend()
-            .ok_or_else(|| "Storage backend not configured for proposal execution")?
-            .contains::<StorageExtensions>(Some(auth_context), &vm.get_namespace().unwrap_or("default"), &VM::proposal_key_prefix(proposal_id))? {
+    if !vm
+        .get_storage_backend()
+        .ok_or_else(|| "Storage backend not configured for proposal execution")?
+        .contains(
+            Some(auth_context),
+            &vm.get_namespace().unwrap_or("default"),
+            &VM::proposal_key_prefix(proposal_id),
+        )?
+    {
         return Err(format!("Proposal with ID '{}' not found", proposal_id).into());
     }
-    
+
     // Tally votes
     let votes = vm.get_proposal_votes(proposal_id)?;
-    
+
     let mut yes_votes = 0;
     let mut no_votes = 0;
     let mut abstain_votes = 0;
-    
+
     for (_, vote) in &votes {
         match vote.to_lowercase().as_str() {
             "yes" => yes_votes += 1,
@@ -2289,7 +2450,7 @@ where
             _ => {} // Invalid vote value, ignore
         }
     }
-    
+
     // Calculate totals and ratios
     let total_votes = yes_votes + no_votes + abstain_votes;
     let yes_ratio = if total_votes > 0 {
@@ -2297,19 +2458,19 @@ where
     } else {
         0.0
     };
-    
+
     // Load the proposal metadata to get quorum and threshold
     let proposal_lifecycle = vm.get_proposal_lifecycle(proposal_id)?;
-    
+
     // Check if proposal has already been executed
     if matches!(proposal_lifecycle.state, ProposalState::Executed) {
         return Err(format!("Proposal '{}' has already been executed", proposal_id).into());
     }
-    
+
     // Convert stored percentages to ratios (they're stored as integers 0-100)
     let quorum_ratio = proposal_lifecycle.quorum as f64 / 100.0;
     let threshold_ratio = proposal_lifecycle.threshold as f64 / 100.0;
-    
+
     // Calculate participation rate
     let required_participants = proposal_lifecycle.required_participants.unwrap_or(1);
     let participation_rate = if required_participants > 0 {
@@ -2317,36 +2478,51 @@ where
     } else {
         1.0 // Avoid division by zero
     };
-    
+
     // Check if proposal passed
     let quorum_met = participation_rate >= quorum_ratio;
     let threshold_met = yes_ratio >= threshold_ratio;
-    
+
     // If proposal did not pass, return with message
     if !quorum_met {
-        println!("❌ Proposal '{}' did not meet quorum requirement.", proposal_id);
-        println!("   Participation: {:.1}% (Required: {:.1}%)", 
-                 participation_rate * 100.0, quorum_ratio * 100.0);
+        println!(
+            "❌ Proposal '{}' did not meet quorum requirement.",
+            proposal_id
+        );
+        println!(
+            "   Participation: {:.1}% (Required: {:.1}%)",
+            participation_rate * 100.0,
+            quorum_ratio * 100.0
+        );
         return Ok(());
     }
-    
+
     if !threshold_met {
-        println!("❌ Proposal '{}' did not meet threshold requirement.", proposal_id);
-        println!("   Yes votes: {:.1}% (Required: {:.1}%)", 
-                 yes_ratio * 100.0, threshold_ratio * 100.0);
+        println!(
+            "❌ Proposal '{}' did not meet threshold requirement.",
+            proposal_id
+        );
+        println!(
+            "   Yes votes: {:.1}% (Required: {:.1}%)",
+            yes_ratio * 100.0,
+            threshold_ratio * 100.0
+        );
         return Ok(());
     }
-    
+
     // Proposal passed! Execute logic
     println!("✅ Proposal '{}' passed. Executing logic...", proposal_id);
-    println!("   Votes: {} yes, {} no, {} abstain", yes_votes, no_votes, abstain_votes);
-    
+    println!(
+        "   Votes: {} yes, {} no, {} abstain",
+        yes_votes, no_votes, abstain_votes
+    );
+
     // Use the execute_proposal method from our trait
     match vm.execute_proposal(proposal_id) {
         Ok(_) => {
             println!("✅ Logic executed successfully.");
             Ok(())
-        },
+        }
         Err(e) => {
             println!("⚠️ Logic execution failed: {}", e);
             Ok(()) // We still return Ok since the command itself succeeded, even if the execution failed
@@ -2368,47 +2544,47 @@ where
     let storage = vm
         .get_storage_backend()
         .ok_or_else(|| "Storage backend not configured for viewing comments")?;
-    
+
     // Get the namespace from VM
     let namespace = vm.get_namespace().unwrap_or("default");
-    
+
     // Load the proposal to verify it exists
     let base_key = format!("governance_proposals/{}", proposal_id);
-    
+
     // First check if proposal exists
     if !storage.contains(Some(auth_context), &namespace, &base_key)? {
         return Err(format!("Proposal with ID '{}' not found", proposal_id).into());
     }
-    
+
     // List all comment keys for this proposal
     let comments_prefix = format!("{}/comments/", base_key);
     let comment_keys = storage.list_keys(Some(auth_context), &namespace, Some(&comments_prefix))?;
-    
+
     if comment_keys.is_empty() {
         println!("No comments found for proposal '{}'", proposal_id);
         return Ok(());
     }
-    
+
     // Load all comments
     let mut comments = Vec::new();
     for key in comment_keys {
         match storage.get_json::<StoredComment>(Some(auth_context), &namespace, &key) {
             Ok(comment) => {
                 comments.push(comment);
-            },
+            }
             Err(e) => {
                 eprintln!("Warning: Failed to parse comment at {}: {}", key, e);
                 // Continue with other comments
             }
         }
     }
-    
+
     // Sort comments by timestamp
     comments.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
-    
+
     println!("Comments for proposal '{}':", proposal_id);
     println!();
-    
+
     if threaded {
         // Display threaded comments
         display_threaded_comments(&comments);
@@ -2421,7 +2597,7 @@ where
             println!();
         }
     }
-    
+
     Ok(())
 }
 
@@ -2429,10 +2605,10 @@ where
 fn display_threaded_comments(comments: &[StoredComment]) {
     // First, create a map of parent -> children
     let mut children_map: HashMap<Option<String>, Vec<usize>> = HashMap::new();
-    
+
     // Initialize with an empty vec for root comments (no parent)
     children_map.insert(None, Vec::new());
-    
+
     // Fill the map
     for (i, comment) in comments.iter().enumerate() {
         children_map
@@ -2440,7 +2616,7 @@ fn display_threaded_comments(comments: &[StoredComment]) {
             .or_insert_with(Vec::new)
             .push(i);
     }
-    
+
     // Now recursively display comments, starting with the root comments
     if let Some(root_indices) = children_map.get(&None) {
         for &idx in root_indices {
@@ -2454,12 +2630,12 @@ fn display_comment(
     comments: &[StoredComment],
     index: usize,
     children_map: &HashMap<Option<String>, Vec<usize>>,
-    depth: usize
+    depth: usize,
 ) {
     let comment = &comments[index];
     let indent = "    ".repeat(depth);
     let author_short = shorten_did(&comment.author);
-    
+
     // Print the current comment
     if depth == 0 {
         println!("{}🗣️  {} at {}", indent, author_short, comment.timestamp);
@@ -2468,15 +2644,17 @@ fn display_comment(
     }
     println!("{}    {}", indent, comment.content);
     println!();
-    
+
     // Print replies if any
-    let comment_id = format!("{}_{}", 
+    let comment_id = format!(
+        "{}_{}",
         match DateTime::parse_from_rfc3339(&comment.timestamp) {
             Ok(dt) => dt.timestamp(),
             Err(_) => Utc::now().timestamp(),
         },
-        comment.author);
-    
+        comment.author
+    );
+
     if let Some(reply_indices) = children_map.get(&Some(comment_id)) {
         for &reply_idx in reply_indices {
             display_comment(comments, reply_idx, children_map, depth + 1);
@@ -2546,35 +2724,36 @@ where
     let storage = vm
         .get_storage_backend()
         .ok_or_else(|| "Storage backend not configured for proposal export")?;
-    
+
     // Use default namespace as in the proposal creation
     let namespace = "default";
-    
+
     // First load the proposal lifecycle
     let lifecycle_key = format!("governance_proposals/{}/lifecycle", proposal_id);
-    let proposal_lifecycle: ProposalLifecycle = match storage.get_json(Some(auth_context), namespace, &lifecycle_key) {
-        Ok(lifecycle) => lifecycle,
-        Err(e) => return Err(format!("Failed to load proposal lifecycle: {}", e).into()),
-    };
-    
+    let proposal_lifecycle: ProposalLifecycle =
+        match storage.get_json(Some(auth_context), namespace, &lifecycle_key) {
+            Ok(lifecycle) => lifecycle,
+            Err(e) => return Err(format!("Failed to load proposal lifecycle: {}", e).into()),
+        };
+
     // Load proposal description if available
     let description_key = format!("governance_proposals/{}/description", proposal_id);
     let description = match storage.get(Some(auth_context), namespace, &description_key) {
         Ok(bytes) => Some(String::from_utf8(bytes)?),
         Err(_) => None,
     };
-    
+
     // Load proposal logic if available
     let logic_key = format!("governance_proposals/{}/logic", proposal_id);
     let logic = match storage.get(Some(auth_context), namespace, &logic_key) {
         Ok(bytes) => Some(String::from_utf8(bytes)?),
         Err(_) => None,
     };
-    
+
     // Load votes
     let votes_prefix = format!("governance_proposals/{}/votes/", proposal_id);
     let vote_keys = storage.list_keys(Some(auth_context), namespace, Some(&votes_prefix))?;
-    
+
     let mut votes = Vec::new();
     for key in vote_keys {
         match storage.get_json::<serde_json::Value>(Some(auth_context), namespace, &key) {
@@ -2582,27 +2761,30 @@ where
                 // Extract relevant fields from the vote data
                 let voter = vote_data["voter"].as_str().unwrap_or("unknown").to_string();
                 let vote = vote_data["vote"].as_str().unwrap_or("unknown").to_string();
-                let timestamp = vote_data["timestamp"].as_str().unwrap_or("unknown").to_string();
+                let timestamp = vote_data["timestamp"]
+                    .as_str()
+                    .unwrap_or("unknown")
+                    .to_string();
                 let delegated_by = vote_data["delegated_by"].as_str().map(|s| s.to_string());
-                
+
                 votes.push(VoteExport {
                     voter,
                     vote,
                     timestamp,
                     delegated_by,
                 });
-            },
+            }
             Err(e) => {
                 eprintln!("Warning: Failed to parse vote at {}: {}", key, e);
                 // Continue with other votes
             }
         }
     }
-    
+
     // Load comments
     let comments_prefix = format!("governance_proposals/{}/comments/", proposal_id);
     let comment_keys = storage.list_keys(Some(auth_context), namespace, Some(&comments_prefix))?;
-    
+
     let mut comments = Vec::new();
     for key in comment_keys {
         match storage.get_json::<StoredComment>(Some(auth_context), namespace, &key) {
@@ -2613,14 +2795,14 @@ where
                     content: comment.content,
                     parent: comment.parent,
                 });
-            },
+            }
             Err(e) => {
                 eprintln!("Warning: Failed to parse comment at {}: {}", key, e);
                 // Continue with other comments
             }
         }
     }
-    
+
     // Build the export structure
     let export = ProposalExport {
         id: proposal_lifecycle.id.clone(),
@@ -2633,23 +2815,28 @@ where
         threshold: proposal_lifecycle.threshold as f64 / 100.0, // Convert from percentage to decimal
         description,
         logic,
-        execution_status: proposal_lifecycle.execution_status.map(|status| format!("{:?}", status)),
+        execution_status: proposal_lifecycle
+            .execution_status
+            .map(|status| format!("{:?}", status)),
         votes,
         comments,
     };
-    
+
     // Determine output file path
     let output_file_path = match output_path {
         Some(path) => path,
         None => format!("proposal_{}.json", proposal_id),
     };
-    
+
     // Write to file
     let file = std::fs::File::create(&output_file_path)?;
     serde_json::to_writer_pretty(file, &export)?;
-    
-    println!("✅ Exported proposal '{}' to {}", proposal_id, output_file_path);
-    
+
+    println!(
+        "✅ Exported proposal '{}' to {}",
+        proposal_id, output_file_path
+    );
+
     Ok(())
 }
 
@@ -2896,12 +3083,7 @@ mod tests {
             proposal_id, old_comment.id
         );
         let mut storage = vm.get_storage_backend().unwrap();
-        storage.set_json(
-            Some(&auth),
-            "governance",
-            &comment_key,
-            &old_comment,
-        )?;
+        storage.set_json(Some(&auth), "governance", &comment_key, &old_comment)?;
 
         // Now try to fetch the comment using the new system
         // This should automatically convert/migrate it
@@ -2941,24 +3123,27 @@ where
 {
     // Create a fork for the transaction
     let mut forked = vm.fork()?;
-    let mut storage = forked.get_storage_backend().ok_or("Storage not available")?.clone();
+    let mut storage = forked
+        .get_storage_backend()
+        .ok_or("Storage not available")?
+        .clone();
     let namespace = forked.get_namespace().unwrap_or("default");
-    
+
     // Load the proposal lifecycle
     let lifecycle_key = VM::<S>::proposal_lifecycle_key(proposal_id);
     let mut proposal = storage
         .get_json::<ProposalLifecycle>(Some(auth_context), &namespace, &lifecycle_key)
         .map_err(|e| format!("Failed to load proposal for status update: {}", e))?;
-    
+
     // Update the execution information
     proposal.execution_status = Some(status);
-    
+
     // Save the updated proposal
     storage.set_json(Some(auth_context), &namespace, &lifecycle_key, &proposal)?;
-    
+
     // Commit changes
     vm.commit_fork_transaction()?;
-    
+
     Ok(())
 }
 
@@ -2984,13 +3169,16 @@ where
 {
     // Get the author ID from auth context
     let author_id = auth_context.identity_did().to_string();
-    
+
     // Add the comment using our extension trait
     let comment_id = vm.add_proposal_comment(proposal_id, &author_id, content, parent_id)?;
-    
-    println!("✅ Comment added to proposal '{}' by '{}'", proposal_id, author_id);
+
+    println!(
+        "✅ Comment added to proposal '{}' by '{}'",
+        proposal_id, author_id
+    );
     println!("   Comment ID: {}", comment_id);
-    
+
     Ok(())
 }
 
@@ -3006,31 +3194,33 @@ where
 {
     // Verify that identity data is in valid format
     let identity_did = identity_data;
-    
+
     if identity_did.is_empty() {
         return Err("Identity DID cannot be empty".into());
     }
-    
+
     // Get storage backend or error
-    let storage = vm.get_storage_backend()
+    let storage = vm
+        .get_storage_backend()
         .ok_or_else(|| "Storage backend not configured for registering identity")?;
-    
+
     // Create a fork for this transaction
     let mut forked = vm.fork()?;
-    let mut storage = forked.get_storage_backend()
+    let mut storage = forked
+        .get_storage_backend()
         .ok_or_else(|| "Storage backend not available in forked VM")?
         .clone();
-    
+
     // Get the namespace
     let namespace = vm.get_namespace().unwrap_or("default");
-    
+
     // Define our identity metadata structure
     let metadata = IdentityMetadata {
         did: identity_did.to_string(),
         name: name.to_string(),
         registered_at: chrono::Utc::now(),
     };
-    
+
     // Store the identity metadata in storage
     storage.set_json(
         Some(auth_context),
@@ -3038,10 +3228,10 @@ where
         &format!("identity:{}", identity_did),
         &metadata,
     )?;
-    
+
     // Commit the transaction
     vm.commit_fork_transaction()?;
-    
+
     Ok(())
 }
 

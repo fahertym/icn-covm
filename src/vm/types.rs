@@ -506,11 +506,20 @@ impl fmt::Display for Op {
             Op::Match { .. } => write!(f, "Match"),
             Op::Break => write!(f, "Break"),
             Op::Continue => write!(f, "Continue"),
-            Op::EmitEvent { category, message } => write!(f, "EmitEvent({}, {})", category, message),
+            Op::EmitEvent { category, message } => {
+                write!(f, "EmitEvent({}, {})", category, message)
+            }
             Op::AssertEqualStack { depth } => write!(f, "AssertEqualStack({})", depth),
             Op::DumpState => write!(f, "DumpState"),
-            Op::RankedVote { candidates, ballots } => {
-                write!(f, "RankedVote({} candidates, {} ballots)", candidates, ballots)
+            Op::RankedVote {
+                candidates,
+                ballots,
+            } => {
+                write!(
+                    f,
+                    "RankedVote({} candidates, {} ballots)",
+                    candidates, ballots
+                )
             }
             Op::LiquidDelegate { from, to } => write!(f, "LiquidDelegate({} -> {})", from, to),
             Op::VoteThreshold(threshold) => write!(f, "VoteThreshold({})", threshold),
@@ -522,31 +531,65 @@ impl fmt::Display for Op {
             Op::LoadP(key) => write!(f, "LoadP({})", key),
             Op::LoadVersionP { key, version } => write!(f, "LoadVersionP({}, v{})", key, version),
             Op::ListVersionsP(key) => write!(f, "ListVersionsP({})", key),
-            Op::DiffVersionsP { key, v1, v2 } => write!(f, "DiffVersionsP({}, v{}, v{})", key, v1, v2),
+            Op::DiffVersionsP { key, v1, v2 } => {
+                write!(f, "DiffVersionsP({}, v{}, v{})", key, v1, v2)
+            }
             Op::VerifyIdentity { identity_id, .. } => write!(f, "VerifyIdentity({})", identity_id),
-            Op::CheckMembership { identity_id, namespace } => {
+            Op::CheckMembership {
+                identity_id,
+                namespace,
+            } => {
                 write!(f, "CheckMembership({}, {})", identity_id, namespace)
             }
-            Op::CheckDelegation { delegator_id, delegate_id } => {
+            Op::CheckDelegation {
+                delegator_id,
+                delegate_id,
+            } => {
                 write!(f, "CheckDelegation({} -> {})", delegator_id, delegate_id)
             }
             Op::VerifySignature => write!(f, "VerifySignature"),
             Op::CreateResource(resource) => write!(f, "CreateResource({})", resource),
-            Op::Mint { resource, account, amount, .. } => {
+            Op::Mint {
+                resource,
+                account,
+                amount,
+                ..
+            } => {
                 write!(f, "Mint({} of {} to {})", amount, resource, account)
             }
-            Op::Transfer { resource, from, to, amount, .. } => {
-                write!(f, "Transfer({} of {} from {} to {})", amount, resource, from, to)
+            Op::Transfer {
+                resource,
+                from,
+                to,
+                amount,
+                ..
+            } => {
+                write!(
+                    f,
+                    "Transfer({} of {} from {} to {})",
+                    amount, resource, from, to
+                )
             }
-            Op::Burn { resource, account, amount, .. } => {
+            Op::Burn {
+                resource,
+                account,
+                amount,
+                ..
+            } => {
                 write!(f, "Burn({} of {} from {})", amount, resource, account)
             }
             Op::Balance { resource, account } => write!(f, "Balance({} for {})", resource, account),
             Op::GetIdentity(id) => write!(f, "GetIdentity({})", id),
-            Op::RequireValidSignature { voter, .. } => write!(f, "RequireValidSignature({})", voter),
+            Op::RequireValidSignature { voter, .. } => {
+                write!(f, "RequireValidSignature({})", voter)
+            }
             Op::IfPassed(_) => write!(f, "IfPassed"),
             Op::Else(_) => write!(f, "Else"),
-            Op::IncrementReputation { identity_id, amount, .. } => {
+            Op::IncrementReputation {
+                identity_id,
+                amount,
+                ..
+            } => {
                 write!(f, "IncrementReputation({}, {:?})", identity_id, amount)
             }
             Op::Macro(name) => write!(f, "Macro({})", name),
@@ -559,13 +602,13 @@ impl fmt::Display for Op {
 pub struct CallFrame {
     /// Local memory for function scope
     pub memory: HashMap<String, f64>,
-    
+
     /// Function parameters
     pub params: HashMap<String, f64>,
-    
+
     /// Return value
     pub return_value: Option<f64>,
-    
+
     /// Function name (for debugging)
     pub function_name: String,
 }
@@ -575,10 +618,10 @@ pub struct CallFrame {
 pub enum LoopControl {
     /// No special control flow
     None,
-    
+
     /// Break out of loop
     Break,
-    
+
     /// Continue to next iteration
     Continue,
 }
@@ -594,4 +637,4 @@ pub struct VMEvent {
 
     /// Timestamp when the event occurred
     pub timestamp: u64,
-} 
+}

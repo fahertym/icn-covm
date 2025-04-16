@@ -340,7 +340,8 @@ impl ProposalLifecycle {
         // --- Execution (within Fork) & Transaction Handling ---
         let execution_status = if let Some(dsl) = logic_dsl {
             println!("[EXEC] Parsing logic DSL within fork...");
-            let (ops, _) = parse_dsl(&dsl).map_err(|e| format!("Failed to parse logic DSL: {}", e))?;
+            let (ops, _) =
+                parse_dsl(&dsl).map_err(|e| format!("Failed to parse logic DSL: {}", e))?;
             println!("[EXEC] Logic parsed into {} Ops within fork.", ops.len());
 
             println!("[EXEC] Executing parsed Ops within fork VM...");

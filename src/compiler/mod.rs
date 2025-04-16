@@ -21,8 +21,8 @@ pub use if_block::parse_if_block;
 pub use line_parser::parse_line;
 pub use loop_block::parse_loop_block;
 pub use match_block::parse_match_block;
-pub use parse_dsl::LifecycleConfig;
 pub use parse_dsl::parse_dsl;
+pub use parse_dsl::LifecycleConfig;
 pub use while_block::parse_while_block;
 
 /// Standard library support

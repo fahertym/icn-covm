@@ -155,8 +155,9 @@ pub fn expand_proposal_lifecycle(lines: &[&str]) -> Result<Vec<Op>, String> {
     let store_lifecycle_op_str = format!("StoreP \"{}\" \"{}\"", lifecycle_key, escaped_json);
 
     let mut ops = vec![Op::Emit(format!("Creating proposal {}...", proposal_id))];
-    // Map CompilerError to String
-    ops.extend(parse_dsl(&store_lifecycle_op_str).map_err(|e| e.to_string())?);
+    // Extract the ops vector from the parse_dsl result tuple
+    let (parse_ops, _) = parse_dsl(&store_lifecycle_op_str).map_err(|e| e.to_string())?;
+    ops.extend(parse_ops);
 
     // --- 3. Generate StoreP for File Attachments ---
     let namespace = "governance";
@@ -172,8 +173,9 @@ pub fn expand_proposal_lifecycle(lines: &[&str]) -> Result<Vec<Op>, String> {
             "StoreP \"{}\"/\"{}\" \"{}\"",
             namespace, attachment_key, escaped_content
         );
-        // Map CompilerError to String
-        ops.extend(parse_dsl(&store_attachment_op_str).map_err(|e| e.to_string())?);
+        // Extract the ops vector from the parse_dsl result tuple
+        let (parse_ops, _) = parse_dsl(&store_attachment_op_str).map_err(|e| e.to_string())?;
+        ops.extend(parse_ops);
         ops.push(Op::Emit(format!(
             "Stored attachment '{}' from {}",
             name, file_path_str
@@ -194,8 +196,9 @@ pub fn expand_proposal_lifecycle(lines: &[&str]) -> Result<Vec<Op>, String> {
             "StoreP \"{}\"/\"{}\" \"{}\"",
             namespace, logic_attachment_key, escaped_dsl
         );
-        // Map CompilerError to String
-        ops.extend(parse_dsl(&store_logic_op_str).map_err(|e| e.to_string())?);
+        // Extract the ops vector from the parse_dsl result tuple
+        let (parse_ops, _) = parse_dsl(&store_logic_op_str).map_err(|e| e.to_string())?;
+        ops.extend(parse_ops);
         // Optional: Emit event for stored logic
         ops.push(Op::EmitEvent {
             category: "governance".to_string(),

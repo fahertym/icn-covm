@@ -17,8 +17,8 @@ use crate::governance::proposal::{Proposal, ProposalStatus};
 use crate::storage::auth::AuthContext;
 use crate::storage::implementations::in_memory::InMemoryStorage;
 use crate::storage::traits::{Storage, StorageBackend, StorageExtensions};
-use crate::vm::VM;
 use crate::vm::Op;
+use crate::vm::VM;
 
 /// Run a complete demonstration of the proposal lifecycle
 ///
@@ -69,7 +69,7 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
     push 1
     "#;
 
-    // Store the demo logic in storage - using VM's storage access method 
+    // Store the demo logic in storage - using VM's storage access method
     let logic_path = "governance/logic/repair_budget.dsl";
     vm.with_storage_mut(|storage| {
         storage.set(
@@ -105,11 +105,7 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
 
     // Retrieve and verify the proposal using VM's storage access
     let loaded_proposal: Proposal = vm.with_storage(|storage| {
-        storage.get_json(
-            Some(&auth),
-            "governance",
-            &proposal.storage_key()
-        )
+        storage.get_json(Some(&auth), "governance", &proposal.storage_key())
     })??;
 
     println!("Retrieved proposal: {:?}", loaded_proposal);
@@ -140,11 +136,7 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
     // First transition: Draft -> Deliberation
     println!("Transitioning proposal to Deliberation...");
     let mut proposal = vm.with_storage(|storage| {
-        storage.get_json::<Proposal>(
-            Some(&auth),
-            "governance",
-            &proposal.storage_key()
-        )
+        storage.get_json::<Proposal>(Some(&auth), "governance", &proposal.storage_key())
     })??;
 
     proposal.mark_deliberation();
@@ -160,11 +152,7 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
 
     // Verify transition
     let proposal = vm.with_storage(|storage| {
-        storage.get_json::<Proposal>(
-            Some(&auth),
-            "governance",
-            &proposal.storage_key()
-        )
+        storage.get_json::<Proposal>(Some(&auth), "governance", &proposal.storage_key())
     })??;
 
     if matches!(proposal.status, ProposalStatus::Deliberation) {
@@ -244,9 +232,8 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
     // Load all comments
     let mut comments = HashMap::new();
     for key in &comment_keys {
-        let comment: crate::cli::proposal::ProposalComment = vm.with_storage(|storage| {
-            storage.get_json(Some(&auth), "governance", key)
-        })??;
+        let comment: crate::cli::proposal::ProposalComment =
+            vm.with_storage(|storage| storage.get_json(Some(&auth), "governance", key))??;
         comments.insert(comment.id.clone(), comment);
     }
 
@@ -262,11 +249,7 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
     // Transition to voting phase
     println!("\n--- Transitioning to voting phase ---");
     let mut proposal = vm.with_storage(|storage| {
-        storage.get_json::<Proposal>(
-            Some(&auth),
-            "governance",
-            &proposal.storage_key()
-        )
+        storage.get_json::<Proposal>(Some(&auth), "governance", &proposal.storage_key())
     })??;
 
     proposal.mark_voting();
@@ -281,11 +264,7 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
     })??;
 
     let proposal = vm.with_storage(|storage| {
-        storage.get_json::<Proposal>(
-            Some(&auth),
-            "governance",
-            &proposal.storage_key()
-        )
+        storage.get_json::<Proposal>(Some(&auth), "governance", &proposal.storage_key())
     })??;
 
     if matches!(proposal.status, ProposalStatus::Voting) {
@@ -340,11 +319,7 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
     // Transition to approved
     println!("\n--- Transitioning to approved ---");
     let mut proposal = vm.with_storage(|storage| {
-        storage.get_json::<Proposal>(
-            Some(&auth),
-            "governance",
-            &proposal.storage_key()
-        )
+        storage.get_json::<Proposal>(Some(&auth), "governance", &proposal.storage_key())
     })??;
 
     proposal.mark_approved();
@@ -359,11 +334,7 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
     })??;
 
     let proposal = vm.with_storage(|storage| {
-        storage.get_json::<Proposal>(
-            Some(&auth),
-            "governance",
-            &proposal.storage_key()
-        )
+        storage.get_json::<Proposal>(Some(&auth), "governance", &proposal.storage_key())
     })??;
 
     if matches!(proposal.status, ProposalStatus::Approved) {
@@ -377,9 +348,8 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
 
     // Get the DSL logic
     let logic_path = proposal.logic_path.unwrap();
-    let logic_content = vm.with_storage(|storage| {
-        storage.get(Some(&auth), "governance", &logic_path)
-    })??;
+    let logic_content =
+        vm.with_storage(|storage| storage.get(Some(&auth), "governance", &logic_path))??;
     let logic_str = std::str::from_utf8(&logic_content).unwrap();
 
     // Parse the DSL
@@ -394,13 +364,8 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
     println!("Execution result: {:?}", vm.top());
 
     // Check the stored values from DSL execution
-    let budget_value = vm.with_storage(|storage| {
-        storage.get(
-            Some(&auth),
-            "governance",
-            "repair_budget",
-        )
-    })??;
+    let budget_value =
+        vm.with_storage(|storage| storage.get(Some(&auth), "governance", "repair_budget"))??;
     let budget_str = std::str::from_utf8(&budget_value).unwrap();
     println!("Stored budget value: {}", budget_str);
 
@@ -457,7 +422,7 @@ where
     vm.with_storage_mut(|storage| {
         storage.create_namespace(Some(auth), "governance", 1_000_000, None)
     })??;
-    
+
     println!("Created governance namespace");
     Ok(())
 }

@@ -59,22 +59,22 @@ impl FederationStorage {
             cache: Arc::new(Mutex::new(FederationCache::default())),
         }
     }
-    
+
     /// Create a proposal storage key
     pub fn make_proposal_key(proposal_id: &str) -> String {
         format!("{}{}", FEDERATION_PROPOSAL_PREFIX, proposal_id)
     }
-    
+
     /// Create a votes storage key
     pub fn make_votes_key(proposal_id: &str) -> String {
         format!("{}{}", FEDERATION_VOTES_PREFIX, proposal_id)
     }
-    
+
     /// Create a sync metadata storage key
     pub fn make_sync_key(proposal_id: &str) -> String {
         format!("{}/last_seen", Self::make_sync_base_key(proposal_id))
     }
-    
+
     /// Create a sync base key
     pub fn make_sync_base_key(proposal_id: &str) -> String {
         format!("{}{}", FEDERATION_SYNC_PREFIX, proposal_id)
@@ -90,8 +90,11 @@ impl FederationStorage {
         let key = Self::make_proposal_key(&proposal.proposal_id);
 
         // Store in the backend
-        storage.set_json(None, &proposal.namespace, &key, &proposal)
-            .map_err(|e| StorageError::Other { details: format!("Failed to save proposal to storage: {}", e) })?;
+        storage
+            .set_json(None, &proposal.namespace, &key, &proposal)
+            .map_err(|e| StorageError::Other {
+                details: format!("Failed to save proposal to storage: {}", e),
+            })?;
 
         // Add to the cache
         let mut cache = match self.cache.lock() {
@@ -102,7 +105,7 @@ impl FederationStorage {
                 poisoned.into_inner()
             }
         };
-        
+
         cache
             .proposals
             .insert(proposal.proposal_id.clone(), proposal);
@@ -122,8 +125,11 @@ impl FederationStorage {
         let key = Self::make_proposal_key(&proposal.proposal_id);
 
         // Store in the backend with auth
-        storage.set_json(auth, &proposal.namespace, &key, &proposal)
-            .map_err(|e| StorageError::Other { details: format!("Failed to save proposal to storage: {}", e) })?;
+        storage
+            .set_json(auth, &proposal.namespace, &key, &proposal)
+            .map_err(|e| StorageError::Other {
+                details: format!("Failed to save proposal to storage: {}", e),
+            })?;
 
         // Add to the cache
         let mut cache = match self.cache.lock() {
@@ -134,7 +140,7 @@ impl FederationStorage {
                 poisoned.into_inner()
             }
         };
-        
+
         cache
             .proposals
             .insert(proposal.proposal_id.clone(), proposal);
@@ -292,9 +298,13 @@ impl FederationStorage {
         votes.push(vote.clone());
 
         // Store the updated votes list
-        storage.set_json(None, VOTES_NAMESPACE, &key, &votes)
-            .map_err(|e| StorageError::Other { 
-                details: format!("Failed to save vote for proposal {}: {}", vote.proposal_id, e) 
+        storage
+            .set_json(None, VOTES_NAMESPACE, &key, &votes)
+            .map_err(|e| StorageError::Other {
+                details: format!(
+                    "Failed to save vote for proposal {}: {}",
+                    vote.proposal_id, e
+                ),
             })?;
 
         // Update the cache
@@ -306,7 +316,7 @@ impl FederationStorage {
                 poisoned.into_inner()
             }
         };
-        
+
         cache
             .votes
             .entry(vote.proposal_id.clone())
@@ -371,7 +381,7 @@ impl FederationStorage {
                     poisoned.into_inner()
                 }
             };
-            
+
             if let Some(proposal) = cache.proposals.get(proposal_id) {
                 return Ok(proposal.clone());
             }
@@ -379,9 +389,10 @@ impl FederationStorage {
 
         // If not in cache, check storage
         let key = Self::make_proposal_key(proposal_id);
-        storage.get_json(None, FEDERATION_NAMESPACE, &key)
-            .map_err(|e| StorageError::Other { 
-                details: format!("Failed to retrieve proposal {}: {}", proposal_id, e) 
+        storage
+            .get_json(None, FEDERATION_NAMESPACE, &key)
+            .map_err(|e| StorageError::Other {
+                details: format!("Failed to retrieve proposal {}: {}", proposal_id, e),
             })
     }
 
@@ -401,7 +412,7 @@ impl FederationStorage {
                     poisoned.into_inner()
                 }
             };
-            
+
             if let Some(votes) = cache.votes.get(proposal_id) {
                 return Ok(votes.clone());
             }
@@ -409,9 +420,13 @@ impl FederationStorage {
 
         // If not in cache, check storage
         let key = Self::make_votes_key(proposal_id);
-        storage.get_json(None, VOTES_NAMESPACE, &key)
-            .map_err(|e| StorageError::Other { 
-                details: format!("Failed to retrieve votes for proposal {}: {}", proposal_id, e) 
+        storage
+            .get_json(None, VOTES_NAMESPACE, &key)
+            .map_err(|e| StorageError::Other {
+                details: format!(
+                    "Failed to retrieve votes for proposal {}: {}",
+                    proposal_id, e
+                ),
             })
     }
 

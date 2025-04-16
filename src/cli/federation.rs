@@ -1,25 +1,19 @@
 use crate::federation::messages::{
-    FederatedProposal, FederatedVote, NetworkMessage, ProposalScope, ProposalStatus, VotingModel,
+    FederatedProposal, FederatedVote, ProposalScope, ProposalStatus, VotingModel,
 };
-use crate::federation::{FederationError, NetworkNode, NodeConfig};
 use crate::federation::storage::{FederationStorage, FEDERATION_NAMESPACE, VOTES_NAMESPACE};
+use crate::federation::{NetworkNode, NodeConfig};
 use crate::governance::proposal::{Proposal, ProposalStatus as LocalProposalStatus};
 use crate::governance::proposal_lifecycle::VoteChoice;
-use crate::identity::Identity;
 use crate::storage::auth::AuthContext;
-use crate::storage::errors::StorageError;
 use crate::storage::traits::{Storage, StorageExtensions};
 use crate::vm::VM;
 
-use clap::{arg, Arg, ArgAction, ArgMatches, Command};
+use clap::{Arg, ArgAction, ArgMatches, Command};
 use libp2p::Multiaddr;
-use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
-use serde_json;
-use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::Debug;
-use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
@@ -222,8 +216,7 @@ where
                     ProposalScope::SingleCoop(coop_id)
                 }
                 "multi-coop" => {
-                    let coop_list = coops.ok_or_else(|| 
-                        "For multi-coop scope, --coops must be provided with a comma-separated list of cooperative IDs")?;
+                    let coop_list = coops.ok_or_else(|| "For multi-coop scope, --coops must be provided with a comma-separated list of cooperative IDs")?;
                     if coop_list.is_empty() {
                         return Err(
                             "At least one cooperative ID must be provided for multi-coop scope"
@@ -258,7 +251,9 @@ where
             let file_path = sub_matches
                 .get_one::<String>("file")
                 .ok_or_else(|| "Missing required argument: file")?;
-            let source_node = sub_matches.get_one::<String>("source").map(|s| s.to_string());
+            let source_node = sub_matches
+                .get_one::<String>("source")
+                .map(|s| s.to_string());
 
             receive_proposal(vm, file_path, source_node, auth_context).await
         }
@@ -385,7 +380,9 @@ async fn load_local_proposal<S>(vm: &VM<S>, proposal_id: &str) -> Result<Proposa
 where
     S: Storage + StorageExtensions + Send + Sync + Clone + Debug + 'static,
 {
-    let storage = vm.get_storage_backend().ok_or_else(|| "Storage backend not available")?;
+    let storage = vm
+        .get_storage_backend()
+        .ok_or_else(|| "Storage backend not available")?;
 
     let proposal_key = format!("governance/proposals/{}", proposal_id);
 
@@ -441,20 +438,19 @@ where
 
     // Create a fork for storage mutations
     let mut forked = vm.fork().map_err(|e| format!("Failed to fork VM: {}", e))?;
-    
+
     // Get storage backend from the forked VM
-    let storage = forked.get_storage_backend_mut()
+    let storage = forked
+        .get_storage_backend_mut()
         .ok_or_else(|| "Storage backend not available in forked VM")?;
 
     // Create a FederationStorage instance
     let federation_storage = FederationStorage::new();
-    
+
     // Save the proposal using the federation storage's methods
-    federation_storage.save_proposal_with_auth(
-        storage,
-        Some(auth_context),
-        federated_proposal,
-    ).map_err(|e| format!("Failed to store federated proposal: {}", e))?;
+    federation_storage
+        .save_proposal_with_auth(storage, Some(auth_context), federated_proposal)
+        .map_err(|e| format!("Failed to store federated proposal: {}", e))?;
 
     // Create sync metadata
     let sync_metadata = FederationSyncMetadata {
@@ -470,8 +466,11 @@ where
 
     // For now just log the sync metadata information since we have trouble storing it
     println!("✅ Successfully shared proposal {} with node", proposal_id);
-    println!("  Sync metadata created but not stored: {:?}", sync_metadata);
-    
+    println!(
+        "  Sync metadata created but not stored: {:?}",
+        sync_metadata
+    );
+
     // Commit the changes from the fork
     vm.commit_fork_transaction()
         .map_err(|e| format!("Failed to commit fork transaction: {}", e))?;
@@ -504,20 +503,19 @@ where
 
     // Create a fork for storage mutations
     let mut forked = vm.fork().map_err(|e| format!("Failed to fork VM: {}", e))?;
-    
+
     // Get storage backend from the forked VM
-    let storage = forked.get_storage_backend_mut()
+    let storage = forked
+        .get_storage_backend_mut()
         .ok_or_else(|| "Storage backend not available in forked VM")?;
 
     // Create a FederationStorage instance
     let federation_storage = FederationStorage::new();
-    
+
     // Save the proposal using the federation storage's methods
-    federation_storage.save_proposal_with_auth(
-        storage,
-        Some(auth_context),
-        federated_proposal,
-    ).map_err(|e| format!("Failed to store federated proposal: {}", e))?;
+    federation_storage
+        .save_proposal_with_auth(storage, Some(auth_context), federated_proposal)
+        .map_err(|e| format!("Failed to store federated proposal: {}", e))?;
 
     // Create sync metadata
     let sync_metadata = FederationSyncMetadata {
@@ -532,9 +530,15 @@ where
     };
 
     // For now just log the sync metadata information since we have trouble storing it
-    println!("✅ Successfully received and stored federated proposal {}", proposal_id);
-    println!("  Sync metadata created but not stored: {:?}", sync_metadata);
-    
+    println!(
+        "✅ Successfully received and stored federated proposal {}",
+        proposal_id
+    );
+    println!(
+        "  Sync metadata created but not stored: {:?}",
+        sync_metadata
+    );
+
     // Commit the changes from the fork
     vm.commit_fork_transaction()
         .map_err(|e| format!("Failed to commit fork transaction: {}", e))?;
@@ -554,11 +558,14 @@ where
     S: Storage + StorageExtensions + Send + Sync + Clone + Debug + 'static,
 {
     // Load the federated proposal if it exists locally
-    let storage = vm.get_storage_backend().ok_or_else(|| "Storage backend not available")?;
+    let storage = vm
+        .get_storage_backend()
+        .ok_or_else(|| "Storage backend not available")?;
 
     // Get the proposal using a FederationStorage instance
     let federation_storage = FederationStorage::new();
-    let federated_proposal = federation_storage.get_proposal(&*storage, proposal_id)
+    let federated_proposal = federation_storage
+        .get_proposal(&*storage, proposal_id)
         .map_err(|e| {
             println!(
                 "Proposal not found locally. Please sync it first with 'federation sync' command."
@@ -622,22 +629,24 @@ where
 
     // Create a fork for storage mutations
     let mut forked = vm.fork().map_err(|e| format!("Failed to fork VM: {}", e))?;
-    
+
     // Get storage backend from the forked VM
-    let storage = forked.get_storage_backend_mut()
+    let storage = forked
+        .get_storage_backend_mut()
         .ok_or_else(|| "Storage backend not available in forked VM")?;
 
     // Set up the vote locally
     let vote_key = format!("{}/{}/{}", FEDERATION_VOTES_PATH, proposal_id, voter_id);
-    
+
     // Store the raw vote choice for compatibility with local votes
     let vote_data = serde_json::to_vec(&vote_choice)
         .map_err(|e| format!("Failed to serialize vote choice: {}", e))?;
 
     // Store the vote directly
-    storage.set(Some(auth_context), VOTES_NAMESPACE, &vote_key, vote_data)
+    storage
+        .set(Some(auth_context), VOTES_NAMESPACE, &vote_key, vote_data)
         .map_err(|e| format!("Failed to store vote: {}", e))?;
-    
+
     // Commit the changes from the fork
     vm.commit_fork_transaction()
         .map_err(|e| format!("Failed to commit fork transaction: {}", e))?;
@@ -670,12 +679,14 @@ where
     println!("Syncing proposal {} from node {}", proposal_id, source_addr);
 
     // Check if we have the proposal locally
-    let storage = vm.get_storage_backend().ok_or_else(|| "Storage backend not available")?;
+    let storage = vm
+        .get_storage_backend()
+        .ok_or_else(|| "Storage backend not available")?;
     let federation_storage = FederationStorage::new();
-    
+
     let local_exists = match federation_storage.get_proposal(&*storage, proposal_id) {
         Ok(_) => true,
-        Err(_) => false
+        Err(_) => false,
     };
 
     // In a real implementation, we would:
@@ -711,7 +722,10 @@ where
         "✅ Successfully simulated sync for proposal {}",
         proposal_id
     );
-    println!("  Sync metadata created but not stored: {:?}", sync_metadata);
+    println!(
+        "  Sync metadata created but not stored: {:?}",
+        sync_metadata
+    );
 
     Ok(())
 }
@@ -725,19 +739,24 @@ fn list_federated_proposals<S>(
 where
     S: Storage + StorageExtensions + Send + Sync + Clone + Debug + 'static,
 {
-    let storage = vm.get_storage_backend().ok_or_else(|| "Storage backend not available")?;
+    let storage = vm
+        .get_storage_backend()
+        .ok_or_else(|| "Storage backend not available")?;
 
     // Get all proposals in the federation namespace
     let proposals_path = FEDERATION_PROPOSALS_PATH;
 
-    let proposal_keys =
-        match storage.list_keys(Some(auth_context), FEDERATION_NAMESPACE, Some(proposals_path)) {
-            Ok(keys) => keys,
-            Err(e) => {
-                println!("No federated proposals found: {}", e);
-                return Ok(());
-            }
-        };
+    let proposal_keys = match storage.list_keys(
+        Some(auth_context),
+        FEDERATION_NAMESPACE,
+        Some(proposals_path),
+    ) {
+        Ok(keys) => keys,
+        Err(e) => {
+            println!("No federated proposals found: {}", e);
+            return Ok(());
+        }
+    };
 
     if proposal_keys.is_empty() {
         println!("No federated proposals found");
@@ -756,7 +775,7 @@ where
         match storage.get(Some(auth_context), FEDERATION_NAMESPACE, &full_key) {
             Ok(data) => {
                 if let Ok(proposal) = {
-                    let data_vec = data.to_vec();  // Convert to Vec<u8> to avoid [u8] sizing issues
+                    let data_vec = data.to_vec(); // Convert to Vec<u8> to avoid [u8] sizing issues
                     serde_json::from_slice::<FederatedProposal>(&data_vec)
                 } {
                     // Filter by status if requested
@@ -779,26 +798,30 @@ where
 
                     // Get sync metadata if available
                     let sync_key = FederationStorage::make_sync_key(proposal_id);
-                    let sync_info = match storage.get(Some(auth_context), FEDERATION_NAMESPACE, &sync_key) {
-                        Ok(data) => {
-                            if let Ok(metadata) =
-                                serde_json::from_slice::<FederationSyncMetadata>(&data)
-                            {
-                                Some(metadata)
-                            } else {
-                                None
+                    let sync_info =
+                        match storage.get(Some(auth_context), FEDERATION_NAMESPACE, &sync_key) {
+                            Ok(data) => {
+                                if let Ok(metadata) =
+                                    serde_json::from_slice::<FederationSyncMetadata>(&data)
+                                {
+                                    Some(metadata)
+                                } else {
+                                    None
+                                }
                             }
-                        }
-                        Err(_) => None,
-                    };
+                            Err(_) => None,
+                        };
 
                     // Calculate vote counts
                     let votes_key = FederationStorage::make_votes_key(proposal_id);
-                    let vote_count =
-                        match storage.list_keys(Some(auth_context), VOTES_NAMESPACE, Some(&votes_key)) {
-                            Ok(keys) => keys.len(),
-                            Err(_) => 0,
-                        };
+                    let vote_count = match storage.list_keys(
+                        Some(auth_context),
+                        VOTES_NAMESPACE,
+                        Some(&votes_key),
+                    ) {
+                        Ok(keys) => keys.len(),
+                        Err(_) => 0,
+                    };
 
                     // Display proposal info
                     println!("\nID:        {}", proposal_id);
