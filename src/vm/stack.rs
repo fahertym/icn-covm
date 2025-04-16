@@ -82,7 +82,7 @@ impl StackOps for VMStack {
     }
 
     /// Pop a value from the stack
-    fn pop(&mut self, op_name: &str) -> Result<f64, VMError> {
+    fn pop(&mut self, _op_name: &str) -> Result<f64, VMError> {
         self.stack.pop().ok_or(VMError::StackUnderflow)
     }
 
@@ -104,14 +104,14 @@ impl StackOps for VMStack {
     }
 
     /// Duplicate the top value on the stack
-    fn dup(&mut self, op_name: &str) -> Result<(), VMError> {
+    fn dup(&mut self, _op_name: &str) -> Result<(), VMError> {
         let value = self.top().ok_or(VMError::StackUnderflow)?;
         self.push(value);
         Ok(())
     }
 
     /// Swap the top two values on the stack
-    fn swap(&mut self, op_name: &str) -> Result<(), VMError> {
+    fn swap(&mut self, _op_name: &str) -> Result<(), VMError> {
         if self.stack.len() < 2 {
             return Err(VMError::StackUnderflow);
         }
@@ -122,7 +122,7 @@ impl StackOps for VMStack {
     }
 
     /// Copy the second value to the top of the stack
-    fn over(&mut self, op_name: &str) -> Result<(), VMError> {
+    fn over(&mut self, _op_name: &str) -> Result<(), VMError> {
         if self.stack.len() < 2 {
             return Err(VMError::StackUnderflow);
         }
@@ -134,7 +134,7 @@ impl StackOps for VMStack {
     }
 
     /// Check if all values in the specified depth are equal
-    fn assert_equal_stack(&self, depth: usize, op_name: &str) -> Result<bool, VMError> {
+    fn assert_equal_stack(&self, depth: usize, _op_name: &str) -> Result<bool, VMError> {
         if self.stack.len() < depth {
             return Err(VMError::StackUnderflow);
         }

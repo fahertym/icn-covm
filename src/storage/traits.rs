@@ -281,7 +281,7 @@ impl<S: StorageBackend> StorageExtensions for S {
         let bytes = self.get(auth, namespace, key)?;
         serde_json::from_slice(&bytes).map_err(|e| {
             crate::storage::errors::StorageError::SerializationError {
-                data_type: "Identity".to_string(),
+                data_type: std::any::type_name::<T>().to_string(),
                 details: e.to_string(),
             }
         })
@@ -296,7 +296,7 @@ impl<S: StorageBackend> StorageExtensions for S {
     ) -> StorageResult<()> {
         let bytes = serde_json::to_vec(value).map_err(|e| {
             crate::storage::errors::StorageError::SerializationError {
-                data_type: "Identity".to_string(),
+                data_type: std::any::type_name::<T>().to_string(),
                 details: e.to_string(),
             }
         })?;
@@ -313,7 +313,7 @@ impl<S: StorageBackend> StorageExtensions for S {
         match self.get_version(auth, namespace, key, version) {
             Ok((bytes, _)) => serde_json::from_slice(&bytes).map(Some).map_err(|e| {
                 crate::storage::errors::StorageError::SerializationError {
-                    data_type: "Identity".to_string(),
+                    data_type: std::any::type_name::<T>().to_string(),
                     details: e.to_string(),
                 }
             }),

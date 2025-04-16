@@ -208,11 +208,16 @@ impl fmt::Display for StorageError {
             Self::Other { details } => {
                 write!(f, "Storage error: {}", details)
             }
-            Self::IoError { operation, details } => {
-                write!(f, "IO error: {}", details)
+            Self::IoError { operation: _operation, details } => {
+                write!(f, "IO error: {} ({})", details, _operation)
             }
+            #[allow(deprecated)]
             Self::IOError { operation, details } => {
-                write!(f, "IO error: {}", details)
+                // Just delegate to IoError to avoid duplicated code
+                Self::IoError { 
+                    operation: operation.clone(), 
+                    details: details.clone() 
+                }.fmt(f)
             }
             Self::ResourceNotFound(key) => {
                 write!(f, "Resource not found: {}", key)

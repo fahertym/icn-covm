@@ -107,3 +107,9 @@ impl From<std::time::SystemTimeError> for FederationError {
         Self::ClockError(err.to_string())
     }
 }
+
+impl From<libp2p::multiaddr::Error> for FederationError {
+    fn from(err: libp2p::multiaddr::Error) -> Self {
+        Self::NetworkError(format!("Multiaddr error: {}", err))
+    }
+}

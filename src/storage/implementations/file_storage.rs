@@ -133,21 +133,21 @@ impl FileStorage {
         let root = root_path.as_ref().to_path_buf();
 
         // Create the basic directory structure if it doesn't exist
-        create_dir_all(root.join("namespaces")).map_err(|e| StorageError::IOError {
-            operation: "creating namespaces directory".to_string(),
-            details: e.to_string(),
+        create_dir_all(root.join("namespaces")).map_err(|e| StorageError::IoError {
+            operation: "create_namespaces_dir".to_string(),
+            details: format!("Unable to create namespaces directory: {}", e),
         })?;
-        create_dir_all(root.join("accounts")).map_err(|e| StorageError::IOError {
-            operation: "creating accounts directory".to_string(),
-            details: e.to_string(),
+        create_dir_all(root.join("accounts")).map_err(|e| StorageError::IoError {
+            operation: "create_accounts_dir".to_string(),
+            details: format!("Unable to create accounts directory: {}", e),
         })?;
-        create_dir_all(root.join("audit_logs")).map_err(|e| StorageError::IOError {
-            operation: "creating audit_logs directory".to_string(),
-            details: e.to_string(),
+        create_dir_all(root.join("audit_logs")).map_err(|e| StorageError::IoError {
+            operation: "create_audit_logs_dir".to_string(),
+            details: format!("Unable to create audit logs directory: {}", e),
         })?;
-        create_dir_all(root.join("transactions")).map_err(|e| StorageError::IOError {
-            operation: "creating transactions directory".to_string(),
-            details: e.to_string(),
+        create_dir_all(root.join("transactions")).map_err(|e| StorageError::IoError {
+            operation: "create_transactions_dir".to_string(),
+            details: format!("Unable to create transactions directory: {}", e),
         })?;
 
         // Initialize an empty storage
@@ -190,7 +190,7 @@ impl FileStorage {
         let metadata_path = dir.join("namespace_metadata.json");
         if metadata_path.exists() {
             let metadata_str =
-                fs::read_to_string(&metadata_path).map_err(|e| StorageError::IOError {
+                fs::read_to_string(&metadata_path).map_err(|e| StorageError::IoError {
                     operation: "reading namespace metadata file".to_string(),
                     details: format!(
                         "Failed to read namespace metadata file '{}': {}",
@@ -210,11 +210,11 @@ impl FileStorage {
         }
 
         // Recursively check subdirectories, but skip the 'keys' directory
-        for entry in fs::read_dir(dir).map_err(|e| StorageError::IOError {
+        for entry in fs::read_dir(dir).map_err(|e| StorageError::IoError {
             operation: "reading directory".to_string(),
             details: format!("Failed to read directory '{}': {}", dir.display(), e),
         })? {
-            let entry = entry.map_err(|e| StorageError::IOError {
+            let entry = entry.map_err(|e| StorageError::IoError {
                 operation: "reading directory entry".to_string(),
                 details: format!(
                     "Failed to read directory entry in '{}': {}",
@@ -241,7 +241,7 @@ impl FileStorage {
             return Ok(());
         }
 
-        for entry in fs::read_dir(&accounts_dir).map_err(|e| StorageError::IOError {
+        for entry in fs::read_dir(&accounts_dir).map_err(|e| StorageError::IoError {
             operation: "reading accounts directory".to_string(),
             details: format!(
                 "Failed to read accounts directory '{}': {}",
@@ -249,7 +249,7 @@ impl FileStorage {
                 e
             ),
         })? {
-            let entry = entry.map_err(|e| StorageError::IOError {
+            let entry = entry.map_err(|e| StorageError::IoError {
                 operation: "reading account entry".to_string(),
                 details: format!(
                     "Failed to read account entry in '{}': {}",
@@ -260,7 +260,7 @@ impl FileStorage {
             let path = entry.path();
 
             if path.is_file() && path.extension().unwrap_or_default() == "json" {
-                let account_str = fs::read_to_string(&path).map_err(|e| StorageError::IOError {
+                let account_str = fs::read_to_string(&path).map_err(|e| StorageError::IoError {
                     operation: "reading account file".to_string(),
                     details: format!("Failed to read account file '{}': {}", path.display(), e),
                 })?;
@@ -730,7 +730,7 @@ impl FileStorage {
                     maximum: 0, // Unknown at this level
                 }
             }
-            _ => StorageError::IOError {
+            _ => StorageError::IoError {
                 operation: operation.to_string(),
                 details: format!(
                     "IO error: {} (namespace: {}, key: {:?})",

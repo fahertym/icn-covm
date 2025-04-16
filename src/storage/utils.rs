@@ -50,27 +50,17 @@ pub fn test_timestamp() -> Timestamp {
 
 /// Returns the current time as a `Timestamp` or a default value if it fails.
 ///
-/// Unlike `now_with_fallback`, this doesn't require a fallback parameter and uses 
-/// the current system time as the default. This is a safe alternative for transitioning
-/// code that incorrectly used `now()` directly.
+/// This uses a hardcoded default timestamp if the system time cannot be retrieved.
+/// The default timestamp is January 1, 2022 (1640995200).
+/// This is a safe alternative for transitioning code that incorrectly used `now()` directly.
 pub fn now_with_default() -> Timestamp {
     match now() {
         Ok(ts) => ts,
         Err(e) => {
             // Log the error
             log::warn!("Clock error when getting timestamp, using default: {}", e);
-            // Use a reasonable default (current time in seconds since epoch)
-            // This might be slightly off, but it's better than crashing
-            let default_time = match SystemTime::now().duration_since(UNIX_EPOCH) {
-                Ok(d) => d.as_secs(),
-                Err(_) => {
-                    // This is a very unlikely case, but just in case
-                    log::error!("Unable to get system time, using hardcoded value");
-                    // Use a fixed timestamp as absolute fallback (2022-01-01)
-                    1640995200
-                }
-            };
-            default_time
+            // Use January 1, 2022 as the default timestamp
+            1640995200
         }
     }
 }

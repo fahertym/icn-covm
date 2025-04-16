@@ -221,9 +221,9 @@ impl From<StorageError> for VMError {
                 VMError::StorageError(format!("Resource '{}' is locked: {}", resource, details)),
             StorageError::ValidationError { rule, details } => 
                 VMError::ValidationError(format!("Validation failed for rule '{}': {}", rule, details)),
-            StorageError::IoError { operation, details } => 
+            StorageError::IoError { operation: _operation, details } => 
                 VMError::IoError(io::Error::new(io::ErrorKind::Other, details)),
-            StorageError::IOError { operation, details } => 
+            StorageError::IOError { operation: _operation, details } => 
                 VMError::IoError(io::Error::new(io::ErrorKind::Other, details)),
             StorageError::TimeError { details } => VMError::TimeError(details),
             StorageError::SchemaVersionError { current_version, required_version, details } => 
