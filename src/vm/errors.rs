@@ -76,6 +76,10 @@ pub enum VMError {
     #[error("Storage backend is unavailable or not configured")]
     StorageUnavailable,
 
+    /// Storage not available for access
+    #[error("Storage not available for access")]
+    StorageNotAvailable,
+
     /// Parameter not found
     #[error("Parameter not found: {0}")]
     ParameterNotFound(String),

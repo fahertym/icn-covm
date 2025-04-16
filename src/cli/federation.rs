@@ -185,15 +185,23 @@ where
 {
     match matches.subcommand() {
         Some(("share-proposal", sub_matches)) => {
-            let proposal_id = sub_matches.get_one::<String>("id").unwrap();
-            let node_address = sub_matches.get_one::<String>("to").unwrap();
-            let scope_str = sub_matches.get_one::<String>("scope").unwrap();
+            let proposal_id = sub_matches
+                .get_one::<String>("id")
+                .ok_or_else(|| "Missing required argument: id")?;
+            let node_address = sub_matches
+                .get_one::<String>("to")
+                .ok_or_else(|| "Missing required argument: to")?;
+            let scope_str = sub_matches
+                .get_one::<String>("scope")
+                .ok_or_else(|| "Missing required argument: scope")?;
             let coops = sub_matches.get_one::<String>("coops").map(|s| {
                 s.split(',')
                     .map(|c| c.trim().to_string())
                     .collect::<Vec<_>>()
             });
-            let model_str = sub_matches.get_one::<String>("model").unwrap();
+            let model_str = sub_matches
+                .get_one::<String>("model")
+                .ok_or_else(|| "Missing required argument: model")?;
             let expires_in = sub_matches.get_one::<u64>("expires-in").copied();
 
             // Parse the multiaddress
@@ -247,15 +255,23 @@ where
             .await
         }
         Some(("receive-proposal", sub_matches)) => {
-            let file_path = sub_matches.get_one::<String>("file").unwrap();
+            let file_path = sub_matches
+                .get_one::<String>("file")
+                .ok_or_else(|| "Missing required argument: file")?;
             let source_node = sub_matches.get_one::<String>("source").map(|s| s.to_string());
 
             receive_proposal(vm, file_path, source_node, auth_context).await
         }
         Some(("vote", sub_matches)) => {
-            let proposal_id = sub_matches.get_one::<String>("remote").unwrap();
-            let vote_str = sub_matches.get_one::<String>("vote").unwrap();
-            let node_address = sub_matches.get_one::<String>("node").unwrap();
+            let proposal_id = sub_matches
+                .get_one::<String>("remote")
+                .ok_or_else(|| "Missing required argument: remote")?;
+            let vote_str = sub_matches
+                .get_one::<String>("vote")
+                .ok_or_else(|| "Missing required argument: vote")?;
+            let node_address = sub_matches
+                .get_one::<String>("node")
+                .ok_or_else(|| "Missing required argument: node")?;
 
             // Parse the vote choice
             let vote_choice = match vote_str.to_lowercase().as_str() {
@@ -279,8 +295,12 @@ where
             submit_remote_vote(vm, proposal_id, vote_choice, &target_addr, auth_context).await
         }
         Some(("sync", sub_matches)) => {
-            let proposal_id = sub_matches.get_one::<String>("id").unwrap();
-            let node_address = sub_matches.get_one::<String>("from").unwrap();
+            let proposal_id = sub_matches
+                .get_one::<String>("id")
+                .ok_or_else(|| "Missing required argument: id")?;
+            let node_address = sub_matches
+                .get_one::<String>("from")
+                .ok_or_else(|| "Missing required argument: from")?;
             let force = sub_matches.get_flag("force");
 
             // Parse the multiaddress
@@ -332,6 +352,7 @@ fn local_to_federated_proposal(
             LocalProposalStatus::Deliberation => ProposalStatus::Open,
             LocalProposalStatus::Active => ProposalStatus::Open,
             LocalProposalStatus::Voting => ProposalStatus::Open,
+            LocalProposalStatus::Approved => ProposalStatus::Closed,
             LocalProposalStatus::Executed => ProposalStatus::Executed,
             LocalProposalStatus::Rejected => ProposalStatus::Rejected,
             LocalProposalStatus::Expired => ProposalStatus::Expired,

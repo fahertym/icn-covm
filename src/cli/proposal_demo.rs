@@ -20,15 +20,6 @@ use crate::storage::traits::{Storage, StorageBackend, StorageExtensions};
 use crate::vm::VM;
 use crate::vm::Op;
 
-// Implement Clone for InMemoryStorage to satisfy VM's constraints
-impl Clone for InMemoryStorage {
-    fn clone(&self) -> Self {
-        // Create a new instance - this is a simplified clone for tests
-        // In practice, you would want to clone the actual data
-        InMemoryStorage::new()
-    }
-}
-
 /// Run a complete demonstration of the proposal lifecycle
 ///
 /// This function demonstrates the entire proposal management system by:
@@ -48,7 +39,7 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
     println!("Running proposal lifecycle demo...");
 
     // Set up storage and VM
-    let mut storage = InMemoryStorage::new();
+    let storage = InMemoryStorage::new();
     let mut vm = VM::with_storage_backend(storage);
 
     // Set up auth context with admin role to allow account creation
@@ -78,15 +69,16 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
     push 1
     "#;
 
-    // Store the demo logic in storage
+    // Store the demo logic in storage - using VM's storage access method 
     let logic_path = "governance/logic/repair_budget.dsl";
-    let mut storage_backend = vm.get_storage_backend().unwrap().clone();
-    storage_backend.set(
-        Some(&auth),
-        "governance",
-        logic_path,
-        logic_content.as_bytes().to_vec(),
-    )?;
+    vm.with_storage_mut(|storage| {
+        storage.set(
+            Some(&auth),
+            "governance",
+            logic_path,
+            logic_content.as_bytes().to_vec(),
+        )
+    })??;
 
     // Create a new proposal
     let proposal_id = "demo-proposal-001";
@@ -99,24 +91,26 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
         vec!["doc1.txt".to_string(), "budget.xlsx".to_string()],
     );
 
-    // Store the proposal
-    let mut storage = vm.get_storage_backend().unwrap().clone();
-    storage.set_json(
-        Some(&auth),
-        "governance",
-        &proposal.storage_key(),
-        &proposal,
-    )?;
+    // Store the proposal using VM's storage access
+    vm.with_storage_mut(|storage| {
+        storage.set_json(
+            Some(&auth),
+            "governance",
+            &proposal.storage_key(),
+            &proposal,
+        )
+    })??;
 
     println!("Proposal created with ID: {}", proposal_id);
 
-    // Retrieve and verify the proposal
-    let storage_ref = vm.get_storage_backend().unwrap();
-    let loaded_proposal: Proposal = storage_ref.get_json(
-        Some(&auth),
-        "governance",
-        &proposal.storage_key()
-    )?;
+    // Retrieve and verify the proposal using VM's storage access
+    let loaded_proposal: Proposal = vm.with_storage(|storage| {
+        storage.get_json(
+            Some(&auth),
+            "governance",
+            &proposal.storage_key()
+        )
+    })??;
 
     println!("Retrieved proposal: {:?}", loaded_proposal);
 
@@ -145,29 +139,33 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
 
     // First transition: Draft -> Deliberation
     println!("Transitioning proposal to Deliberation...");
-    let mut proposal = storage_ref.get_json::<Proposal>(
-        Some(&auth),
-        "governance",
-        &proposal.storage_key()
-    )?;
+    let mut proposal = vm.with_storage(|storage| {
+        storage.get_json::<Proposal>(
+            Some(&auth),
+            "governance",
+            &proposal.storage_key()
+        )
+    })??;
 
     proposal.mark_deliberation();
 
-    let mut storage = vm.get_storage_backend().unwrap().clone();
-    storage.set_json(
-        Some(&auth),
-        "governance",
-        &proposal.storage_key(),
-        &proposal,
-    )?;
+    vm.with_storage_mut(|storage| {
+        storage.set_json(
+            Some(&auth),
+            "governance",
+            &proposal.storage_key(),
+            &proposal,
+        )
+    })??;
 
     // Verify transition
-    let storage_ref = vm.get_storage_backend().unwrap();
-    let proposal = storage_ref.get_json::<Proposal>(
-        Some(&auth),
-        "governance",
-        &proposal.storage_key()
-    )?;
+    let proposal = vm.with_storage(|storage| {
+        storage.get_json::<Proposal>(
+            Some(&auth),
+            "governance",
+            &proposal.storage_key()
+        )
+    })??;
 
     if matches!(proposal.status, ProposalStatus::Deliberation) {
         println!("✅ Proposal successfully transitioned to Deliberation");
@@ -191,398 +189,104 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
         reactions: HashMap::new(),
     };
 
-    // Store the comment
-    let mut storage = vm.get_storage_backend().unwrap().clone();
-    storage.set_json(
-        Some(&auth),
-        "governance",
-        &format!(
-            "governance/proposals/{}/comments/{}",
-            proposal_id, comment1_id
-        ),
-        &comment1,
-    )?;
-
-    println!("✅ Added comment: {}", comment1_id);
+    // Store the comment using VM's storage access
+    vm.with_storage_mut(|storage| {
+        storage.set_json(
+            Some(&auth),
+            "governance",
+            &format!(
+                "governance/proposals/{}/comments/{}",
+                proposal_id, comment1_id
+            ),
+            &comment1,
+        )
+    })??;
 
     // Create a reply comment
     let comment2_id = "comment-demo-002";
     let comment2 = crate::cli::proposal::ProposalComment {
         id: comment2_id.to_string(),
-        author: "council_member".to_string(),
+        author: user_id.to_string(),
         timestamp: Utc::now(),
-        content:
-            "I agree, but have we considered allocating some funds for preventative maintenance?"
-                .to_string(),
+        content: "I'm adding a reply to my own comment as an example of threaded discussion."
+            .to_string(),
         reply_to: Some(comment1_id.to_string()),
-        tags: Vec::new(),
+        tags: vec!["example".to_string(), "reply".to_string()],
         reactions: HashMap::new(),
     };
 
-    // Store the comment
-    let mut storage_mut = vm.get_storage_backend().unwrap().clone();
-    storage_mut.set_json(
-        Some(&auth),
-        "governance",
-        &format!(
-            "governance/proposals/{}/comments/{}",
-            proposal_id, comment2_id
-        ),
-        &comment2,
-    )?;
+    // Store the reply
+    vm.with_storage_mut(|storage| {
+        storage.set_json(
+            Some(&auth),
+            "governance",
+            &format!(
+                "governance/proposals/{}/comments/{}",
+                proposal_id, comment2_id
+            ),
+            &comment2,
+        )
+    })??;
 
-    println!("✅ Added reply comment: {}", comment2_id);
+    println!("Added comments to the proposal");
 
-    // Add more nested comments to demonstrate threading
-    let comment3_id = "comment-demo-003";
-    let comment3 = crate::cli::proposal::ProposalComment {
-        id: comment3_id.to_string(),
-        author: user_id.to_string(),
-        timestamp: Utc::now() + Duration::seconds(30),
-        content: "That's a great point about preventative maintenance. I'll allocate 20% for that purpose.".to_string(),
-        reply_to: Some(comment2_id.to_string()),
-        tags: Vec::new(),
-        reactions: HashMap::new(),
-    };
+    // Retrieve and display comments
+    let comment_keys = vm.with_storage(|storage| {
+        storage.list_keys(
+            Some(&auth),
+            "governance",
+            Some(&format!("governance/proposals/{}/comments", proposal_id)),
+        )
+    })??;
 
-    storage_mut.set_json(
-        Some(&auth),
-        "governance",
-        &format!(
-            "governance/proposals/{}/comments/{}",
-            proposal_id, comment3_id
-        ),
-        &comment3,
-    )?;
+    println!("Found {} comments", comment_keys.len());
 
-    println!("✅ Added nested reply: {}", comment3_id);
-
-    // Add another top-level comment
-    let comment4_id = "comment-demo-004";
-    let comment4 = crate::cli::proposal::ProposalComment {
-        id: comment4_id.to_string(),
-        author: "finance_team".to_string(),
-        timestamp: Utc::now() + Duration::seconds(60),
-        content: "Have we verified this budget against our quarterly allocations?".to_string(),
-        reply_to: None,
-        tags: Vec::new(),
-        reactions: HashMap::new(),
-    };
-
-    storage_mut.set_json(
-        Some(&auth),
-        "governance",
-        &format!(
-            "governance/proposals/{}/comments/{}",
-            proposal_id, comment4_id
-        ),
-        &comment4,
-    )?;
-
-    println!("✅ Added second top-level comment: {}", comment4_id);
-
-    // Add reply to the second thread
-    let comment5_id = "comment-demo-005";
-    let comment5 = crate::cli::proposal::ProposalComment {
-        id: comment5_id.to_string(),
-        author: user_id.to_string(),
-        timestamp: Utc::now() + Duration::seconds(90),
-        content:
-            "Yes, I've confirmed with accounting that this fits within our Q3 maintenance budget."
-                .to_string(),
-        reply_to: Some(comment4_id.to_string()),
-        tags: Vec::new(),
-        reactions: HashMap::new(),
-    };
-
-    storage_mut.set_json(
-        Some(&auth),
-        "governance",
-        &format!(
-            "governance/proposals/{}/comments/{}",
-            proposal_id, comment5_id
-        ),
-        &comment5,
-    )?;
-
-    println!("✅ Added reply to second thread: {}", comment5_id);
-
-    // Release mutable borrow on VM first
-    let _ = storage;
-
-    // Demonstrate comment display
-    println!("\n--- Demonstrating threaded comment display ---");
-    let comments = crate::cli::proposal::fetch_comments_threaded(&vm, proposal_id, Some(&auth), false)?;
-
-    // Find and sort root comments
-    let mut roots: Vec<&crate::cli::proposal::ProposalComment> =
-        comments.values().filter(|c| c.reply_to.is_none()).collect();
-
-    roots.sort_by_key(|c| c.timestamp);
-
-    // Print the threaded comments
-    println!("Comments for proposal: {}", proposal_id);
-
-    fn print_thread_demo(
-        comments: &HashMap<String, crate::cli::proposal::ProposalComment>,
-        comment: &crate::cli::proposal::ProposalComment,
-        depth: usize,
-    ) {
-        let indent = "  ".repeat(depth);
-        println!(
-            "{}└─ [{}] by {} at {}",
-            indent,
-            comment.id,
-            comment.author,
-            comment.timestamp.format("%Y-%m-%d %H:%M:%S")
-        );
-        println!("{}   {}", indent, comment.content);
-
-        // Find and sort replies to this comment
-        let mut replies: Vec<&crate::cli::proposal::ProposalComment> = comments
-            .values()
-            .filter(|c| c.reply_to.as_deref() == Some(&comment.id))
-            .collect();
-
-        replies.sort_by_key(|c| c.timestamp);
-
-        for reply in replies {
-            print_thread_demo(comments, reply, depth + 1);
-        }
+    // Load all comments
+    let mut comments = HashMap::new();
+    for key in &comment_keys {
+        let comment: crate::cli::proposal::ProposalComment = vm.with_storage(|storage| {
+            storage.get_json(Some(&auth), "governance", key)
+        })??;
+        comments.insert(comment.id.clone(), comment);
     }
 
-    for root in roots {
-        print_thread_demo(&comments, root, 0);
-        println!();
+    println!("Loaded {} comments", comments.len());
+
+    // Display comments in a threaded format
+    println!("\n--- Threaded Comments ---");
+    let root_comments = comments.values().filter(|c| c.reply_to.is_none());
+    for comment in root_comments {
+        print_thread_demo(&comments, comment, 0);
     }
 
-    println!("Total comments: {}", comments.len());
-
-    // Get a new mutable reference for the next section
-    let storage = vm.get_storage_backend().as_mut().unwrap();
-
-    // Modify deliberation_started_at to simulate elapsed time
-    println!("\n--- Testing deliberation duration requirements ---");
-
-    // Create a second proposal with custom min_deliberation
-    let proposal2_id = "demo-proposal-002";
-    let mut proposal2 = Proposal::new(
-        proposal2_id.to_string(),
-        user_id.to_string(),
-        Some(logic_path.to_string()),
-        None,
-        Some("governance/discussions/budget-alt".to_string()),
-        vec!["alt-doc.txt".to_string()],
-    );
-
-    // Set custom min_deliberation_hours
-    proposal2.min_deliberation_hours = Some(48);
-
-    // Store the second proposal
-    let mut storage = vm.get_storage_backend().unwrap().clone();
-    storage.set_json(
-        Some(&auth),
-        "governance",
-        &proposal2.storage_key(),
-        &proposal2,
-    )?;
-
-    // Mark as in deliberation
-    proposal2.mark_deliberation();
-
-    // Set deliberation_started_at to 36 hours ago
-    proposal2.deliberation_started_at = Some(Utc::now() - Duration::hours(36));
-
-    // Update in storage
-    storage.set_json(
-        Some(&auth),
-        "governance",
-        &proposal2.storage_key(),
-        &proposal2,
-    )?;
-
-    println!(
-        "Created proposal {} with custom 48-hour minimum deliberation time",
-        proposal2_id
-    );
-    println!("Deliberation started 36 hours ago (not yet eligible for transition to Active)");
-
-    // Back to original proposal - set deliberation start time to 36 hours ago
-    let mut proposal = storage_ref.get_json::<Proposal>(
-        Some(&auth),
-        "governance",
-        &proposal.storage_key()
-    )?;
-
-    proposal.deliberation_started_at = Some(Utc::now() - Duration::hours(36));
-
-    // Update in storage
-    storage.set_json(
-        Some(&auth),
-        "governance",
-        &proposal.storage_key(),
-        &proposal,
-    )?;
-
-    println!(
-        "Updated original proposal: deliberation started 36 hours ago (eligible for transition)"
-    );
-
-    // Second transition: Deliberation -> Active
-    println!("\n--- Continuing with normal flow ---");
-    println!("Transitioning proposal from Deliberation to Active...");
-
-    // This should succeed since the deliberation period (36 hours) exceeds the default minimum (24 hours)
-    let mut proposal = storage_ref.get_json::<Proposal>(
-        Some(&auth),
-        "governance",
-        &proposal.storage_key()
-    )?;
-
-    proposal.mark_active();
-
-    let mut storage = vm.get_storage_backend().unwrap().clone();
-    storage.set_json(
-        Some(&auth),
-        "governance",
-        &proposal.storage_key(),
-        &proposal,
-    )?;
-
-    // Verify transition
-    let storage_ref = vm.get_storage_backend().unwrap();
-    let proposal = storage_ref.get_json::<Proposal>(
-        Some(&auth),
-        "governance",
-        &proposal.storage_key()
-    )?;
-
-    if matches!(proposal.status, ProposalStatus::Active) {
-        println!(
-            "✅ Proposal successfully transitioned to Active (36 hours > default 24 hour minimum)"
-        );
-    } else {
-        println!("❌ Failed to transition proposal to Active");
-    }
-
-    // Now try to transition the second proposal which requires 48 hours
-    println!("\n--- Testing minimum deliberation time enforcement ---");
-    println!("Attempting to transition second proposal to Active (should fail)...");
-
-    // In a real CLI context, this would fail with our validation error
-    // Here we'll simulate the validation check
-    let proposal2 = storage_ref.get_json::<Proposal>(
-        Some(&auth),
-        "governance",
-        &proposal2.storage_key()
-    )?;
-
-    let started_at = proposal2.deliberation_started_at.unwrap();
-    let now = Utc::now();
-    let elapsed = now.signed_duration_since(started_at);
-    let min_required = proposal2.min_deliberation_hours.unwrap_or(24);
-
-    if elapsed.num_hours() < min_required {
-        println!(
-            "❌ Transition blocked: Deliberation phase must last at least {} hours (elapsed: {})",
-            min_required,
-            elapsed.num_hours()
-        );
-        println!("✅ Minimum deliberation time correctly enforced");
-    } else {
-        println!("⚠️ Unexpected: Deliberation time requirement satisfied");
-    }
-
-    // Create a third proposal with very short deliberation time to test --force
-    let proposal3_id = "demo-proposal-003";
-    let mut proposal3 = Proposal::new(
-        proposal3_id.to_string(),
-        user_id.to_string(),
-        Some(logic_path.to_string()),
-        None,
-        None,
-        vec![],
-    );
-
-    // Store the third proposal
-    let mut storage = vm.get_storage_backend().unwrap().clone();
-    storage.set_json(
-        Some(&auth),
-        "governance",
-        &proposal3.storage_key(),
-        &proposal3,
-    )?;
-
-    // Mark as in deliberation
-    proposal3.mark_deliberation();
-
-    // Set deliberation_started_at to 1 hour ago
-    proposal3.deliberation_started_at = Some(Utc::now() - Duration::hours(1));
-
-    // Update in storage
-    storage.set_json(
-        Some(&auth),
-        "governance",
-        &proposal3.storage_key(),
-        &proposal3,
-    )?;
-
-    println!(
-        "\nCreated proposal {} with deliberation started 1 hour ago",
-        proposal3_id
-    );
-    println!("Simulating --force flag to bypass time restriction...");
-
-    // Force transition to Active despite insufficient deliberation time
-    proposal3.mark_active();
-
-    // Update in storage
-    storage.set_json(
-        Some(&auth),
-        "governance",
-        &proposal3.storage_key(),
-        &proposal3,
-    )?;
-
-    // Verify transition
-    let storage_ref = vm.get_storage_backend().unwrap();
-    let proposal3 = storage_ref.get_json::<Proposal>(
-        Some(&auth),
-        "governance",
-        &proposal3.storage_key()
-    )?;
-
-    if matches!(proposal3.status, ProposalStatus::Active) {
-        println!("✅ Force flag correctly allowed bypassing time restriction");
-    } else {
-        println!("❌ Force transition failed");
-    }
-
-    // Third transition: Active -> Voting
-    println!("Transitioning proposal to Voting...");
-    let mut proposal = storage_ref.get_json::<Proposal>(
-        Some(&auth),
-        "governance",
-        &proposal.storage_key()
-    )?;
+    // Transition to voting phase
+    println!("\n--- Transitioning to voting phase ---");
+    let mut proposal = vm.with_storage(|storage| {
+        storage.get_json::<Proposal>(
+            Some(&auth),
+            "governance",
+            &proposal.storage_key()
+        )
+    })??;
 
     proposal.mark_voting();
 
-    let mut storage = vm.get_storage_backend().unwrap().clone();
-    storage.set_json(
-        Some(&auth),
-        "governance",
-        &proposal.storage_key(),
-        &proposal,
-    )?;
+    vm.with_storage_mut(|storage| {
+        storage.set_json(
+            Some(&auth),
+            "governance",
+            &proposal.storage_key(),
+            &proposal,
+        )
+    })??;
 
-    // Verify transition
-    let storage_ref = vm.get_storage_backend().unwrap();
-    let proposal = storage_ref.get_json::<Proposal>(
-        Some(&auth),
-        "governance",
-        &proposal.storage_key()
-    )?;
+    let proposal = vm.with_storage(|storage| {
+        storage.get_json::<Proposal>(
+            Some(&auth),
+            "governance",
+            &proposal.storage_key()
+        )
+    })??;
 
     if matches!(proposal.status, ProposalStatus::Voting) {
         println!("✅ Proposal successfully transitioned to Voting");
@@ -590,103 +294,177 @@ pub fn run_proposal_demo() -> Result<(), Box<dyn Error>> {
         println!("❌ Failed to transition proposal to Voting");
     }
 
-    // Final transition: Voting -> Executed with logic execution
-    println!("Transitioning proposal to Executed with logic execution...");
-    let mut proposal = storage_ref.get_json::<Proposal>(
-        Some(&auth),
-        "governance",
-        &proposal.storage_key()
-    )?;
+    // Add votes (simplified for the demo)
+    println!("\n--- Recording votes ---");
 
-    // Parse and execute the logic
-    if let Some(logic_path) = &proposal.logic_path {
-        println!("Executing logic from: {}", logic_path);
+    // Store votes
+    vm.with_storage_mut(|storage| {
+        storage.set_json(
+            Some(&auth),
+            "governance",
+            &format!("governance/proposals/{}/votes/vote1", proposal_id),
+            &serde_json::json!({
+                "voter": "member1",
+                "vote": "yes",
+                "reason": "This budget increase is necessary",
+                "timestamp": Utc::now().to_rfc3339()
+            }),
+        )
+    })??;
 
-        // Get the logic content from storage
-        let storage_ref = vm.get_storage_backend().unwrap();
-        let logic_bytes = storage_ref.get(Some(&auth), "governance", logic_path)?;
-        let logic_str = String::from_utf8(logic_bytes)?;
+    vm.with_storage_mut(|storage| {
+        storage.set_json(
+            Some(&auth),
+            "governance",
+            &format!("governance/proposals/{}/votes/vote2", proposal_id),
+            &serde_json::json!({
+                "voter": "member2",
+                "vote": "yes",
+                "reason": "I agree with this proposal",
+                "timestamp": Utc::now().to_rfc3339()
+            }),
+        )
+    })??;
 
-        // Parse and execute
-        let (ops, _) = parse_dsl(&logic_str)?;
-        let execution_result = match vm.execute(&ops) {
-            Ok(_) => format!("Successfully executed logic at {}", logic_path),
-            Err(e) => format!("Logic execution failed: {}", e),
-        };
+    // Count votes for demonstration
+    let vote_keys = vm.with_storage(|storage| {
+        storage.list_keys(
+            Some(&auth),
+            "governance",
+            Some(&format!("governance/proposals/{}/votes", proposal_id)),
+        )
+    })??;
 
-        println!("Execution result: {}", execution_result);
-        proposal.mark_executed(execution_result);
+    println!("Recorded {} votes", vote_keys.len());
+
+    // Transition to approved
+    println!("\n--- Transitioning to approved ---");
+    let mut proposal = vm.with_storage(|storage| {
+        storage.get_json::<Proposal>(
+            Some(&auth),
+            "governance",
+            &proposal.storage_key()
+        )
+    })??;
+
+    proposal.mark_approved();
+
+    vm.with_storage_mut(|storage| {
+        storage.set_json(
+            Some(&auth),
+            "governance",
+            &proposal.storage_key(),
+            &proposal,
+        )
+    })??;
+
+    let proposal = vm.with_storage(|storage| {
+        storage.get_json::<Proposal>(
+            Some(&auth),
+            "governance",
+            &proposal.storage_key()
+        )
+    })??;
+
+    if matches!(proposal.status, ProposalStatus::Approved) {
+        println!("✅ Proposal successfully transitioned to Approved");
     } else {
-        proposal.mark_executed("No logic path available".to_string());
+        println!("❌ Failed to transition proposal to Approved");
     }
 
-    let mut storage = vm.get_storage_backend().unwrap().clone();
-    storage.set_json(
-        Some(&auth),
-        "governance",
-        &proposal.storage_key(),
-        &proposal,
-    )?;
+    // Execute the proposal's DSL logic
+    println!("\n--- Executing proposal logic ---");
 
-    // Verify final transition
-    let storage_ref = vm.get_storage_backend().unwrap();
-    let final_proposal = storage_ref.get_json::<Proposal>(
-        Some(&auth),
-        "governance",
-        &proposal.storage_key()
-    )?;
+    // Get the DSL logic
+    let logic_path = proposal.logic_path.unwrap();
+    let logic_content = vm.with_storage(|storage| {
+        storage.get(Some(&auth), "governance", &logic_path)
+    })??;
+    let logic_str = std::str::from_utf8(&logic_content).unwrap();
 
-    if matches!(final_proposal.status, ProposalStatus::Executed) {
-        println!("✅ Proposal successfully transitioned to Executed");
-    } else {
-        println!("❌ Failed to transition proposal to Executed");
-    }
+    // Parse the DSL
+    let (ops, _) = parse_dsl(logic_str)?;
 
-    if let Some(result) = final_proposal.execution_result {
-        println!("✅ Execution result set: {}", result);
-    } else {
-        println!("❌ Execution result not set correctly");
-    }
+    println!("Executing DSL operations: {} ops", ops.len());
 
-    // Verify that the budget value was set in storage
-    let storage_ref = vm.get_storage_backend().unwrap();
-    if let Ok(budget_bytes) = storage_ref.get(Some(&auth), "governance", "repair_budget") {
-        if let Ok(budget_str) = String::from_utf8(budget_bytes) {
-            println!("✅ Budget was set in storage: {}", budget_str);
-        }
-    }
+    // Set the namespace and execute
+    vm.set_namespace("governance");
+    vm.execute(&ops)?;
 
-    println!("Proposal demo completed successfully!");
+    println!("Execution result: {:?}", vm.top());
 
+    // Check the stored values from DSL execution
+    let budget_value = vm.with_storage(|storage| {
+        storage.get(
+            Some(&auth),
+            "governance",
+            "repair_budget",
+        )
+    })??;
+    let budget_str = std::str::from_utf8(&budget_value).unwrap();
+    println!("Stored budget value: {}", budget_str);
+
+    println!("\n--- Proposal lifecycle demo completed successfully ---");
     Ok(())
 }
 
-/// Initialize storage for the demo
-///
-/// Sets up the necessary account and namespace structure in storage
-/// to support the proposal demo.
-///
-/// # Parameters
-/// * `vm` - The virtual machine with mutable access to storage
-/// * `auth` - Authentication context with admin permissions
-///
-/// # Returns
-/// * `Result<(), Box<dyn Error>>` - Success or an error
+/// Helper function to recursively print comments in a threaded format
+fn print_thread_demo(
+    comments: &HashMap<String, crate::cli::proposal::ProposalComment>,
+    comment: &crate::cli::proposal::ProposalComment,
+    depth: usize,
+) {
+    // Print the current comment with indentation
+    let indent = "  ".repeat(depth);
+    println!(
+        "{}{} by {} at {}:",
+        indent, comment.id, comment.author, comment.timestamp
+    );
+    println!("{}{}", indent, comment.content);
+
+    // Print tags if any
+    if !comment.tags.is_empty() {
+        println!("{}Tags: {}", indent, comment.tags.join(", "));
+    }
+
+    // Print reactions if any
+    if !comment.reactions.is_empty() {
+        let reactions: Vec<String> = comment
+            .reactions
+            .iter()
+            .map(|(reaction, count)| format!("{} ({})", reaction, count))
+            .collect();
+        println!("{}Reactions: {}", indent, reactions.join(", "));
+    }
+
+    println!(""); // Empty line for readability
+
+    // Recursively print replies
+    let replies = comments
+        .values()
+        .filter(|c| c.reply_to.as_ref() == Some(&comment.id));
+    for reply in replies {
+        print_thread_demo(comments, reply, depth + 1);
+    }
+}
+
+/// Initialize storage with required namespaces for the proposal demo
 fn init_storage<S>(vm: &mut VM<S>, auth: &AuthContext) -> Result<(), Box<dyn Error>>
 where
-    S: StorageExtensions + Clone + Send + Sync + Debug + 'static,
+    S: StorageExtensions + Send + Sync + Clone + Debug + 'static,
 {
-    let mut storage = vm.get_storage_backend().ok_or("Storage backend not available")?.clone();
+    // Create required namespaces using VM's storage access
+    vm.with_storage_mut(|storage| {
+        storage.create_namespace(Some(auth), "governance", 1_000_000, None)
+    })??;
     
-    // Create account and namespace
-    storage.create_account(Some(auth), "demo_user", 1024 * 1024)?;
-    storage.create_namespace(Some(auth), "governance", 1024 * 1024, None)?;
-    
+    println!("Created governance namespace");
     Ok(())
 }
 
+/// Helper function to load DSL code from a file
 fn load_dsl_from_file(file_path: &str) -> Result<Vec<Op>, Box<dyn Error>> {
-    let content = std::fs::read_to_string(file_path)?;
+    let content = fs::read_to_string(file_path)?;
     let (ops, _) = parse_dsl(&content)?;
     Ok(ops)
 }
@@ -695,10 +473,8 @@ fn load_dsl_from_file(file_path: &str) -> Result<Vec<Op>, Box<dyn Error>> {
 mod tests {
     use super::*;
 
-    /// Test that the proposal lifecycle demo runs successfully
     #[test]
     fn test_proposal_lifecycle() {
-        let result = run_proposal_demo();
-        assert!(result.is_ok());
+        assert!(run_proposal_demo().is_ok());
     }
 }

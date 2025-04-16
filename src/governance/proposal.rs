@@ -23,6 +23,7 @@ pub enum ProposalStatus {
     Deliberation,
     Active,
     Voting,
+    Approved,
     Executed,
     Rejected,
     Expired,
@@ -69,6 +70,10 @@ impl Proposal {
 
     pub fn mark_voting(&mut self) {
         self.status = ProposalStatus::Voting;
+    }
+
+    pub fn mark_approved(&mut self) {
+        self.status = ProposalStatus::Approved;
     }
 
     pub fn mark_executed(&mut self, result: String) {

@@ -100,6 +100,28 @@ where
         self.executor.storage_backend.as_mut()
     }
 
+    /// Access storage with a closure (immutable)
+    pub fn with_storage<F, R>(&self, f: F) -> Result<R, VMError>
+    where
+        F: FnOnce(&S) -> R,
+    {
+        match self.get_storage_backend() {
+            Some(storage) => Ok(f(storage)),
+            None => Err(VMError::StorageNotAvailable),
+        }
+    }
+
+    /// Access storage with a closure (mutable)
+    pub fn with_storage_mut<F, R>(&mut self, f: F) -> Result<R, VMError>
+    where
+        F: FnOnce(&mut S) -> R,
+    {
+        match self.get_storage_backend_mut() {
+            Some(storage) => Ok(f(storage)),
+            None => Err(VMError::StorageNotAvailable),
+        }
+    }
+
     /// Get the namespace
     pub fn get_namespace(&self) -> Option<&str> {
         Some(&self.executor.namespace)

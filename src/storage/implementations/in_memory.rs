@@ -49,6 +49,7 @@ fn to_bytes(s: &str) -> Vec<u8> {
 /// - Permission checking
 /// - Audit logging
 /// - Transactions
+#[derive(Clone)]
 pub struct InMemoryStorage {
     /// Main data store: Namespace -> Key -> Value
     data: HashMap<String, HashMap<String, Vec<u8>>>,

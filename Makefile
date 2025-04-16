@@ -1,4 +1,4 @@
-.PHONY: build clean test clippy fmt doc benchmark
+.PHONY: build clean test clippy fmt doc benchmark federation-test
 
 # Default target
 all: build test clippy fmt
@@ -44,6 +44,44 @@ benchmark:
 	@echo ""
 	@echo "Benchmark: Loop"
 	@cargo run --release -- --benchmark --program demo/benchmark/loop.dsl
+
+# Run federation tests using Docker
+federation-test:
+	@echo "Running federation tests..."
+	@echo "Building Docker images..."
+	docker-compose build
+	@echo "Starting bootstrap node..."
+	docker-compose up -d node1
+	@echo "Waiting for bootstrap node to initialize (10s)..."
+	@sleep 10
+	@echo "Getting bootstrap node ID..."
+	@PEER_ID=$$(docker-compose logs node1 | grep "Local peer ID" | tail -n 1 | sed -E 's/.*Local peer ID: ([^ ]+).*/\1/'); \
+	if [ -n "$$PEER_ID" ]; then \
+		echo "Found bootstrap node ID: $$PEER_ID"; \
+		./update_bootstrap.sh $$PEER_ID; \
+		echo "Updated bootstrap configuration"; \
+		echo "Starting other nodes..."; \
+		docker-compose up -d node2 node3; \
+		echo "Waiting for nodes to connect (15s)..."; \
+		sleep 15; \
+		echo "Federation test logs:"; \
+		docker-compose logs | grep -E "Connected to|mDNS discovered|Kademlia query"; \
+		echo "Checking for successful node connections..."; \
+		CONNECTION_COUNT=$$(docker-compose logs | grep -c "Connected to"); \
+		if [ $$CONNECTION_COUNT -gt 0 ]; then \
+			echo "✅ Federation test passed: $$CONNECTION_COUNT connections established"; \
+			docker-compose down; \
+			exit 0; \
+		else \
+			echo "❌ Federation test failed: No connections established"; \
+			docker-compose down; \
+			exit 1; \
+		fi; \
+	else \
+		echo "❌ Could not find bootstrap node ID"; \
+		docker-compose down; \
+		exit 1; \
+	fi
 
 # Run all
 run_all: all

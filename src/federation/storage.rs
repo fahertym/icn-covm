@@ -93,7 +93,15 @@ impl FederationStorage {
         storage.set_json(None, &proposal.namespace, &key, &proposal)?;
 
         // Add to the cache
-        let mut cache = self.cache.lock().unwrap();
+        let mut cache = match self.cache.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                // If the mutex is poisoned, get a consistent state
+                warn!("Cache mutex was poisoned, recovering the guard");
+                poisoned.into_inner()
+            }
+        };
+        
         cache
             .proposals
             .insert(proposal.proposal_id.clone(), proposal);
@@ -116,7 +124,15 @@ impl FederationStorage {
         storage.set_json(auth, &proposal.namespace, &key, &proposal)?;
 
         // Add to the cache
-        let mut cache = self.cache.lock().unwrap();
+        let mut cache = match self.cache.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                // If the mutex is poisoned, get a consistent state
+                warn!("Cache mutex was poisoned, recovering the guard");
+                poisoned.into_inner()
+            }
+        };
+        
         cache
             .proposals
             .insert(proposal.proposal_id.clone(), proposal);
@@ -277,7 +293,15 @@ impl FederationStorage {
         storage.set_json(None, VOTES_NAMESPACE, &key, &votes)?;
 
         // Update the cache
-        let mut cache = self.cache.lock().unwrap();
+        let mut cache = match self.cache.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                // If the mutex is poisoned, get a consistent state
+                warn!("Cache mutex was poisoned, recovering the guard");
+                poisoned.into_inner()
+            }
+        };
+        
         cache
             .votes
             .entry(vote.proposal_id.clone())
@@ -334,7 +358,15 @@ impl FederationStorage {
     ) -> StorageResult<FederatedProposal> {
         // First check the cache
         {
-            let cache = self.cache.lock().unwrap();
+            let cache = match self.cache.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => {
+                    // If the mutex is poisoned, get a consistent state
+                    warn!("Cache mutex was poisoned, recovering the guard");
+                    poisoned.into_inner()
+                }
+            };
+            
             if let Some(proposal) = cache.proposals.get(proposal_id) {
                 return Ok(proposal.clone());
             }
@@ -353,7 +385,15 @@ impl FederationStorage {
     ) -> StorageResult<Vec<FederatedVote>> {
         // First check the cache
         {
-            let cache = self.cache.lock().unwrap();
+            let cache = match self.cache.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => {
+                    // If the mutex is poisoned, get a consistent state
+                    warn!("Cache mutex was poisoned, recovering the guard");
+                    poisoned.into_inner()
+                }
+            };
+            
             if let Some(votes) = cache.votes.get(proposal_id) {
                 return Ok(votes.clone());
             }

@@ -4,6 +4,7 @@
 use icn_covm::identity::{Identity, Profile};
 use icn_covm::storage::auth::AuthContext;
 use icn_covm::storage::implementations::in_memory::InMemoryStorage;
+use icn_covm::storage::traits::StorageExtensions;
 use icn_covm::storage::utils;
 use icn_covm::vm::Op;
 use icn_covm::vm::VM;
@@ -52,7 +53,8 @@ fn setup_identity_context() -> AuthContext {
 #[test]
 fn test_identity_verification() {
     let auth = setup_identity_context();
-    let mut vm: VM<InMemoryStorage> = VM::new();
+    let storage = InMemoryStorage::new();
+    let mut vm = VM::with_storage_backend(storage);
     vm.set_auth_context(auth);
     vm.mock_storage_operations(); // Use mock storage for tests
 
@@ -80,7 +82,8 @@ fn test_identity_verification() {
 #[test]
 fn test_membership_check() {
     let auth = setup_identity_context();
-    let mut vm: VM<InMemoryStorage> = VM::new();
+    let storage = InMemoryStorage::new();
+    let mut vm = VM::with_storage_backend(storage);
     vm.set_auth_context(auth);
     vm.mock_storage_operations(); // Use mock storage for tests
 
@@ -106,7 +109,8 @@ fn test_membership_check() {
 #[test]
 fn test_delegation_check() {
     let auth = setup_identity_context();
-    let mut vm: VM<InMemoryStorage> = VM::new();
+    let storage = InMemoryStorage::new();
+    let mut vm = VM::with_storage_backend(storage);
     vm.set_auth_context(auth);
     vm.mock_storage_operations(); // Use mock storage for tests
 
@@ -132,7 +136,8 @@ fn test_delegation_check() {
 #[test]
 fn test_storage_operations_mock() {
     // Create a VM with InMemoryStorage
-    let mut vm: VM<InMemoryStorage> = VM::new();
+    let storage = InMemoryStorage::new();
+    let mut vm = VM::with_storage_backend(storage);
     vm.mock_storage_operations();
 
     // Set up auth context
@@ -162,12 +167,34 @@ fn test_storage_operations_mock() {
 #[test]
 fn test_identity_operations_with_storage() {
     // Create a VM with InMemoryStorage
-    let mut vm: VM<InMemoryStorage> = VM::new();
+    let storage = InMemoryStorage::new();
+    let mut vm = VM::with_storage_backend(storage);
     vm.mock_storage_operations();
 
     // Set up auth context
     let auth = setup_identity_context();
     vm.set_auth_context(auth);
+    
+    // Save an identity to storage
+    let test_identity = create_test_identity("test_store", "member");
+    let auth_context = setup_identity_context();
+    
+    vm.with_storage_mut(|storage| {
+        storage.set_json(
+            Some(&auth_context),
+            "identity",
+            &format!("identities/{}", test_identity.did),
+            &test_identity
+        )
+    }).unwrap();
+    
+    // Retrieve the identity using StorageExtensions trait
+    let retrieved_identity = vm.with_storage(|storage| {
+        storage.get_identity(&test_identity.did)
+    }).unwrap();
+    
+    assert_eq!(retrieved_identity.did, test_identity.did);
+    assert_eq!(retrieved_identity.identity_type, test_identity.identity_type);
 
     // Test with identity verification which doesn't need actual storage
     let ops = vec![Op::VerifyIdentity {

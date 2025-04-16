@@ -172,6 +172,91 @@ pub trait StorageExtensions: StorageBackend {
         key: &str,
         version: u64,
     ) -> StorageResult<Option<T>>;
+    
+    /// Stores data as JSON in storage with authentication context from current user
+    fn set_json_authed<T: Serialize>(
+        &mut self,
+        auth_context: &AuthContext,
+        namespace: &str,
+        key: &str,
+        value: &T,
+    ) -> StorageResult<()> {
+        self.set_json(Some(auth_context), namespace, key, value)
+    }
+    
+    /// Gets data as JSON from storage with authentication context from current user
+    fn get_json_authed<T: DeserializeOwned>(
+        &self,
+        auth_context: &AuthContext,
+        namespace: &str,
+        key: &str,
+    ) -> StorageResult<T> {
+        self.get_json(Some(auth_context), namespace, key)
+    }
+    
+    /// Check if a key exists with authentication context
+    fn contains_authed(
+        &self,
+        auth_context: &AuthContext,
+        namespace: &str,
+        key: &str,
+    ) -> StorageResult<bool> {
+        self.contains(Some(auth_context), namespace, key)
+    }
+    
+    /// List keys in a namespace with authentication context
+    fn list_keys_authed(
+        &self,
+        auth_context: &AuthContext,
+        namespace: &str,
+        prefix: Option<&str>,
+    ) -> StorageResult<Vec<String>> {
+        self.list_keys(Some(auth_context), namespace, prefix)
+    }
+    
+    /// Delete a key with authentication context
+    fn delete_authed(
+        &mut self,
+        auth_context: &AuthContext,
+        namespace: &str,
+        key: &str,
+    ) -> StorageResult<()> {
+        self.delete(Some(auth_context), namespace, key)
+    }
+    
+    /// Store versioning-aware JSON data with built-in conflict detection
+    fn set_json_versioned<T: Serialize + DeserializeOwned>(
+        &mut self,
+        auth: Option<&AuthContext>,
+        namespace: &str,
+        key: &str,
+        value: &T,
+        expected_version: Option<u64>,
+    ) -> StorageResult<u64> {
+        // Check if we need to verify the version
+        if let Some(expected) = expected_version {
+            // Get the current version info
+            if self.contains(auth, namespace, key)? {
+                let (_, version_info) = self.get_versioned(auth, namespace, key)?;
+                
+                // Check for version mismatch
+                if version_info.version != expected {
+                    return Err(StorageError::VersionConflict { 
+                        key: key.to_string(),
+                        expected,
+                        actual: version_info.version,
+                    });
+                }
+            }
+        }
+        
+        // Store the value
+        self.set_json(auth, namespace, key, value)?;
+        
+        // Get the new version number
+        let (_, version_info) = self.get_versioned(auth, namespace, key)?;
+        Ok(version_info.version)
+    }
 }
 
 // Blanket impl for all types implementing StorageBackend
