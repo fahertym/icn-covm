@@ -95,6 +95,11 @@ where
         self.executor.storage_backend.as_ref()
     }
 
+    /// Get the mutable storage backend
+    pub fn get_storage_backend_mut(&mut self) -> Option<&mut S> {
+        self.executor.storage_backend.as_mut()
+    }
+
     /// Get the namespace
     pub fn get_namespace(&self) -> Option<&str> {
         Some(&self.executor.namespace)

@@ -422,16 +422,15 @@ where
     let mut forked = vm.fork().map_err(|e| format!("Failed to fork VM: {}", e))?;
     
     // Get storage backend from the forked VM
-    let mut storage = forked.get_storage_backend()
-        .ok_or_else(|| "Storage backend not available in forked VM")?
-        .clone();
+    let storage = forked.get_storage_backend_mut()
+        .ok_or_else(|| "Storage backend not available in forked VM")?;
 
     // Create a FederationStorage instance
     let federation_storage = FederationStorage::new();
     
     // Save the proposal using the federation storage's methods
     federation_storage.save_proposal_with_auth(
-        &mut storage,
+        storage,
         Some(auth_context),
         federated_proposal,
     ).map_err(|e| format!("Failed to store federated proposal: {}", e))?;
@@ -486,16 +485,15 @@ where
     let mut forked = vm.fork().map_err(|e| format!("Failed to fork VM: {}", e))?;
     
     // Get storage backend from the forked VM
-    let mut storage = forked.get_storage_backend()
-        .ok_or_else(|| "Storage backend not available in forked VM")?
-        .clone();
+    let storage = forked.get_storage_backend_mut()
+        .ok_or_else(|| "Storage backend not available in forked VM")?;
 
     // Create a FederationStorage instance
     let federation_storage = FederationStorage::new();
     
     // Save the proposal using the federation storage's methods
     federation_storage.save_proposal_with_auth(
-        &mut storage,
+        storage,
         Some(auth_context),
         federated_proposal,
     ).map_err(|e| format!("Failed to store federated proposal: {}", e))?;
@@ -539,7 +537,7 @@ where
 
     // Get the proposal using a FederationStorage instance
     let federation_storage = FederationStorage::new();
-    let federated_proposal = federation_storage.get_proposal(storage, proposal_id)
+    let federated_proposal = federation_storage.get_proposal(&*storage, proposal_id)
         .map_err(|e| {
             println!(
                 "Proposal not found locally. Please sync it first with 'federation sync' command."
@@ -605,9 +603,8 @@ where
     let mut forked = vm.fork().map_err(|e| format!("Failed to fork VM: {}", e))?;
     
     // Get storage backend from the forked VM
-    let mut storage = forked.get_storage_backend()
-        .ok_or_else(|| "Storage backend not available in forked VM")?
-        .clone();
+    let storage = forked.get_storage_backend_mut()
+        .ok_or_else(|| "Storage backend not available in forked VM")?;
 
     // Set up the vote locally
     let vote_key = format!("{}/{}/{}", FEDERATION_VOTES_PATH, proposal_id, voter_id);
@@ -655,7 +652,7 @@ where
     let storage = vm.get_storage_backend().ok_or_else(|| "Storage backend not available")?;
     let federation_storage = FederationStorage::new();
     
-    let local_exists = match federation_storage.get_proposal(storage, proposal_id) {
+    let local_exists = match federation_storage.get_proposal(&*storage, proposal_id) {
         Ok(_) => true,
         Err(_) => false
     };

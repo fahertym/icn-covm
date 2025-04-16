@@ -142,7 +142,7 @@ impl FederationStorage {
         voter_identity: Option<&Identity>,
     ) -> StorageResult<()> {
         // First, get the proposal to check eligibility
-        let proposal = self.get_proposal(storage, &vote.proposal_id)?;
+        let proposal = self.get_proposal(&*storage, &vote.proposal_id)?;
 
         // Check if voting is still open
         if proposal.status != ProposalStatus::Open {

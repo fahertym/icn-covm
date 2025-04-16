@@ -7,6 +7,8 @@ mod tests {
     use crate::storage::auth::AuthContext;
     use crate::storage::implementations::in_memory::InMemoryStorage;
     use crate::vm::VM;
+    use crate::federation::storage::FederationStorage;
+    use crate::cli::federation::FEDERATION_PROPOSALS_PATH;
     use chrono::{DateTime, Utc};
     use std::collections::HashMap;
 
@@ -146,7 +148,7 @@ mod tests {
         };
         
         // Store the proposal
-        let mut storage = vm.get_storage_backend().unwrap().clone();
+        let storage = vm.get_storage_backend_mut().unwrap();
         let storage_key = format!("{}/{}", FEDERATION_PROPOSALS_PATH, federated_proposal.proposal_id);
         let proposal_data = serde_json::to_vec(&federated_proposal).unwrap();
         
@@ -158,7 +160,7 @@ mod tests {
         ).unwrap();
         
         // Retrieve the proposal
-        let storage_ref = vm.get_storage_backend().unwrap();
+        let storage_ref = vm.get_storage_backend_mut().unwrap();
         let retrieved_data = storage_ref.get(
             Some(&auth_context), 
             "federation", 
@@ -170,5 +172,44 @@ mod tests {
         assert_eq!(retrieved.proposal_id, federated_proposal.proposal_id);
         assert_eq!(retrieved.creator, federated_proposal.creator);
         assert_eq!(retrieved.status, federated_proposal.status);
+    }
+
+    #[test]
+    fn test_retrieve_federated_proposal() {
+        // Create VM and storage
+        let mut vm = setup_test_vm();
+        let auth_context = setup_test_auth();
+        let federation_storage = FederationStorage::new();
+        
+        // Create a federated proposal
+        let federated_proposal = FederatedProposal {
+            proposal_id: "fed-test-2".to_string(),
+            namespace: "governance".to_string(),
+            options: vec!["Yes".to_string(), "No".to_string()],
+            creator: "test-user-1".to_string(),
+            created_at: Utc::now().timestamp(),
+            scope: ProposalScope::SingleCoop("test-coop-1".to_string()),
+            voting_model: VotingModel::OneMemberOneVote,
+            expires_at: None,
+            status: ProposalStatus::Open,
+        };
+
+        // Store the proposal
+        let storage = vm.get_storage_backend_mut().unwrap();
+        
+        federation_storage.save_proposal(
+            storage,
+            federated_proposal.clone()
+        ).unwrap();
+
+        // Retrieve the proposal
+        let storage_ref = vm.get_storage_backend().unwrap();
+        let retrieved_proposal = federation_storage.get_proposal(&*storage_ref, &federated_proposal.proposal_id).unwrap();
+
+        // Verify the proposal
+        assert_eq!(retrieved_proposal.proposal_id, federated_proposal.proposal_id);
+        assert_eq!(retrieved_proposal.creator, federated_proposal.creator);
+        assert_eq!(retrieved_proposal.status, federated_proposal.status);
+        assert_eq!(retrieved_proposal.namespace, federated_proposal.namespace);
     }
 } 
