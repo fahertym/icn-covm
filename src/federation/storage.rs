@@ -477,8 +477,8 @@ fn current_timestamp() -> Result<i64, FederationError> {
 
 // Add a fallback version that logs errors:
 fn current_timestamp_or_default(default: i64) -> i64 {
-    match current_timestamp() {
-        Ok(ts) => ts,
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(duration) => duration.as_secs() as i64,
         Err(e) => {
             warn!("Error getting timestamp, using default: {}", e);
             default

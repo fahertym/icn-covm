@@ -1,11 +1,11 @@
 // pub mod storage;
 
 use icn_covm::api;
-use icn_covm::bytecode::{BytecodeCompiler, BytecodeExecution};
+use icn_covm::bytecode::{BytecodeCompiler, BytecodeInterpreter};
 use icn_covm::cli::federation::{federation_command, handle_federation_command};
 use icn_covm::cli::proposal::{handle_proposal_command, proposal_command};
 use icn_covm::cli::proposal_demo::run_proposal_demo;
-use icn_covm::compiler::{parse_dsl, parse_dsl_with_stdlib, CompilerError};
+use icn_covm::compiler::{parse_dsl, parse_dsl_with_stdlib, LifecycleConfig, CompilerError};
 use icn_covm::events::LogFormat;
 use icn_covm::federation::messages::{ProposalScope, ProposalStatus, VotingModel};
 use icn_covm::federation::{NetworkNode, NodeConfig};
@@ -15,7 +15,7 @@ use icn_covm::storage::implementations::file_storage::FileStorage;
 use icn_covm::storage::implementations::in_memory::InMemoryStorage;
 use icn_covm::storage::traits::StorageBackend;
 use icn_covm::storage::utils::now_with_default;
-use icn_covm::vm::{VMError, VM};
+use icn_covm::vm::{VMError, VM, MemoryScope, StackOps};
 
 use clap::{Arg, ArgAction, Command};
 use log::{debug, error, info, warn};
@@ -337,9 +337,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let bootstrap_nodes = run_matches
                 .get_many::<String>("bootstrap-nodes")
                 .unwrap_or_default()
-                .map(|s| s.parse()
-                    .map_err(|_| AppError::Federation(format!("Invalid multiaddress format: {}", s)))?)
-                .collect::<Vec<_>>();
+                .map_or_else(
+                    || Vec::new(),
+                    |nodes| {
+                        let mut addresses = Vec::new();
+                        for node in nodes {
+                            match node.parse() {
+                                Ok(addr) => addresses.push(addr),
+                                Err(_) => {
+                                    println!("Warning: Invalid multiaddress format: {}", node);
+                                    // Just skip invalid addresses
+                                    continue;
+                                }
+                            }
+                        }
+                        addresses
+                    },
+                );
             let node_name = run_matches
                 .get_one::<String>("node-name")
                 .unwrap_or(&"unknown-node".to_string())
@@ -579,7 +593,8 @@ fn run_program(
                 if use_stdlib {
                     parse_dsl_with_stdlib(&program_source)?
                 } else {
-                    parse_dsl(&program_source)?
+                    let (ops, _lifecycle) = parse_dsl(&program_source)?;
+                    ops
                 }
             }
             "json" => {
@@ -600,7 +615,7 @@ fn run_program(
     }
 
     // Setup auth context and storage based on selected backend
-    let auth_context = create_demo_auth_context();
+    let auth_context = create_demo_auth_context()?;
 
     // Select the appropriate storage backend
     let storage = create_storage_backend(storage_backend, storage_path)?;
@@ -608,7 +623,11 @@ fn run_program(
     if use_bytecode {
         // Bytecode execution with FileStorage
         let mut compiler = BytecodeCompiler::new();
-        let program = compiler.compile(&ops);
+        let ops_vec = match &ops {
+            (ops_vec, _lc) => ops_vec,
+            _ => &ops, // Already a Vec<Op>
+        };
+        let program = compiler.compile(ops_vec);
 
         if verbose {
             println!("Compiled bytecode program:\n{}", program.dump());
@@ -620,11 +639,10 @@ fn run_program(
         vm.set_namespace("demo");
         vm.set_storage_backend(storage);
 
-        let mut interpreter =
-            BytecodeExecution::new(VM::<InMemoryStorage>::new(), program.instructions);
+        let mut interpreter = BytecodeInterpreter::new(VM::<InMemoryStorage>::new(), program);
 
         // Set parameters
-        interpreter.vm.set_parameters(parameters)?;
+        interpreter.get_vm_mut().set_parameters(parameters.clone())?;
 
         // Execute
         let start = Instant::now();
@@ -640,15 +658,15 @@ fn run_program(
         }
 
         if verbose {
-            println!("Final stack: {:?}", interpreter.vm.stack);
+            println!("Final stack: {:?}", interpreter.get_vm().stack);
 
-            if let Some(top) = interpreter.vm.top() {
-                println!("Top of stack: {}", top);
-            } else {
-                println!("Stack is empty");
+            let memory_map = vm.memory.get_memory_map();
+            for (key, value) in memory_map {
+                println!("  {}: {}", key, value);
             }
-
-            println!("Final memory: {:?}", interpreter.vm.memory);
+            if vm.memory.get_memory_map().is_empty() {
+                println!("  (empty)");
+            }
         }
     } else {
         // AST execution with FileStorage
@@ -665,17 +683,23 @@ fn run_program(
             println!("-----------------------------------");
         }
 
-        vm.execute(&ops)?;
+        let ops_vec = match &ops {
+            (ops_vec, _lc) => ops_vec,
+            _ => &ops, // Already a Vec<Op>
+        };
+        vm.execute(ops_vec)?;
 
         if verbose {
             println!("-----------------------------------");
             println!("Program execution completed successfully");
 
             // Print final stack state
-            if let Some(top) = vm.top() {
-                println!("Final top of stack: {}", top);
-            } else {
-                println!("Stack is empty");
+            let memory_map = vm.memory.get_memory_map();
+            for (key, value) in memory_map {
+                println!("  {}: {}", key, value);
+            }
+            if vm.memory.get_memory_map().is_empty() {
+                println!("  (empty)");
             }
         }
     }
@@ -719,27 +743,18 @@ fn initialize_storage<T: StorageBackend>(
 }
 
 // Create a demo authentication context for storage operations
-fn create_demo_auth_context() -> AuthContext {
-    // Create a basic auth context for demo purposes
-    let user_id = "demo_user";
-    let mut auth = AuthContext::new(user_id);
-
-    // Register the identity
-    auth.register_identity(
-        Identity::new(user_id.to_string(), None, "user".to_string(), None)
-            .map_err(|e| AppError::Other(format!("Failed to create identity: {}", e)))?,
-    );
-
-    // Add user roles directly to the auth context
-    auth.add_role("global", "user");
-    auth.add_role("demo", "reader");
-
-    auth
+fn create_demo_auth_context() -> Result<AuthContext, AppError> {
+    // Create identity
+    let user_did = Identity::new("demo-user".to_string(), None, "user".to_string(), None)
+        .map_err(|e| AppError::Other(format!("Failed to create identity: {}", e)))?;
+    let mut auth_context = AuthContext::new(&user_did.did);
+    auth_context.register_identity(user_did);
+    Ok(auth_context)
 }
 
 // Helper function to create a demo auth context and initialize storage
 fn setup_storage_for_demo() -> (AuthContext, InMemoryStorage) {
-    let auth = create_demo_auth_context();
+    let auth = create_demo_auth_context().unwrap();
 
     // Create storage backend
     let mut storage = InMemoryStorage::new();
@@ -782,7 +797,8 @@ fn run_benchmark(
                 if use_stdlib {
                     parse_dsl_with_stdlib(&program_source)?
                 } else {
-                    parse_dsl(&program_source)?
+                    let (ops, _lifecycle) = parse_dsl(&program_source)?;
+                    ops
                 }
             }
             "json" => {
@@ -832,9 +848,8 @@ fn run_benchmark(
     vm.set_auth_context(auth_context);
     vm.set_namespace("demo");
 
-    let mut interpreter =
-        BytecodeExecution::new(VM::<InMemoryStorage>::new(), program.instructions);
-    interpreter.vm.set_parameters(parameters)?;
+    let mut interpreter = BytecodeInterpreter::new(VM::<InMemoryStorage>::new(), program);
+    interpreter.get_vm_mut().set_parameters(parameters)?;
 
     let bytecode_start = Instant::now();
     interpreter.execute()?;
@@ -965,13 +980,11 @@ fn run_interactive(
             }
             "memory" => {
                 println!("Memory:");
-                let memory = vm.get_memory_map();
-                let mut keys: Vec<_> = memory.keys().collect();
-                keys.sort();
-                for key in keys {
-                    println!("  {}: {}", key, memory.get(key).unwrap());
+                let memory_map = vm.memory.get_memory_map();
+                for (key, value) in memory_map {
+                    println!("  {}: {}", key, value);
                 }
-                if memory.is_empty() {
+                if vm.memory.get_memory_map().is_empty() {
                     println!("  (empty)");
                 }
             }
@@ -1028,21 +1041,26 @@ fn run_interactive(
                         if use_bytecode {
                             // Compile to bytecode and execute
                             let mut compiler = BytecodeCompiler::new();
-                            let program = compiler.compile(&ops);
+                            let ops_vec = match &ops {
+                                (ops_vec, _lc) => ops_vec,
+                                _ => &ops, // Already a Vec<Op>
+                            };
+                            let program = compiler.compile(ops_vec);
 
                             if verbose {
                                 println!("Compiled to bytecode:");
                                 println!("{}", program.dump());
                             }
 
-                            let mut interpreter = BytecodeExecution::new(
+                            let mut interpreter = BytecodeInterpreter::new(
                                 VM::<InMemoryStorage>::new(),
-                                program.instructions,
+                                program,
                             );
 
                             // Copy VM state to interpreter
-                            for (key, value) in vm.memory.iter() {
-                                interpreter.vm.memory.insert(key.clone(), *value);
+                            let memory_map = vm.memory.get_memory_map();
+                            for (key, value) in memory_map {
+                                vm.store(&key, value);
                             }
 
                             // Execute with bytecode
@@ -1053,16 +1071,20 @@ fn run_interactive(
                             println!("Bytecode: {:?}", bytecode_duration);
 
                             // Copy results back to REPL VM
-                            vm.stack = interpreter.vm.stack.clone();
-                            vm.memory = interpreter.vm.memory.clone();
+                            vm.stack = interpreter.get_vm().stack.clone();
+                            vm.memory = interpreter.get_vm().memory.clone();
 
                             // Print result (if any)
-                            if let Some(result) = interpreter.vm.top() {
+                            if let Some(result) = interpreter.get_vm().top() {
                                 println!("Result: {}", result);
                             }
                         } else {
                             // Execute directly with AST interpreter
-                            match vm.execute(&ops) {
+                            let ops_vec = match &ops {
+                                (ops_vec, _lc) => ops_vec,
+                                _ => &ops, // Already a Vec<Op>
+                            };
+                            match vm.execute(ops_vec) {
                                 Ok(()) => {
                                     if let Some(result) = vm.top() {
                                         println!("Result: {}", result);
@@ -1151,7 +1173,7 @@ fn list_keys_command(
     storage_path: &str,
 ) -> Result<(), AppError> {
     // Create an admin auth context for inspection purposes
-    let auth_context = create_admin_auth_context();
+    let auth_context = create_admin_auth_context()?;
 
     // Initialize the appropriate storage backend
     let storage: Box<dyn StorageBackend> = if storage_backend == "file" {
@@ -1211,7 +1233,7 @@ fn get_value_command(
     storage_path: &str,
 ) -> Result<(), AppError> {
     // Create an admin auth context for inspection purposes
-    let auth_context = create_admin_auth_context();
+    let auth_context = create_admin_auth_context()?;
 
     // Initialize the appropriate storage backend
     let storage: Box<dyn StorageBackend> = if storage_backend == "file" {
@@ -1271,24 +1293,13 @@ fn get_value_command(
 }
 
 /// Creates an admin auth context for inspection purposes
-fn create_admin_auth_context() -> AuthContext {
-    let mut auth = AuthContext::new("admin");
-
-    // Add admin roles for all operations
-    auth.add_role("global", "admin");
-
-    // Set up admin identity
-    let mut identity = Identity::new("admin".to_string(), None, "admin".to_string(), None)
+fn create_admin_auth_context() -> Result<AuthContext, AppError> {
+    // Create identity with "admin" seed
+    let admin_did = Identity::new("admin".to_string(), None, "admin".to_string(), None)
         .map_err(|e| AppError::Other(format!("Failed to create admin identity: {}", e)))?;
-    identity.profile.other_fields.insert(
-        "description".to_string(),
-        serde_json::Value::String("Storage CLI Admin".to_string()),
-    );
-
-    // Register the identity
-    auth.register_identity(identity);
-
-    auth
+    let mut auth_context = AuthContext::new(&admin_did.did);
+    auth_context.register_identity(admin_did);
+    Ok(auth_context)
 }
 
 /// Handle the broadcast-proposal federation command
@@ -1561,7 +1572,11 @@ async fn execute_proposal(
 ) -> Result<(), AppError> {
     info!("Executing proposal: {}", proposal_id);
 
-    // Configure federation
+    // Create a network node for federation operations
+    let storage = setup_storage(storage_backend, storage_path)?;
+    let auth_context = get_or_create_auth_context(storage_backend, storage_path)?;
+
+    // Setup the network node
     let node_config = NodeConfig {
         port: Some(federation_port),
         bootstrap_nodes,
@@ -1570,46 +1585,28 @@ async fn execute_proposal(
         protocol_version: "1.0.0".to_string(),
     };
 
-    // Create and start network node
-    let mut network_node = match NetworkNode::new(node_config).await {
-        Ok(node) => node,
-        Err(e) => {
-            return Err(AppError::Federation(format!(
-                "Failed to create network node: {}",
-                e
-            )))
-        }
-    };
-
-    info!("Local peer ID: {}", network_node.local_peer_id());
-
+    let mut network_node = NetworkNode::new(node_config).await
+        .map_err(|e| AppError::Federation(format!("Failed to create network node: {}", e)))?;
+    
     // Start the network node
     if let Err(e) = network_node.start().await {
-        return Err(AppError::Federation(format!(
-            "Failed to start network node: {}",
-            e
-        )));
+        return Err(AppError::Federation(format!("Failed to start network node: {}", e)));
     }
-
-    // Get a storage backend
-    let storage = create_storage_backend(storage_backend, storage_path)?;
 
     // Get the proposal
     let federation_storage = network_node.federation_storage();
-    let proposal = match federation_storage.get_proposal(&*storage, proposal_id) {
+    let proposal = match federation_storage.get_proposal(&storage, proposal_id) {
         Ok(proposal) => proposal,
         Err(e) => {
-            error!("Failed to retrieve proposal for {}: {}", proposal_id, e);
-            return Ok(());
+            println!("Error loading proposal: {}", e);
+            return Err(AppError::Federation(format!("Failed to load proposal: {}", e)));
         }
     };
 
     // Check if the proposal has an expiry time
     if let Some(expires_at) = proposal.expires_at {
-        let current_time = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
+        // Use the now_with_default from storage module for consistency
+        let current_time = icn_covm::storage::utils::now_with_default() as i64;
 
         if current_time < expires_at && !force {
             // If the proposal hasn't expired yet and we're not forcing execution
@@ -1629,14 +1626,11 @@ async fn execute_proposal(
     }
 
     // Get votes
-    let votes = match federation_storage.get_votes(&*storage, proposal_id) {
-        Ok(v) => v,
+    let votes = match federation_storage.get_votes(&storage, proposal_id) {
+        Ok(votes) => votes,
         Err(e) => {
-            error!(
-                "Failed to retrieve votes for proposal {}: {}",
-                proposal_id, e
-            );
-            return Ok(());
+            println!("Error loading votes: {}", e);
+            return Err(AppError::Federation(format!("Failed to load votes: {}", e)));
         }
     };
 
@@ -1723,8 +1717,10 @@ async fn execute_proposal(
 
     // Prepare the stack with ballot data
     for ballot in &ballots {
-        for preference in ballot {
-            vm.stack.push(*preference);
+        for pref_opt in ballot {
+            if let Some(pref) = pref_opt {
+                vm.stack.push(*pref);
+            }
         }
     }
 

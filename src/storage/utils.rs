@@ -9,7 +9,7 @@ pub type Timestamp = u64;
 pub fn now() -> StorageResult<Timestamp> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_err(|e| StorageError::Other { 
+        .map_err(|e| StorageError::TimeError { 
             details: format!("Failed to get timestamp: {}", e) 
         })
         .map(|d| d.as_secs())
@@ -54,8 +54,8 @@ pub fn test_timestamp() -> Timestamp {
 /// The default timestamp is January 1, 2022 (1640995200).
 /// This is a safe alternative for transitioning code that incorrectly used `now()` directly.
 pub fn now_with_default() -> Timestamp {
-    match now() {
-        Ok(ts) => ts,
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(duration) => duration.as_secs(),
         Err(e) => {
             // Log the error
             log::warn!("Clock error when getting timestamp, using default: {}", e);
