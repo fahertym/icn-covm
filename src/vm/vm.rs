@@ -550,6 +550,12 @@ where
 
                 // For other operations not yet implemented, add placeholders
                 _ => {
+                    // Try to handle the operation with the governance module
+                    if let Some(()) = crate::governance::try_handle_governance_op(self, &op)? {
+                        // If the operation was handled by the governance module, we're done
+                        return Ok(());
+                    }
+                    
                     return Err(VMError::NotImplemented(format!(
                         "Operation not implemented: {:?}",
                         op

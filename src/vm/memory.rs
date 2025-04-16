@@ -99,6 +99,9 @@ pub struct VMMemory {
 
     /// Runtime parameters
     parameters: HashMap<String, String>,
+
+    /// String metadata for extra storage needs (JSON, etc.)
+    string_metadata: HashMap<String, String>,
 }
 
 impl VMMemory {
@@ -110,7 +113,18 @@ impl VMMemory {
             call_stack: Vec::new(),
             call_frames: Vec::new(),
             parameters: HashMap::new(),
+            string_metadata: HashMap::new(),
         }
+    }
+
+    /// Get string metadata for a key
+    pub fn get_string_metadata(&self, key: &str) -> Option<String> {
+        self.string_metadata.get(key).cloned()
+    }
+
+    /// Set string metadata for a key
+    pub fn set_string_metadata(&mut self, key: &str, value: String) {
+        self.string_metadata.insert(key.to_string(), value);
     }
 }
 
