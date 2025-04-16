@@ -8,7 +8,7 @@ mod error;
 mod events;
 pub mod messages;
 mod node;
-mod storage;
+pub mod storage;
 #[cfg(test)]
 mod tests;
 
@@ -18,7 +18,7 @@ pub use messages::{
     FederatedProposal, FederatedVote, NetworkMessage, NodeAnnouncement, Ping, Pong,
 };
 pub use node::{NetworkNode, NodeConfig};
-pub use storage::{FederationStorage, VoteTallyResult};
+pub use storage::{FederationStorage, VoteTallyResult, FEDERATION_NAMESPACE, VOTES_NAMESPACE};
 
 /// Protocol name/ID used for ICN-COVM federation
 pub const PROTOCOL_ID: &str = "/icn-covm/federation/1.0.0";

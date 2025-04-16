@@ -11,8 +11,14 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const FEDERATION_PROPOSAL_PREFIX: &str = "federation/proposals/";
-const FEDERATION_VOTES_PREFIX: &str = "federation/votes/";
+// Storage namespace constants
+pub const FEDERATION_NAMESPACE: &str = "federation";
+pub const VOTES_NAMESPACE: &str = "votes";
+
+// Storage key prefix constants
+pub const FEDERATION_PROPOSAL_PREFIX: &str = "federation/proposals/";
+pub const FEDERATION_VOTES_PREFIX: &str = "federation/votes/";
+pub const FEDERATION_SYNC_PREFIX: &str = "federation/sync/";
 
 /// In-memory cache for active proposals and votes
 #[derive(Default)]
@@ -53,6 +59,26 @@ impl FederationStorage {
             cache: Arc::new(Mutex::new(FederationCache::default())),
         }
     }
+    
+    /// Create a proposal storage key
+    pub fn make_proposal_key(proposal_id: &str) -> String {
+        format!("{}{}", FEDERATION_PROPOSAL_PREFIX, proposal_id)
+    }
+    
+    /// Create a votes storage key
+    pub fn make_votes_key(proposal_id: &str) -> String {
+        format!("{}{}", FEDERATION_VOTES_PREFIX, proposal_id)
+    }
+    
+    /// Create a sync metadata storage key
+    pub fn make_sync_key(proposal_id: &str) -> String {
+        format!("{}/last_seen", Self::make_sync_base_key(proposal_id))
+    }
+    
+    /// Create a sync base key
+    pub fn make_sync_base_key(proposal_id: &str) -> String {
+        format!("{}{}", FEDERATION_SYNC_PREFIX, proposal_id)
+    }
 
     /// Save a proposal to storage and cache
     pub fn save_proposal<S: StorageExtensions>(
@@ -61,7 +87,7 @@ impl FederationStorage {
         proposal: FederatedProposal,
     ) -> StorageResult<()> {
         // Create the storage key
-        let key = format!("{}{}", FEDERATION_PROPOSAL_PREFIX, proposal.proposal_id);
+        let key = Self::make_proposal_key(&proposal.proposal_id);
 
         // Store in the backend
         storage.set_json(None, &proposal.namespace, &key, &proposal)?;
@@ -84,7 +110,7 @@ impl FederationStorage {
         proposal: FederatedProposal,
     ) -> StorageResult<()> {
         // Create the storage key
-        let key = format!("{}{}", FEDERATION_PROPOSAL_PREFIX, proposal.proposal_id);
+        let key = Self::make_proposal_key(&proposal.proposal_id);
 
         // Store in the backend with auth
         storage.set_json(auth, &proposal.namespace, &key, &proposal)?;
@@ -225,10 +251,10 @@ impl FederationStorage {
         }
 
         // Create the storage key - we'll store votes as a list under the proposal
-        let key = format!("{}{}", FEDERATION_VOTES_PREFIX, vote.proposal_id);
+        let key = Self::make_votes_key(&vote.proposal_id);
 
         // First try to get existing votes
-        let mut votes: Vec<FederatedVote> = match storage.get_json(None, "votes", &key) {
+        let mut votes: Vec<FederatedVote> = match storage.get_json(None, VOTES_NAMESPACE, &key) {
             Ok(existing_votes) => existing_votes,
             Err(_) => Vec::new(),
         };
@@ -248,7 +274,7 @@ impl FederationStorage {
         votes.push(vote.clone());
 
         // Store the updated votes list
-        storage.set_json(None, "votes", &key, &votes)?;
+        storage.set_json(None, VOTES_NAMESPACE, &key, &votes)?;
 
         // Update the cache
         let mut cache = self.cache.lock().unwrap();
@@ -315,9 +341,8 @@ impl FederationStorage {
         }
 
         // If not in cache, check storage
-        let key = format!("{}{}", FEDERATION_PROPOSAL_PREFIX, proposal_id);
-        let namespace = "federation"; // Default namespace if not known
-        storage.get_json(None, namespace, &key)
+        let key = Self::make_proposal_key(proposal_id);
+        storage.get_json(None, FEDERATION_NAMESPACE, &key)
     }
 
     /// Get all votes for a proposal
@@ -335,8 +360,8 @@ impl FederationStorage {
         }
 
         // If not in cache, check storage
-        let key = format!("{}{}", FEDERATION_VOTES_PREFIX, proposal_id);
-        storage.get_json(None, "votes", &key)
+        let key = Self::make_votes_key(proposal_id);
+        storage.get_json(None, VOTES_NAMESPACE, &key)
     }
 
     /// Convert votes to a format suitable for the ranked vote algorithm
