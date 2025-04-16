@@ -618,8 +618,7 @@ fn run_program(
     if use_bytecode {
         // Bytecode execution with FileStorage
         let mut compiler = BytecodeCompiler::new();
-        let (ops_vector, _) = ops.clone();
-        let program = compiler.compile(&ops_vector);
+        let program = compiler.compile(&ops);
 
         if verbose {
             println!("Compiled bytecode program:\n{}", program.dump());
@@ -675,8 +674,7 @@ fn run_program(
             println!("-----------------------------------");
         }
 
-        let (ops_vector, _) = ops.clone();
-        vm.execute(&ops_vector)?;
+        vm.execute(&ops)?;
 
         if verbose {
             println!("-----------------------------------");
@@ -1026,12 +1024,11 @@ fn run_interactive(
             _ => {
                 // Parse and execute the input as DSL code
                 match parse_dsl(trimmed) {
-                    Ok(ops) => {
+                    Ok((ops, _lifecycle_config)) => {
                         if use_bytecode {
                             // Compile to bytecode and execute
                             let mut compiler = BytecodeCompiler::new();
-                            let (ops_vector, _) = ops.clone();
-                            let program = compiler.compile(&ops_vector);
+                            let program = compiler.compile(&ops);
 
                             if verbose {
                                 println!("Compiled to bytecode:");
@@ -1057,8 +1054,7 @@ fn run_interactive(
                             }
                         } else {
                             // Execute directly with AST interpreter
-                            let (ops_vector, _) = ops.clone();
-                            match vm.execute(&ops_vector) {
+                            match vm.execute(&ops) {
                                 Ok(()) => {
                                     if let Some(result) = vm.top() {
                                         println!("Result: {}", result);

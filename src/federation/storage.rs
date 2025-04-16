@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use crate::federation::error::FederationError;
-use crate::utils;
+use crate::storage::utils;
 
 // Storage namespace constants
 pub const FEDERATION_NAMESPACE: &str = "federation";
