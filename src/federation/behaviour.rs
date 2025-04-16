@@ -63,7 +63,7 @@ impl From<identify::Event> for IcnBehaviourEvent {
 pub async fn create_behaviour(
     local_key: &libp2p::identity::Keypair,
     protocol_version: String,
-) -> IcnBehaviour {
+) -> Result<IcnBehaviour, Box<dyn std::error::Error + Send + Sync>> {
     // Set up the ping protocol
     let ping = ping::Behaviour::new(
         ping::Config::new()
@@ -89,9 +89,8 @@ pub async fn create_behaviour(
     );
 
     // Set up local network discovery with mDNS
-    let mdns =
-        mdns::tokio::Behaviour::new(mdns::Config::default(), local_key.public().to_peer_id())
-            .expect("Failed to create mDNS behavior");
+    let mdns = mdns::tokio::Behaviour::new(mdns::Config::default(), local_key.public().to_peer_id())
+        .map_err(|e| Box::<dyn std::error::Error + Send + Sync>::from(format!("Failed to create mDNS behavior: {}", e)))?;
 
     // Set up identify protocol
     let identify = identify::Behaviour::new(identify::Config::new(
@@ -99,12 +98,12 @@ pub async fn create_behaviour(
         local_key.public(),
     ));
 
-    IcnBehaviour {
+    Ok(IcnBehaviour {
         ping,
         kademlia,
         mdns,
         identify,
-    }
+    })
 }
 
 // Handler methods

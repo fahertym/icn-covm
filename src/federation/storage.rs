@@ -97,14 +97,8 @@ impl FederationStorage {
             })?;
 
         // Add to the cache
-        let mut cache = match self.cache.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => {
-                // If the mutex is poisoned, get a consistent state and log a warning
-                warn!("Cache mutex was poisoned, recovering the guard");
-                poisoned.into_inner()
-            }
-        };
+        let mut cache = self.cache.lock()
+            .map_err(|_| StorageError::Other { details: "Cache mutex poisoned".into() })?;
 
         cache
             .proposals
@@ -128,18 +122,12 @@ impl FederationStorage {
         storage
             .set_json(auth, &proposal.namespace, &key, &proposal)
             .map_err(|e| StorageError::Other {
-                details: format!("Failed to save proposal to storage: {}", e),
+                details: format!("Failed to save proposal to storage with auth: {}", e),
             })?;
 
         // Add to the cache
-        let mut cache = match self.cache.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => {
-                // If the mutex is poisoned, get a consistent state and log a warning
-                warn!("Cache mutex was poisoned, recovering the guard");
-                poisoned.into_inner()
-            }
-        };
+        let mut cache = self.cache.lock()
+            .map_err(|_| StorageError::Other { details: "Cache mutex poisoned".into() })?;
 
         cache
             .proposals
@@ -274,54 +262,50 @@ impl FederationStorage {
             });
         }
 
-        // Create the storage key - we'll store votes as a list under the proposal
-        let key = Self::make_votes_key(&vote.proposal_id);
+        // Store the vote
+        let vote_key = Self::make_votes_key(&vote.proposal_id);
+        let votes_namespace = String::from(VOTES_NAMESPACE);
 
-        // First try to get existing votes
-        let mut votes: Vec<FederatedVote> = match storage.get_json(None, VOTES_NAMESPACE, &key) {
-            Ok(existing_votes) => existing_votes,
-            Err(_) => Vec::new(),
+        // Check if there's already a votes collection
+        let mut votes = match storage.get_json::<Vec<FederatedVote>>(None, &votes_namespace, &vote_key) {
+            Ok(existing_votes) => {
+                // Check if this voter already voted
+                if existing_votes.iter().any(|v| v.voter == vote.voter) {
+                    warn!("Vote overwritten: Voter {} already voted on {}", vote.voter, vote.proposal_id);
+                }
+                existing_votes
+            }
+            Err(StorageError::NotFound { .. }) => Vec::new(),
+            Err(e) => {
+                warn!("Error retrieving existing votes: {}", e);
+                return Err(StorageError::Other {
+                    details: format!("Failed to retrieve existing votes: {}", e),
+                });
+            }
         };
-
-        // Check if this voter has already voted
-        if votes.iter().any(|v| v.voter == vote.voter) {
-            warn!(
-                "Vote rejected: Voter {} has already voted on proposal {}",
-                vote.voter, vote.proposal_id
-            );
-            return Err(StorageError::Other {
-                details: format!("Voter {} has already voted", vote.voter),
-            });
-        }
 
         // Add the new vote
         votes.push(vote.clone());
 
-        // Store the updated votes list
+        // Save the updated votes
         storage
-            .set_json(None, VOTES_NAMESPACE, &key, &votes)
+            .set_json(None, &votes_namespace, &vote_key, &votes)
             .map_err(|e| StorageError::Other {
-                details: format!(
-                    "Failed to save vote for proposal {}: {}",
-                    vote.proposal_id, e
-                ),
+                details: format!("Failed to save votes to storage: {}", e),
             })?;
 
         // Update the cache
-        let mut cache = match self.cache.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => {
-                // If the mutex is poisoned, get a consistent state and log a warning
-                warn!("Cache mutex was poisoned, recovering the guard");
-                poisoned.into_inner()
-            }
-        };
+        let mut cache = self.cache.lock()
+            .map_err(|_| StorageError::Other { details: "Cache mutex poisoned".into() })?;
 
-        cache
-            .votes
-            .entry(vote.proposal_id.clone())
-            .or_insert_with(Vec::new)
-            .push(vote);
+        let cache_votes = cache.votes.entry(vote.proposal_id.clone()).or_insert_with(Vec::new);
+        if let Some(existing_index) = cache_votes.iter().position(|v| v.voter == vote.voter) {
+            // Replace existing vote
+            cache_votes[existing_index] = vote;
+        } else {
+            // Add new vote
+            cache_votes.push(vote);
+        }
 
         info!("Saved federation vote to storage and cache");
         Ok(())
@@ -373,14 +357,8 @@ impl FederationStorage {
     ) -> StorageResult<FederatedProposal> {
         // First check the cache
         {
-            let cache = match self.cache.lock() {
-                Ok(guard) => guard,
-                Err(poisoned) => {
-                    // If the mutex is poisoned, get a consistent state and log a warning
-                    warn!("Cache mutex was poisoned, recovering the guard");
-                    poisoned.into_inner()
-                }
-            };
+            let cache = self.cache.lock()
+                .map_err(|_| StorageError::Other { details: "Cache mutex poisoned".into() })?;
 
             if let Some(proposal) = cache.proposals.get(proposal_id) {
                 return Ok(proposal.clone());
@@ -404,14 +382,8 @@ impl FederationStorage {
     ) -> StorageResult<Vec<FederatedVote>> {
         // First check the cache
         {
-            let cache = match self.cache.lock() {
-                Ok(guard) => guard,
-                Err(poisoned) => {
-                    // If the mutex is poisoned, get a consistent state and log a warning
-                    warn!("Cache mutex was poisoned, recovering the guard");
-                    poisoned.into_inner()
-                }
-            };
+            let cache = self.cache.lock()
+                .map_err(|_| StorageError::Other { details: "Cache mutex poisoned".into() })?;
 
             if let Some(votes) = cache.votes.get(proposal_id) {
                 return Ok(votes.clone());

@@ -281,7 +281,8 @@ where
 
         // Check if proposal exists
         let proposal_key = Self::proposal_key_prefix(proposal_id);
-        if !storage.contains(auth_context_opt, &namespace, &proposal_key)? {
+        let exists = storage.contains(auth_context_opt, &namespace, &proposal_key)?;
+        if !exists {
             return Err(format!("Proposal with ID '{}' not found", proposal_id).into());
         }
 
@@ -1358,7 +1359,8 @@ where
 
             // Check if proposal exists
             let proposal_key = VM::<S>::proposal_key_prefix(proposal_id);
-            if !storage.contains(auth_context_opt, namespace, &proposal_key)? {
+            let exists = storage.contains(auth_context_opt, namespace, &proposal_key)?;
+            if !exists {
                 return Err(format!("Proposal with ID '{}' not found", proposal_id).into());
             }
 

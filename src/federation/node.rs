@@ -95,10 +95,11 @@ impl NetworkNode {
         let local_peer_id = PeerId::from(local_key.public());
 
         // Create the network behavior
-        let behaviour = create_behaviour(&local_key, config.protocol_version.clone()).await;
+        let behaviour = create_behaviour(&local_key, config.protocol_version.clone()).await
+            .map_err(|e| FederationError::NetworkError(format!("Failed to create network behavior: {}", e)))?;
 
         // Create the transport and swarm
-        let swarm = create_swarm(local_key, behaviour);
+        let swarm = create_swarm(local_key, behaviour)?;
 
         // Create a channel for network events
         let (event_sender, event_receiver) = mpsc::channel::<NetworkEvent>(32);
@@ -609,14 +610,15 @@ impl NetworkNode {
 }
 
 /// Create a new Swarm with the provided identity
-fn create_swarm(local_key: identity::Keypair, behaviour: IcnBehaviour) -> Swarm<IcnBehaviour> {
+fn create_swarm(local_key: identity::Keypair, behaviour: IcnBehaviour) -> Result<Swarm<IcnBehaviour>, FederationError> {
     // Create a TCP transport
     let transport = {
         let tcp = tcp::tokio::Transport::new(tcp::Config::default().nodelay(true));
         let transport_upgrade = upgrade::Version::V1;
 
         // Create the noise keys
-        let noise_config = noise::Config::new(&local_key).expect("Failed to create noise config");
+        let noise_config = noise::Config::new(&local_key)
+            .map_err(|e| FederationError::NetworkError(format!("Noise config error: {:?}", e)))?;
 
         tcp.upgrade(transport_upgrade)
             .authenticate(noise_config)
@@ -628,11 +630,6 @@ fn create_swarm(local_key: identity::Keypair, behaviour: IcnBehaviour) -> Swarm<
     // Create a Swarm to manage peers and events
     let config = libp2p::swarm::Config::with_tokio_executor()
         .with_idle_connection_timeout(Duration::from_secs(60));
-
-    Swarm::new(
-        transport,
-        behaviour,
-        local_key.public().to_peer_id(),
-        config,
-    )
+    
+    Ok(Swarm::new(transport, behaviour, local_key.public().to_peer_id(), config))
 }
