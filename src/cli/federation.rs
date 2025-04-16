@@ -365,10 +365,7 @@ async fn load_local_proposal<S>(vm: &VM<S>, proposal_id: &str) -> Result<Proposa
 where
     S: Storage + StorageExtensions + Send + Sync + Clone + Debug + 'static,
 {
-    let storage = vm
-        .storage_backend
-        .as_ref()
-        .ok_or_else(|| "Storage backend not available")?;
+    let storage = vm.get_storage_backend().ok_or_else(|| "Storage backend not available")?;
 
     let proposal_key = format!("governance/proposals/{}", proposal_id);
 
@@ -423,10 +420,7 @@ where
         .map_err(|e| format!("Failed to broadcast proposal: {}", e))?;
 
     // Store locally as a federated proposal
-    let storage = vm
-        .storage_backend
-        .as_mut()
-        .ok_or_else(|| "Storage backend not available")?;
+    let storage = vm.get_storage_backend().unwrap();
 
     let storage_key = format!("{}/{}", FEDERATION_PROPOSALS_PATH, proposal_id);
     let proposal_data = serde_json::to_vec(&federated_proposal)
@@ -490,10 +484,7 @@ where
     let proposal_id = federated_proposal.proposal_id.clone();
 
     // Store the proposal
-    let storage = vm
-        .storage_backend
-        .as_mut()
-        .ok_or_else(|| "Storage backend not available")?;
+    let storage = vm.get_storage_backend().unwrap();
 
     let storage_key = format!("{}/{}", FEDERATION_PROPOSALS_PATH, proposal_id);
     let proposal_data = serde_json::to_vec(&federated_proposal)
@@ -548,16 +539,16 @@ where
     S: Storage + StorageExtensions + Send + Sync + Clone + Debug + 'static,
 {
     // Load the federated proposal if it exists locally
-    let storage = vm
-        .storage_backend
-        .as_ref()
-        .ok_or_else(|| "Storage backend not available")?;
+    let storage = vm.get_storage_backend().ok_or_else(|| "Storage backend not available")?;
 
     let storage_key = format!("{}/{}", FEDERATION_PROPOSALS_PATH, proposal_id);
 
     let federated_proposal = match storage.get(Some(auth_context), "federation", &storage_key) {
-        Ok(data) => serde_json::from_slice::<FederatedProposal>(&data)
-            .map_err(|e| format!("Failed to parse federated proposal: {}", e))?,
+        Ok(data) => {
+            let data_vec = data.to_vec();  // Convert to Vec<u8> to avoid [u8] sizing issues
+            serde_json::from_slice::<FederatedProposal>(&data_vec)
+                .map_err(|e| format!("Failed to parse federated proposal: {}", e))?
+        }
         Err(_) => {
             // Proposal not found locally, need to fetch it first
             println!(
@@ -622,10 +613,7 @@ where
         .map_err(|e| format!("Failed to submit vote: {}", e))?;
 
     // Store the vote locally
-    let storage = vm
-        .storage_backend
-        .as_mut()
-        .ok_or_else(|| "Storage backend not available")?;
+    let storage = vm.get_storage_backend().unwrap();
 
     let vote_key = format!("{}/{}/{}", FEDERATION_VOTES_PATH, proposal_id, voter_id);
 
@@ -665,10 +653,7 @@ where
     println!("Syncing proposal {} from node {}", proposal_id, source_addr);
 
     // Check if we have the proposal locally
-    let storage = vm
-        .storage_backend
-        .as_ref()
-        .ok_or_else(|| "Storage backend not available")?;
+    let storage = vm.get_storage_backend().ok_or_else(|| "Storage backend not available")?;
 
     let local_key = format!("{}/{}", FEDERATION_PROPOSALS_PATH, proposal_id);
     let local_exists = storage
@@ -692,10 +677,7 @@ where
     }
 
     // Update sync metadata
-    let storage = vm
-        .storage_backend
-        .as_mut()
-        .ok_or_else(|| "Storage backend not available")?;
+    let storage = vm.get_storage_backend().unwrap();
 
     let sync_metadata = FederationSyncMetadata {
         proposal_id: proposal_id.to_string(),
@@ -733,10 +715,7 @@ fn list_federated_proposals<S>(
 where
     S: Storage + StorageExtensions + Send + Sync + Clone + Debug + 'static,
 {
-    let storage = vm
-        .storage_backend
-        .as_ref()
-        .ok_or_else(|| "Storage backend not available")?;
+    let storage = vm.get_storage_backend().ok_or_else(|| "Storage backend not available")?;
 
     // Get all proposals in the federation namespace
     let proposals_path = FEDERATION_PROPOSALS_PATH;
@@ -766,7 +745,10 @@ where
         let full_key = format!("{}/{}", FEDERATION_PROPOSALS_PATH, proposal_id);
         match storage.get(Some(auth_context), "federation", &full_key) {
             Ok(data) => {
-                if let Ok(proposal) = serde_json::from_slice::<FederatedProposal>(&data) {
+                if let Ok(proposal) = {
+                    let data_vec = data.to_vec();  // Convert to Vec<u8> to avoid [u8] sizing issues
+                    serde_json::from_slice::<FederatedProposal>(&data_vec)
+                } {
                     // Filter by status if requested
                     if let Some(ref status) = status_filter {
                         let status_matches = match status.to_lowercase().as_str() {

@@ -1,8 +1,65 @@
 //! VM Stack operations
 //! 
 //! This module provides stack manipulation operations for the VM.
+//!
+//! The stack is a fundamental component of the VM, responsible for:
+//! - Storing intermediate computation results
+//! - Providing operands for operations
+//! - Managing function call parameters and return values
+//!
+//! This module is separated from other VM components to:
+//! - Enable clear focus on stack operations without other concerns
+//! - Allow for independent testing of stack functionality
+//! - Provide a clean interface for the main VM implementation
+//! - Support potential future optimizations specific to stack operations
+//!
+//! The module defines a `StackOps` trait that encapsulates the operations
+//! that can be performed on a stack, enabling alternative stack implementations
+//! if needed in the future.
 
 use crate::vm::errors::VMError;
+
+/// Defines operations that can be performed on a stack
+pub trait StackOps {
+    /// Push a value onto the stack
+    fn push(&mut self, value: f64);
+    
+    /// Pop a value from the stack
+    fn pop(&mut self, op_name: &str) -> Result<f64, VMError>;
+    
+    /// Pop two values from the stack
+    fn pop_two(&mut self, op_name: &str) -> Result<(f64, f64), VMError>;
+    
+    /// Return the top value from the stack without popping it
+    fn top(&self) -> Option<f64>;
+    
+    /// Get the current stack values
+    fn get_stack(&self) -> Vec<f64>;
+    
+    /// Duplicate the top value on the stack
+    fn dup(&mut self, op_name: &str) -> Result<(), VMError>;
+    
+    /// Swap the top two values on the stack
+    fn swap(&mut self, op_name: &str) -> Result<(), VMError>;
+    
+    /// Copy the second value to the top of the stack
+    fn over(&mut self, op_name: &str) -> Result<(), VMError>;
+    
+    /// Check if all values in the specified depth are equal
+    fn assert_equal_stack(&self, depth: usize, op_name: &str) -> Result<bool, VMError>;
+    
+    /// Format the stack as a string for display
+    fn format_stack(&self) -> String;
+    
+    /// Clear the stack
+    fn clear(&mut self);
+    
+    /// Get the stack length
+    fn len(&self) -> usize;
+    
+    /// Check if the stack is empty
+    fn is_empty(&self) -> bool;
+}
 
 /// Provides stack operations for the virtual machine
 #[derive(Debug, Clone)]
@@ -16,38 +73,40 @@ impl VMStack {
     pub fn new() -> Self {
         Self { stack: Vec::new() }
     }
+}
 
+impl StackOps for VMStack {
     /// Push a value onto the stack
-    pub fn push(&mut self, value: f64) {
+    fn push(&mut self, value: f64) {
         self.stack.push(value);
     }
 
     /// Pop a value from the stack
-    pub fn pop(&mut self, op_name: &str) -> Result<f64, VMError> {
+    fn pop(&mut self, op_name: &str) -> Result<f64, VMError> {
         self.stack.pop().ok_or_else(|| VMError::StackUnderflow {
             op_name: op_name.to_string(),
         })
     }
 
     /// Pop two values from the stack
-    pub fn pop_two(&mut self, op_name: &str) -> Result<(f64, f64), VMError> {
+    fn pop_two(&mut self, op_name: &str) -> Result<(f64, f64), VMError> {
         let b = self.pop(op_name)?;
         let a = self.pop(op_name)?;
         Ok((a, b))
     }
 
     /// Return the top value from the stack without popping it
-    pub fn top(&self) -> Option<f64> {
+    fn top(&self) -> Option<f64> {
         self.stack.last().copied()
     }
 
     /// Get the current stack values
-    pub fn get_stack(&self) -> Vec<f64> {
+    fn get_stack(&self) -> Vec<f64> {
         self.stack.clone()
     }
 
     /// Duplicate the top value on the stack
-    pub fn dup(&mut self, op_name: &str) -> Result<(), VMError> {
+    fn dup(&mut self, op_name: &str) -> Result<(), VMError> {
         let value = self.top().ok_or_else(|| VMError::StackUnderflow {
             op_name: op_name.to_string(),
         })?;
@@ -56,7 +115,7 @@ impl VMStack {
     }
 
     /// Swap the top two values on the stack
-    pub fn swap(&mut self, op_name: &str) -> Result<(), VMError> {
+    fn swap(&mut self, op_name: &str) -> Result<(), VMError> {
         if self.stack.len() < 2 {
             return Err(VMError::StackUnderflow {
                 op_name: op_name.to_string(),
@@ -69,7 +128,7 @@ impl VMStack {
     }
 
     /// Copy the second value to the top of the stack
-    pub fn over(&mut self, op_name: &str) -> Result<(), VMError> {
+    fn over(&mut self, op_name: &str) -> Result<(), VMError> {
         if self.stack.len() < 2 {
             return Err(VMError::StackUnderflow {
                 op_name: op_name.to_string(),
@@ -83,7 +142,7 @@ impl VMStack {
     }
 
     /// Check if all values in the specified depth are equal
-    pub fn assert_equal_stack(&self, depth: usize, op_name: &str) -> Result<bool, VMError> {
+    fn assert_equal_stack(&self, depth: usize, op_name: &str) -> Result<bool, VMError> {
         if self.stack.len() < depth {
             return Err(VMError::StackUnderflow {
                 op_name: op_name.to_string(),
@@ -103,7 +162,7 @@ impl VMStack {
     }
 
     /// Format the stack as a string for display
-    pub fn format_stack(&self) -> String {
+    fn format_stack(&self) -> String {
         if self.stack.is_empty() {
             return "Stack: []".to_string();
         }
@@ -113,17 +172,17 @@ impl VMStack {
     }
 
     /// Clear the stack
-    pub fn clear(&mut self) {
+    fn clear(&mut self) {
         self.stack.clear();
     }
 
     /// Get the stack length
-    pub fn len(&self) -> usize {
+    fn len(&self) -> usize {
         self.stack.len()
     }
 
     /// Check if the stack is empty
-    pub fn is_empty(&self) -> bool {
+    fn is_empty(&self) -> bool {
         self.stack.is_empty()
     }
 }

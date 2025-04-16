@@ -1,6 +1,19 @@
 //! Error types for VM operations
 //!
 //! This module defines all possible error conditions that can occur during VM execution.
+//!
+//! Having a dedicated error module provides:
+//! - Consistent error handling throughout the VM
+//! - Clear categorization of different error types
+//! - Detailed error messages with relevant context
+//! - Extensibility for adding new error variants
+//! - Better integration with Rust's error handling patterns
+//!
+//! The error types are designed to:
+//! - Be descriptive about what went wrong
+//! - Include relevant context (e.g., operation name, variable name)
+//! - Enable proper error propagation in the VM
+//! - Support clean error reporting to users
 
 use thiserror::Error;
 
@@ -92,6 +105,14 @@ pub enum VMError {
     /// Identity context unavailable
     #[error("Identity context unavailable")]
     IdentityContextUnavailable,
+
+    /// Permission denied for an operation
+    #[error("Permission denied for user '{user_id}' to perform '{action}' operation on '{key}'")]
+    PermissionDenied {
+        user_id: String,
+        action: String,
+        key: String,
+    },
 
     /// Deserialization error
     #[error("Deserialization error: {0}")]

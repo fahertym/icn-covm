@@ -2,16 +2,30 @@
 //! 
 //! This module brings together stack, memory, and execution components
 //! to implement the main VM functionality.
+//!
+//! The VM struct is the central coordinator that:
+//! - Integrates the stack, memory, and execution subsystems
+//! - Implements operation execution logic
+//! - Manages control flow
+//! - Provides the primary API for VM users
+//!
+//! This design approach:
+//! - Delegates specialized functionality to appropriate subsystems
+//! - Maintains clean separation of concerns
+//! - Allows for targeted testing of different VM aspects
+//! - Provides a solid foundation for extending VM capabilities
+//! - Facilitates both AST interpretation and bytecode execution
 
 use crate::events::Event;
+use crate::identity::Identity;
 use crate::storage::auth::AuthContext;
 use crate::storage::errors::StorageResult;
 use crate::storage::traits::Storage;
 use crate::vm::errors::VMError;
-use crate::vm::execution::VMExecution;
-use crate::vm::memory::VMMemory;
-use crate::vm::stack::VMStack;
-use crate::vm::types::{LoopControl, Op, VMEvent};
+use crate::vm::execution::{ExecutorOps, VMExecution};
+use crate::vm::memory::{MemoryScope, VMMemory};
+use crate::vm::stack::{StackOps, VMStack};
+use crate::vm::types::{CallFrame, LoopControl, Op, VMEvent};
 
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -74,6 +88,16 @@ where
     /// Get the authentication context
     pub fn get_auth_context(&self) -> Option<&AuthContext> {
         self.executor.get_auth_context()
+    }
+
+    /// Get the storage backend
+    pub fn get_storage_backend(&self) -> Option<&S> {
+        self.executor.storage_backend.as_ref()
+    }
+
+    /// Get the namespace
+    pub fn get_namespace(&self) -> Option<&str> {
+        Some(&self.executor.namespace)
     }
 
     /// Fork the VM for transaction support
@@ -159,37 +183,37 @@ where
                 }
                 
                 Op::Add => {
-                    let (a, b) = self.pop_two("Add")?;
+                    let (a, b) = self.stack.pop_two("Add")?;
                     let result = self.executor.execute_arithmetic(a, b, "add")?;
                     self.stack.push(result);
                 }
                 
                 Op::Sub => {
-                    let (a, b) = self.pop_two("Sub")?;
+                    let (a, b) = self.stack.pop_two("Sub")?;
                     let result = self.executor.execute_arithmetic(a, b, "sub")?;
                     self.stack.push(result);
                 }
                 
                 Op::Mul => {
-                    let (a, b) = self.pop_two("Mul")?;
+                    let (a, b) = self.stack.pop_two("Mul")?;
                     let result = self.executor.execute_arithmetic(a, b, "mul")?;
                     self.stack.push(result);
                 }
                 
                 Op::Div => {
-                    let (a, b) = self.pop_two("Div")?;
+                    let (a, b) = self.stack.pop_two("Div")?;
                     let result = self.executor.execute_arithmetic(a, b, "div")?;
                     self.stack.push(result);
                 }
                 
                 Op::Mod => {
-                    let (a, b) = self.pop_two("Mod")?;
+                    let (a, b) = self.stack.pop_two("Mod")?;
                     let result = self.executor.execute_arithmetic(a, b, "mod")?;
                     self.stack.push(result);
                 }
                 
                 Op::Store(name) => {
-                    let value = self.pop_one("Store")?;
+                    let value = self.stack.pop("Store")?;
                     self.memory.store(&name, value);
                 }
                 
@@ -203,7 +227,7 @@ where
                     self.execute_inner(condition)?;
                     
                     // Check the result
-                    let cond_result = self.pop_one("If")?;
+                    let cond_result = self.stack.pop("If")?;
                     
                     if cond_result != 0.0 {
                         // Condition is true, execute 'then' branch
@@ -237,7 +261,7 @@ where
                     loop {
                         // Evaluate condition
                         self.execute_inner(condition.clone())?;
-                        let cond_result = self.pop_one("While")?;
+                        let cond_result = self.stack.pop("While")?;
                         
                         if cond_result == 0.0 {
                             // Condition is false, exit loop
@@ -267,12 +291,12 @@ where
                 }
                 
                 Op::Negate => {
-                    let value = self.pop_one("Negate")?;
+                    let value = self.stack.pop("Negate")?;
                     self.stack.push(-value);
                 }
                 
                 Op::AssertTop(expected) => {
-                    let actual = self.pop_one("AssertTop")?;
+                    let actual = self.stack.pop("AssertTop")?;
                     if (actual - expected).abs() > f64::EPSILON {
                         return Err(VMError::AssertionFailed {
                             message: format!("Expected {}, got {}", expected, actual),
@@ -300,41 +324,41 @@ where
                 }
                 
                 Op::Pop => {
-                    self.pop_one("Pop")?;
+                    self.stack.pop("Pop")?;
                 }
                 
                 Op::Eq => {
-                    let (a, b) = self.pop_two("Eq")?;
+                    let (a, b) = self.stack.pop_two("Eq")?;
                     let result = self.executor.execute_comparison(a, b, "eq")?;
                     self.stack.push(result);
                 }
                 
                 Op::Gt => {
-                    let (a, b) = self.pop_two("Gt")?;
+                    let (a, b) = self.stack.pop_two("Gt")?;
                     let result = self.executor.execute_comparison(a, b, "gt")?;
                     self.stack.push(result);
                 }
                 
                 Op::Lt => {
-                    let (a, b) = self.pop_two("Lt")?;
+                    let (a, b) = self.stack.pop_two("Lt")?;
                     let result = self.executor.execute_comparison(a, b, "lt")?;
                     self.stack.push(result);
                 }
                 
                 Op::Not => {
-                    let value = self.pop_one("Not")?;
+                    let value = self.stack.pop("Not")?;
                     let result = self.executor.execute_logical(value, "not")?;
                     self.stack.push(result);
                 }
                 
                 Op::And => {
-                    let (a, b) = self.pop_two("And")?;
+                    let (a, b) = self.stack.pop_two("And")?;
                     let result = self.executor.execute_binary_logical(a, b, "and")?;
                     self.stack.push(result);
                 }
                 
                 Op::Or => {
-                    let (a, b) = self.pop_two("Or")?;
+                    let (a, b) = self.stack.pop_two("Or")?;
                     let result = self.executor.execute_binary_logical(a, b, "or")?;
                     self.stack.push(result);
                 }
@@ -376,7 +400,7 @@ where
                 Op::Match { value, cases, default } => {
                     // Evaluate the value to match on
                     self.execute_inner(value)?;
-                    let match_value = self.pop_one("Match")?;
+                    let match_value = self.stack.pop("Match")?;
                     
                     let mut matched = false;
                     
@@ -453,7 +477,7 @@ where
                 }
                 
                 Op::StoreP(key) => {
-                    let value = self.pop_one("StoreP")?;
+                    let value = self.stack.pop("StoreP")?;
                     self.executor.execute_store_p(&key, value)?;
                 }
                 
@@ -482,7 +506,7 @@ where
         
         // Pop values from the stack for each parameter (in reverse order)
         for param_name in params.iter().rev() {
-            let value = self.pop_one(&format!("Call({})", name))?;
+            let value = self.stack.pop(&format!("Call({})", name))?;
             param_values.insert(param_name.clone(), value);
         }
         
@@ -514,46 +538,39 @@ where
     }
 }
 
-#[cfg(test)]
 pub mod tests {
     use super::*;
     use crate::storage::implementations::in_memory::InMemoryStorage;
-    use crate::identity::{Identity, Profile};
-
+    use crate::storage::auth::AuthContext;
+    use crate::identity::Identity;
+    
+    // This implementation conflicts with one in the actual InMemoryStorage module
+    // Removing to avoid the conflict
+    /*
     impl Default for InMemoryStorage {
         fn default() -> Self {
             Self::new()
         }
     }
+    */
 
+    #[cfg(test)]
     fn create_test_identity(id: &str, identity_type: &str) -> Identity {
-        let profile = Profile {
-            name: Some(format!("Test {}", id)),
-            bio: Some(format!("Test bio for {}", id)),
-            avatar_url: Some("https://example.com/avatar.png".to_string()),
-            website: Some("https://example.com".to_string()),
-            location: Some("Test Location".to_string()),
-        };
-
-        Identity {
-            id: id.to_string(),
-            public_key: format!("pk_{}", id),
-            identity_type: identity_type.to_string(),
-            profile: Some(profile),
-            created_at: 1000,
-            updated_at: None,
-        }
+        Identity::new(id.to_string(), None, identity_type.to_string(), None).unwrap()
     }
 
+    #[cfg(test)]
     fn setup_identity_context() -> AuthContext {
-        let member = create_test_identity("member1", "INDIVIDUAL");
+        let member = create_test_identity("test_member", "member");
+        let member_did = member.id.clone();
         
-        AuthContext {
-            identity: member,
-            is_authenticated: true,
-            roles: vec!["MEMBER".to_string()],
-            signature: Some("valid_signature".to_string()),
-        }
+        let mut auth_ctx = AuthContext::new(&member_did);
+        auth_ctx.register_identity(member);
+        auth_ctx.add_role("global", "admin");
+        auth_ctx.add_role("test_ns", "writer");
+        auth_ctx.add_role("test_ns", "reader");
+        
+        auth_ctx
     }
 
     #[test]
@@ -670,7 +687,7 @@ pub mod tests {
 
     #[test]
     fn test_storage_operations_mock() {
-        let mut storage = InMemoryStorage::new();
+        let storage = InMemoryStorage::new();
         let auth = setup_identity_context();
         
         let mut vm = VM::with_storage_backend(storage);

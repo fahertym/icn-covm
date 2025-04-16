@@ -1,5 +1,5 @@
 use crate::storage::auth::AuthContext;
-use crate::storage::errors::StorageResult;
+use crate::storage::errors::{StorageError, StorageResult};
 use crate::storage::events::StorageEvent;
 use crate::storage::namespaces::NamespaceMetadata;
 use crate::storage::versioning::{VersionDiff, VersionInfo};
@@ -234,8 +234,369 @@ impl<S: StorageBackend> StorageExtensions for S {
     }
 }
 
-/// Supertrait combining StorageBackend and StorageExtensions for use in trait objects.
-pub trait Storage: StorageBackend + StorageExtensions {}
+/// EconomicOperations provides operations for managing resources and accounts
+pub trait EconomicOperations: StorageBackend {
+    /// Create a new economic resource
+    fn create_resource(
+        &mut self,
+        auth: Option<&AuthContext>,
+        namespace: &str,
+        resource: &str,
+    ) -> StorageResult<()> {
+        // Default implementation creates a resource metadata entry
+        let key = format!("resources/{}/metadata", resource);
+        let metadata = format!("{{\"id\": \"{}\", \"namespace\": \"{}\"}}", resource, namespace);
+        self.set(auth, namespace, &key, metadata.as_bytes().to_vec())?;
+        Ok(())
+    }
+
+    /// Mint new units of a resource for an account
+    fn mint(
+        &mut self,
+        auth: Option<&AuthContext>,
+        namespace: &str,
+        resource: &str,
+        account: &str,
+        amount: u64,
+        reason: &str,
+    ) -> StorageResult<((), Option<StorageEvent>)> {
+        // Check if resource exists
+        let resource_key = format!("resources/{}/metadata", resource);
+        if !self.contains(auth, namespace, &resource_key)? {
+            return Err(StorageError::ResourceNotFound(resource.to_string()));
+        }
+
+        // Get current balance
+        let balance_key = format!("resources/{}/accounts/{}", resource, account);
+        let current_balance = if self.contains(auth, namespace, &balance_key)? {
+            match std::str::from_utf8(&self.get(auth, namespace, &balance_key)?) {
+                Ok(s) => s.parse::<u64>().unwrap_or(0),
+                Err(_) => 0,
+            }
+        } else {
+            0
+        };
+
+        // Update balance
+        let new_balance = current_balance + amount;
+        self.set(
+            auth, 
+            namespace, 
+            &balance_key, 
+            new_balance.to_string().as_bytes().to_vec()
+        )?;
+
+        // Create event
+        let event = StorageEvent {
+            user_id: auth.map(|a| a.user_id_string()).unwrap_or_else(|| "system".to_string()),
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            namespace: namespace.to_string(),
+            key: balance_key,
+            event_type: "mint".to_string(),
+            details: format!("Minted {} of {} for {}: {}", amount, resource, account, reason),
+        };
+
+        Ok(((), Some(event)))
+    }
+
+    /// Transfer resource units between accounts
+    fn transfer(
+        &mut self,
+        auth: Option<&AuthContext>,
+        namespace: &str,
+        resource: &str,
+        from: &str,
+        to: &str,
+        amount: u64,
+        reason: &str,
+    ) -> StorageResult<((), Option<StorageEvent>)> {
+        // Check if resource exists
+        let resource_key = format!("resources/{}/metadata", resource);
+        if !self.contains(auth, namespace, &resource_key)? {
+            return Err(StorageError::ResourceNotFound(resource.to_string()));
+        }
+
+        // Get from balance
+        let from_key = format!("resources/{}/accounts/{}", resource, from);
+        let from_balance = if self.contains(auth, namespace, &from_key)? {
+            match std::str::from_utf8(&self.get(auth, namespace, &from_key)?) {
+                Ok(s) => s.parse::<u64>().unwrap_or(0),
+                Err(_) => 0,
+            }
+        } else {
+            0
+        };
+
+        // Check if sufficient balance
+        if from_balance < amount {
+            return Err(StorageError::InsufficientBalance(
+                from.to_string(),
+                resource.to_string(),
+            ));
+        }
+
+        // Get to balance
+        let to_key = format!("resources/{}/accounts/{}", resource, to);
+        let to_balance = if self.contains(auth, namespace, &to_key)? {
+            match std::str::from_utf8(&self.get(auth, namespace, &to_key)?) {
+                Ok(s) => s.parse::<u64>().unwrap_or(0),
+                Err(_) => 0,
+            }
+        } else {
+            0
+        };
+
+        // Update balances
+        let new_from_balance = from_balance - amount;
+        let new_to_balance = to_balance + amount;
+
+        self.set(
+            auth,
+            namespace,
+            &from_key,
+            new_from_balance.to_string().as_bytes().to_vec(),
+        )?;
+        self.set(
+            auth,
+            namespace,
+            &to_key,
+            new_to_balance.to_string().as_bytes().to_vec(),
+        )?;
+
+        // Create event
+        let event = StorageEvent {
+            user_id: auth.map(|a| a.user_id_string()).unwrap_or_else(|| "system".to_string()),
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            namespace: namespace.to_string(),
+            key: format!("{}->{}", from_key, to_key),
+            event_type: "transfer".to_string(),
+            details: format!("Transferred {} of {} from {} to {}: {}", amount, resource, from, to, reason),
+        };
+
+        Ok(((), Some(event)))
+    }
+
+    /// Burn resource units from an account
+    fn burn(
+        &mut self,
+        auth: Option<&AuthContext>,
+        namespace: &str,
+        resource: &str,
+        account: &str,
+        amount: u64,
+        reason: &str,
+    ) -> StorageResult<((), Option<StorageEvent>)> {
+        // Check if resource exists
+        let resource_key = format!("resources/{}/metadata", resource);
+        if !self.contains(auth, namespace, &resource_key)? {
+            return Err(StorageError::ResourceNotFound(resource.to_string()));
+        }
+
+        // Get current balance
+        let balance_key = format!("resources/{}/accounts/{}", resource, account);
+        let current_balance = if self.contains(auth, namespace, &balance_key)? {
+            match std::str::from_utf8(&self.get(auth, namespace, &balance_key)?) {
+                Ok(s) => s.parse::<u64>().unwrap_or(0),
+                Err(_) => 0,
+            }
+        } else {
+            0
+        };
+
+        // Check if sufficient balance
+        if current_balance < amount {
+            return Err(StorageError::InsufficientBalance(
+                account.to_string(),
+                resource.to_string(),
+            ));
+        }
+
+        // Update balance
+        let new_balance = current_balance - amount;
+        self.set(
+            auth,
+            namespace,
+            &balance_key,
+            new_balance.to_string().as_bytes().to_vec(),
+        )?;
+
+        // Create event
+        let event = StorageEvent {
+            user_id: auth.map(|a| a.user_id_string()).unwrap_or_else(|| "system".to_string()),
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            namespace: namespace.to_string(),
+            key: balance_key,
+            event_type: "burn".to_string(),
+            details: format!("Burned {} of {} from {}: {}", amount, resource, account, reason),
+        };
+
+        Ok(((), Some(event)))
+    }
+
+    /// Get the balance of a resource for an account
+    fn get_balance(
+        &self,
+        auth: Option<&AuthContext>,
+        namespace: &str,
+        resource: &str,
+        account: &str,
+    ) -> StorageResult<(u64, Option<StorageEvent>)> {
+        // Check if resource exists
+        let resource_key = format!("resources/{}/metadata", resource);
+        if !self.contains(auth, namespace, &resource_key)? {
+            return Err(StorageError::ResourceNotFound(resource.to_string()));
+        }
+
+        // Get balance
+        let balance_key = format!("resources/{}/accounts/{}", resource, account);
+        let balance = if self.contains(auth, namespace, &balance_key)? {
+            match std::str::from_utf8(&self.get(auth, namespace, &balance_key)?) {
+                Ok(s) => s.parse::<u64>().unwrap_or(0),
+                Err(_) => 0,
+            }
+        } else {
+            0
+        };
+
+        // Create event
+        let event = StorageEvent {
+            user_id: auth.map(|a| a.user_id_string()).unwrap_or_else(|| "system".to_string()),
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            namespace: namespace.to_string(),
+            key: balance_key,
+            event_type: "get_balance".to_string(),
+            details: format!("Retrieved balance of {} for {}: {}", resource, account, balance),
+        };
+
+        Ok((balance, Some(event)))
+    }
+
+    /// Get reputation for an identity
+    fn get_reputation(
+        &self,
+        auth: Option<&AuthContext>,
+        namespace: &str,
+        identity_id: &str,
+    ) -> StorageResult<(u64, Option<StorageEvent>)> {
+        // Get reputation
+        let rep_key = format!("identities/{}/reputation", identity_id);
+        let reputation = if self.contains(auth, namespace, &rep_key)? {
+            match std::str::from_utf8(&self.get(auth, namespace, &rep_key)?) {
+                Ok(s) => s.parse::<u64>().unwrap_or(0),
+                Err(_) => 0,
+            }
+        } else {
+            0
+        };
+
+        // No event for reading reputation
+        Ok((reputation, None))
+    }
+
+    /// Set reputation for an identity
+    fn set_reputation(
+        &mut self,
+        auth: Option<&AuthContext>,
+        namespace: &str,
+        identity_id: &str,
+        value: u64,
+    ) -> StorageResult<((), Option<StorageEvent>)> {
+        // Set reputation
+        let rep_key = format!("identities/{}/reputation", identity_id);
+        self.set(
+            auth,
+            namespace,
+            &rep_key,
+            value.to_string().as_bytes().to_vec(),
+        )?;
+
+        // Create event
+        let event = StorageEvent {
+            user_id: auth.map(|a| a.user_id_string()).unwrap_or_else(|| "system".to_string()),
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            namespace: namespace.to_string(),
+            key: rep_key,
+            event_type: "set_reputation".to_string(),
+            details: format!("Set reputation for {} to {}", identity_id, value),
+        };
+
+        Ok(((), Some(event)))
+    }
+
+    /// Store custom data
+    fn store(
+        &mut self, 
+        auth: Option<&AuthContext>,
+        namespace: &str,
+        key: &str,
+        value: Vec<u8>
+    ) -> StorageResult<((), Option<StorageEvent>)> {
+        // Set the value
+        self.set(auth, namespace, key, value)?;
+
+        // Create event
+        let event = StorageEvent {
+            user_id: auth.map(|a| a.user_id_string()).unwrap_or_else(|| "system".to_string()),
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            namespace: namespace.to_string(),
+            key: key.to_string(),
+            event_type: "store".to_string(),
+            details: format!("Stored data for key {}", key),
+        };
+
+        Ok(((), Some(event)))
+    }
+
+    /// Load custom data
+    fn load(
+        &self, 
+        auth: Option<&AuthContext>,
+        namespace: &str,
+        key: &str
+    ) -> StorageResult<(Vec<u8>, Option<StorageEvent>)> {
+        // Get the data
+        let data = self.get(auth, namespace, key)?;
+
+        // Create event
+        let event = StorageEvent {
+            user_id: auth.map(|a| a.user_id_string()).unwrap_or_else(|| "system".to_string()),
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            namespace: namespace.to_string(),
+            key: key.to_string(),
+            event_type: "load".to_string(),
+            details: format!("Loaded data for key {}", key),
+        };
+
+        Ok((data, Some(event)))
+    }
+}
+
+// Automatically implement EconomicOperations for all StorageBackend implementors
+impl<T: StorageBackend> EconomicOperations for T {}
+
+/// Define a standard Storage type that includes all trait bounds
+pub trait Storage: StorageBackend + EconomicOperations + Clone + Send + Sync {}
 
 /// Blanket implementation for the Storage supertrait.
-impl<T: StorageBackend + StorageExtensions> Storage for T {}
+impl<T: StorageBackend + EconomicOperations + Clone + Send + Sync> Storage for T {}

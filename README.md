@@ -276,16 +276,29 @@ Comprehensive documentation is available:
 │   └── typed-values.md      # Typed value system documentation
 ├── scripts/                 # Dev utility scripts
 ├── src/                     # Source code
-│   ├── bytecode.rs          # Bytecode compiler and interpreter
-│   ├── compiler/            # Modular parser components
-│   ├── events.rs            # Event system for logging
-│   ├── federation/          # Networking and node communication
-│   ├── identity/            # Identity and authorization system
-│   ├── lib.rs               # Library exports
-│   ├── main.rs              # Command-line interface
-│   ├── storage/             # Storage system implementations
-│   ├── typed.rs             # Typed value system (feature-flagged)
-│   └── vm.rs                # Virtual machine implementation
+│   ├── api/               # HTTP API for external integration
+│   ├── bytecode.rs        # Bytecode compiler and interpreter
+│   ├── cli/               # Command-line interface components
+│   ├── compiler/          # DSL parser and compiler
+│   ├── events/            # Event handling system
+│   ├── federation/        # Node federation components
+│   ├── governance/        # Governance primitives
+│   ├── identity/          # Identity and authentication
+│   ├── storage/           # Persistent storage system
+│   │   ├── auth.rs        # Authentication context
+│   │   ├── errors.rs      # Storage-specific errors
+│   │   ├── implementations/  # Storage backend implementations
+│   │   └── traits.rs      # Storage interface definitions
+│   │   
+│   ├── vm/                # Virtual Machine (modular design)
+│   │   ├── mod.rs         # Module coordination and exports
+│   │   ├── errors.rs      # VM error definitions
+│   │   ├── execution.rs   # Operation execution logic
+│   │   ├── memory.rs      # Memory and scope management
+│   │   ├── stack.rs       # Stack operations
+│   │   ├── types.rs       # Core VM type definitions
+│   │   └── vm.rs          # Main VM implementation
+│   └── main.rs            # Application entry point
 ├── Cargo.toml               # Rust project manifest
 ├── Makefile                 # Build automation for common tasks
 └── README.md                # You're here
@@ -325,4 +338,59 @@ MIT © Matt Faherty and contributors
 ---
 
 > **Note:** This project was formerly called `nano-cvm`. The rename reflects its expanded role as the core virtual machine of the Intercooperative Network (ICN).
+
+## Project Structure
+
+The codebase is organized into modules:
+
+```
+src/
+├── api/               # HTTP API for external integration
+├── bytecode.rs        # Bytecode compiler and interpreter
+├── cli/               # Command-line interface components
+├── compiler/          # DSL parser and compiler
+├── events/            # Event handling system
+├── federation/        # Node federation components
+├── governance/        # Governance primitives
+├── identity/          # Identity and authentication
+├── storage/           # Persistent storage system
+│   ├── auth.rs        # Authentication context
+│   ├── errors.rs      # Storage-specific errors
+│   ├── implementations/  # Storage backend implementations
+│   └── traits.rs      # Storage interface definitions
+├── vm/                # Virtual Machine (modular design)
+│   ├── mod.rs         # Module coordination and exports
+│   ├── errors.rs      # VM error definitions
+│   ├── execution.rs   # Operation execution logic
+│   ├── memory.rs      # Memory and scope management
+│   ├── stack.rs       # Stack operations
+│   ├── types.rs       # Core VM type definitions
+│   └── vm.rs          # Main VM implementation
+└── main.rs            # Application entry point
+```
+
+## VM Architecture
+
+The ICN-COVM Virtual Machine has been redesigned with a modular architecture, separating concerns into specialized components:
+
+### Modular VM Design
+
+The VM is now split into focused modules:
+
+- **Stack (stack.rs)**: Manages the execution stack, providing push/pop operations and stack manipulation.
+- **Memory (memory.rs)**: Handles variable storage, function definitions, and scope management.
+- **Execution (execution.rs)**: Implements operation execution logic, including storage interactions.
+- **Types (types.rs)**: Defines core data structures like operations, call frames, and events.
+- **Errors (errors.rs)**: Centralizes error handling for all VM operations.
+- **VM (vm.rs)**: Coordinates the components, providing the main execution loop and API.
+
+This modular design provides several benefits:
+
+1. **Separation of Concerns**: Each component focuses on a specific responsibility
+2. **Testability**: Components can be tested independently
+3. **Extensibility**: New features can be added with minimal impact on other components
+4. **Maintainability**: Code organization follows logical boundaries
+5. **Performance Optimization**: Components can be optimized independently
+
+The VM can execute operations either by directly interpreting the Abstract Syntax Tree (AST) or by first compiling to bytecode for improved performance.
 

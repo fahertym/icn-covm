@@ -1,12 +1,85 @@
 //! VM Memory and scope management
 //! 
 //! This module provides memory operations and scope management for the VM.
+//!
+//! The memory system is responsible for:
+//! - Variable storage and retrieval
+//! - Function definitions and scope management
+//! - Call stack and frame management
+//! - Parameter storage and access
+//!
+//! By isolating memory management in its own module:
+//! - Variable scope rules are centralized
+//! - Function call mechanisms have clear boundaries
+//! - Memory operations can be tested independently
+//! - Future extensions (e.g., closures, advanced scoping) are easier to implement
+//! - The system is better prepared for potential memory optimization
+//!
+//! The module defines a `MemoryScope` trait that encapsulates memory operations,
+//! enabling alternative memory implementations in the future.
 
 use std::collections::HashMap;
 use std::fmt;
 
 use crate::vm::errors::VMError;
 use crate::vm::types::CallFrame;
+
+/// Defines operations for memory and scope management
+pub trait MemoryScope {
+    /// Store a value in memory
+    fn store(&mut self, name: &str, value: f64);
+    
+    /// Load a value from memory
+    fn load(&self, name: &str) -> Result<f64, VMError>;
+    
+    /// Define a function in memory
+    fn define_function(&mut self, name: &str, params: Vec<String>, body: Vec<crate::vm::types::Op>);
+    
+    /// Get a function by name
+    fn get_function(&self, name: &str) -> Result<(Vec<String>, Vec<crate::vm::types::Op>), VMError>;
+    
+    /// Push a new call frame onto the call stack
+    fn push_call_frame(&mut self, function_name: &str, params: HashMap<String, f64>) -> usize;
+    
+    /// Pop the current call frame
+    fn pop_call_frame(&mut self) -> Option<CallFrame>;
+    
+    /// Get a reference to the current call frame
+    fn current_call_frame(&self) -> Option<&CallFrame>;
+    
+    /// Get a mutable reference to the current call frame
+    fn current_call_frame_mut(&mut self) -> Option<&mut CallFrame>;
+    
+    /// Set the return value for the current call frame
+    fn set_return_value(&mut self, value: f64) -> Result<(), VMError>;
+    
+    /// Get the return value from the current call frame
+    fn get_return_value(&self) -> Option<f64>;
+    
+    /// Set runtime parameters
+    fn set_parameters(&mut self, parameters: HashMap<String, String>);
+    
+    /// Get a parameter by name
+    fn get_parameter(&self, name: &str) -> Result<String, VMError>;
+    
+    /// Get a copy of the current memory map
+    fn get_memory_map(&self) -> HashMap<String, f64>;
+    
+    /// Format the memory as a string for display
+    fn format_memory(&self) -> String;
+    
+    /// Format the call stack as a string for display
+    fn format_call_stack(&self) -> String;
+    
+    /// Clear all global memory
+    fn clear_memory(&mut self);
+    
+    /// Check if we're currently in a function call
+    fn in_function_call(&self) -> bool;
+    
+    /// Get call stack depth
+    fn call_stack_depth(&self) -> usize;
+}
 
 /// Provides memory operations for the virtual machine
 #[derive(Debug, Clone)]
@@ -38,9 +111,11 @@ impl VMMemory {
             parameters: HashMap::new(),
         }
     }
+}
 
+impl MemoryScope for VMMemory {
     /// Store a value in global memory
-    pub fn store(&mut self, name: &str, value: f64) {
+    fn store(&mut self, name: &str, value: f64) {
         // If we're in a function call frame, store in local memory
         if !self.call_frames.is_empty() {
             if let Some(frame) = self.call_frames.last_mut() {
@@ -54,7 +129,7 @@ impl VMMemory {
     }
 
     /// Load a value from memory, checking scopes from innermost to outermost
-    pub fn load(&self, name: &str) -> Result<f64, VMError> {
+    fn load(&self, name: &str) -> Result<f64, VMError> {
         // Check function parameters first (if in a function)
         if !self.call_frames.is_empty() {
             if let Some(frame) = self.call_frames.last() {
@@ -78,12 +153,12 @@ impl VMMemory {
     }
 
     /// Define a function in memory
-    pub fn define_function(&mut self, name: &str, params: Vec<String>, body: Vec<crate::vm::types::Op>) {
+    fn define_function(&mut self, name: &str, params: Vec<String>, body: Vec<crate::vm::types::Op>) {
         self.functions.insert(name.to_string(), (params, body));
     }
 
     /// Get a function by name
-    pub fn get_function(&self, name: &str) -> Result<(Vec<String>, Vec<crate::vm::types::Op>), VMError> {
+    fn get_function(&self, name: &str) -> Result<(Vec<String>, Vec<crate::vm::types::Op>), VMError> {
         self.functions
             .get(name)
             .cloned()
@@ -91,7 +166,7 @@ impl VMMemory {
     }
 
     /// Push a new call frame onto the call stack
-    pub fn push_call_frame(&mut self, function_name: &str, params: HashMap<String, f64>) -> usize {
+    fn push_call_frame(&mut self, function_name: &str, params: HashMap<String, f64>) -> usize {
         let frame = CallFrame {
             memory: HashMap::new(),
             params,
@@ -105,13 +180,13 @@ impl VMMemory {
     }
 
     /// Pop the current call frame
-    pub fn pop_call_frame(&mut self) -> Option<CallFrame> {
+    fn pop_call_frame(&mut self) -> Option<CallFrame> {
         self.call_stack.pop();
         self.call_frames.pop()
     }
 
     /// Get a reference to the current call frame
-    pub fn current_call_frame(&self) -> Option<&CallFrame> {
+    fn current_call_frame(&self) -> Option<&CallFrame> {
         if self.call_frames.is_empty() {
             None
         } else {
@@ -120,7 +195,7 @@ impl VMMemory {
     }
 
     /// Get a mutable reference to the current call frame
-    pub fn current_call_frame_mut(&mut self) -> Option<&mut CallFrame> {
+    fn current_call_frame_mut(&mut self) -> Option<&mut CallFrame> {
         if self.call_frames.is_empty() {
             None
         } else {
@@ -129,7 +204,7 @@ impl VMMemory {
     }
 
     /// Set the return value for the current call frame
-    pub fn set_return_value(&mut self, value: f64) -> Result<(), VMError> {
+    fn set_return_value(&mut self, value: f64) -> Result<(), VMError> {
         let frame = self.current_call_frame_mut()
             .ok_or_else(|| VMError::NotImplemented("Cannot return outside a function".to_string()))?;
         
@@ -138,17 +213,17 @@ impl VMMemory {
     }
 
     /// Get the return value from the current call frame
-    pub fn get_return_value(&self) -> Option<f64> {
+    fn get_return_value(&self) -> Option<f64> {
         self.current_call_frame().and_then(|frame| frame.return_value)
     }
 
     /// Set runtime parameters
-    pub fn set_parameters(&mut self, parameters: HashMap<String, String>) {
+    fn set_parameters(&mut self, parameters: HashMap<String, String>) {
         self.parameters = parameters;
     }
 
     /// Get a parameter by name
-    pub fn get_parameter(&self, name: &str) -> Result<String, VMError> {
+    fn get_parameter(&self, name: &str) -> Result<String, VMError> {
         self.parameters
             .get(name)
             .cloned()
@@ -156,12 +231,12 @@ impl VMMemory {
     }
 
     /// Get a copy of the current memory map
-    pub fn get_memory_map(&self) -> HashMap<String, f64> {
+    fn get_memory_map(&self) -> HashMap<String, f64> {
         self.memory.clone()
     }
 
     /// Format the memory as a string for display
-    pub fn format_memory(&self) -> String {
+    fn format_memory(&self) -> String {
         if self.memory.is_empty() {
             return "Memory: {}".to_string();
         }
@@ -183,7 +258,7 @@ impl VMMemory {
     }
 
     /// Format the call stack as a string for display
-    pub fn format_call_stack(&self) -> String {
+    fn format_call_stack(&self) -> String {
         if self.call_frames.is_empty() {
             return "Call Stack: []".to_string();
         }
@@ -201,17 +276,17 @@ impl VMMemory {
     }
 
     /// Clear all global memory
-    pub fn clear_memory(&mut self) {
+    fn clear_memory(&mut self) {
         self.memory.clear();
     }
 
     /// Check if we're currently in a function call
-    pub fn in_function_call(&self) -> bool {
+    fn in_function_call(&self) -> bool {
         !self.call_frames.is_empty()
     }
 
     /// Get call stack depth
-    pub fn call_stack_depth(&self) -> usize {
+    fn call_stack_depth(&self) -> usize {
         self.call_stack.len()
     }
 }

@@ -11,11 +11,18 @@
 //! The bytecode system improves performance for repeated execution by converting
 //! the nested AST representation into a flat, linear sequence of instructions.
 
+use crate::storage::auth::AuthContext;
 use crate::storage::traits::Storage;
-use crate::vm::{Op, VMError, VM};
+use crate::vm::errors::VMError;
+use crate::vm::types::{CallFrame, LoopControl, Op, VMEvent};
+use crate::vm::VM;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::marker::{Send, Sync};
+use std::time::Duration;
+// Import the traits from the re-exported modules
+use crate::vm::{StackOps, MemoryScope, ExecutorOps};
 
 /// Bytecode operations for the ICN-COVM virtual machine
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -254,6 +261,15 @@ pub enum BytecodeOp {
 
     /// No operation
     Nop,
+
+    /// Require role operation
+    RequireRole(String),
+
+    /// Minimum deliberation period operation
+    MinDeliberation(Duration),
+
+    /// Expires in operation
+    ExpiresIn(Duration),
 }
 
 /// The bytecode program with flattened instructions and a function lookup table
@@ -650,6 +666,32 @@ impl BytecodeCompiler {
                     };
                     self.program.instructions.push(BytecodeOp::Nop);
                 }
+                Op::RequireRole(role) => {
+                    self.program.instructions.push(BytecodeOp::Nop);
+                    // Not directly implemented in bytecode yet, just log as an event
+                    self.program.instructions.push(BytecodeOp::EmitEvent(
+                        "governance".to_string(),
+                        format!("Require role: {}", role),
+                    ));
+                },
+                
+                Op::MinDeliberation(duration) => {
+                    self.program.instructions.push(BytecodeOp::Nop);
+                    // Not directly implemented in bytecode yet, just log as an event
+                    self.program.instructions.push(BytecodeOp::EmitEvent(
+                        "governance".to_string(),
+                        format!("Minimum deliberation period: {:?}", duration),
+                    ));
+                },
+                
+                Op::ExpiresIn(duration) => {
+                    self.program.instructions.push(BytecodeOp::Nop);
+                    // Not directly implemented in bytecode yet, just log as an event
+                    self.program.instructions.push(BytecodeOp::EmitEvent(
+                        "governance".to_string(),
+                        format!("Expires in: {:?}", duration),
+                    ));
+                },
             }
         }
     }
@@ -902,102 +944,110 @@ impl BytecodeCompiler {
     }
 }
 
-/// Bytecode program execution context
-pub struct BytecodeExecution<S>
+/// Executes compiled bytecode programs
+pub struct BytecodeInterpreter<S>
 where
     S: Storage + Send + Sync + Clone + Debug + 'static,
 {
-    pub vm: VM<S>,
-    pub bytecode: Vec<BytecodeOp>,
-    pub pc: usize,
+    /// Program counter
+    pc: usize,
+    
+    /// The program being executed
+    program: BytecodeProgram,
+    
+    /// The VM instance for execution
+    vm: VM<S>,
 }
 
-impl<S> BytecodeExecution<S>
+impl<S> BytecodeInterpreter<S>
 where
     S: Storage + Send + Sync + Clone + Debug + 'static,
 {
-    pub fn new(vm: VM<S>, code: Vec<BytecodeOp>) -> Self {
+    /// Create a new bytecode interpreter with the given VM
+    pub fn new(vm: VM<S>, program: BytecodeProgram) -> Self {
         Self {
-            vm,
-            bytecode: code,
             pc: 0,
+            program,
+            vm,
         }
     }
 
     /// Execute the bytecode program
     pub fn execute(&mut self) -> Result<(), VMError> {
-        while self.pc < self.bytecode.len() {
-            self.step()?;
+        self.pc = 0;
+        
+        while self.pc < self.program.instructions.len() {
+            let op = &self.program.instructions[self.pc].clone();
+            self.execute_instruction(op)?;
         }
-
+        
         Ok(())
     }
 
     /// Execute a single bytecode instruction
-    pub fn step(&mut self) -> Result<(), VMError> {
-        if self.pc >= self.bytecode.len() {
-            return Ok(());
-        }
-
-        match &self.bytecode[self.pc] {
-            BytecodeOp::Push(val) => {
-                self.vm.stack.push(*val);
-                self.pc += 1;
-                Ok(())
-            }
-            BytecodeOp::Add => {
-                let b = self.vm.pop_one("Add")?;
-                let a = self.vm.pop_one("Add")?;
-                self.vm.stack.push(a + b);
-                self.pc += 1;
-                Ok(())
-            }
-            BytecodeOp::Sub => {
-                let b = self.vm.pop_one("Sub")?;
-                let a = self.vm.pop_one("Sub")?;
-                self.vm.stack.push(a - b);
-                self.pc += 1;
-                Ok(())
-            }
-            BytecodeOp::Mul => {
-                let b = self.vm.pop_one("Mul")?;
-                let a = self.vm.pop_one("Mul")?;
-                self.vm.stack.push(a * b);
-                self.pc += 1;
-                Ok(())
-            }
-            BytecodeOp::Div => {
-                let b = self.vm.pop_one("Div")?;
-                if b.abs() < f64::EPSILON {
-                    return Err(VMError::DivisionByZero);
-                }
-                let a = self.vm.pop_one("Div")?;
-                self.vm.stack.push(a / b);
+    pub fn execute_instruction(&mut self, op: &BytecodeOp) -> Result<(), VMError> {
+        match op {
+            BytecodeOp::Push(value) => {
+                self.vm.stack.push(*value);
                 self.pc += 1;
                 Ok(())
             }
             BytecodeOp::Store(name) => {
-                let value = self.vm.pop_one("Store")?;
-                self.vm.memory.insert(name.clone(), value);
+                let value = self.vm.stack.pop("Store")?;
+                self.vm.memory.store(name, value);
                 self.pc += 1;
                 Ok(())
             }
             BytecodeOp::Load(name) => {
-                let value = self
-                    .vm
-                    .memory
-                    .get(name)
-                    .cloned()
-                    .ok_or_else(|| VMError::VariableNotFound(name.clone()))?;
+                let value = self.vm.memory.load(name)?;
                 self.vm.stack.push(value);
                 self.pc += 1;
                 Ok(())
             }
-            BytecodeOp::Call(name) => {
-                // TODO: Implement function call
-                return Err(VMError::NotImplemented(
-                    "Function calls not implemented yet".to_string(),
-                ));
+            BytecodeOp::Add => {
+                let (a, b) = self.vm.stack.pop_two("Add")?;
+                let result = self.vm.executor.execute_arithmetic(a, b, "add")?;
+                self.vm.stack.push(result);
+                self.pc += 1;
+                Ok(())
+            }
+            BytecodeOp::Sub => {
+                let (a, b) = self.vm.stack.pop_two("Sub")?;
+                let result = self.vm.executor.execute_arithmetic(a, b, "sub")?;
+                self.vm.stack.push(result);
+                self.pc += 1;
+                Ok(())
+            }
+            BytecodeOp::Mul => {
+                let (a, b) = self.vm.stack.pop_two("Mul")?;
+                let result = self.vm.executor.execute_arithmetic(a, b, "mul")?;
+                self.vm.stack.push(result);
+                self.pc += 1;
+                Ok(())
+            }
+            BytecodeOp::Div => {
+                let (a, b) = self.vm.stack.pop_two("Div")?;
+                let result = self.vm.executor.execute_arithmetic(a, b, "div")?;
+                self.vm.stack.push(result);
+                self.pc += 1;
+                Ok(())
+            }
+            BytecodeOp::Emit(message) => {
+                self.vm.executor.emit(message);
+                self.pc += 1;
+                Ok(())
+            }
+            BytecodeOp::EmitEvent(category, message) => {
+                self.vm.executor.emit_event(category, message);
+                self.pc += 1;
+                Ok(())
+            }
+            BytecodeOp::Call(func_name) => {
+                // Currently not directly supported in bytecode; would need function address table
+                return Err(VMError::NotImplemented(format!(
+                    "Function call '{}' not implemented yet",
+                    func_name
+                )));
             }
             BytecodeOp::Return => {
                 // Currently unsupported in bytecode
@@ -1006,7 +1056,7 @@ where
                 ));
             }
             BytecodeOp::JumpIfZero(addr) => {
-                let val = self.vm.pop_one("JumpIfZero")?;
+                let val = self.vm.stack.pop("JumpIfZero")?;
                 if val == 0.0 {
                     self.pc = *addr;
                 } else {
@@ -1027,148 +1077,105 @@ where
                 )));
             }
             BytecodeOp::Print => {
-                let value = self.vm.pop_one("Print")?;
+                let value = self.vm.stack.pop("Print")?;
                 println!("{}", value);
                 self.pc += 1;
                 Ok(())
             }
-            BytecodeOp::Emit(message) => {
-                self.vm.output.push_str(message);
-                self.vm.output.push('\n');
-                self.pc += 1;
-                Ok(())
-            }
-            BytecodeOp::EmitEvent(category, message) => {
-                let event = crate::vm::VMEvent {
-                    category: category.clone(),
-                    message: message.clone(),
-                    timestamp: crate::storage::utils::now(),
-                };
-                self.vm.events.push(event);
-                self.pc += 1;
-                Ok(())
-            }
             BytecodeOp::Dup => {
-                let v = self.vm.pop_one("Dup")?;
-                self.vm.stack.push(v);
-                self.vm.stack.push(v);
+                self.vm.stack.dup("Dup")?;
                 self.pc += 1;
                 Ok(())
             }
             BytecodeOp::Pop => {
-                self.vm.pop_one("Pop")?;
+                self.vm.stack.pop("Pop")?;
                 self.pc += 1;
                 Ok(())
             }
             BytecodeOp::Swap => {
-                let b = self.vm.pop_one("Swap")?;
-                let a = self.vm.pop_one("Swap")?;
-                self.vm.stack.push(b);
-                self.vm.stack.push(a);
+                self.vm.stack.swap("Swap")?;
                 self.pc += 1;
                 Ok(())
             }
             BytecodeOp::Eq => {
-                let b = self.vm.pop_one("Eq")?;
-                let a = self.vm.pop_one("Eq")?;
-                self.vm.stack.push(if (a - b).abs() < f64::EPSILON {
-                    1.0
-                } else {
-                    0.0
-                });
+                let (a, b) = self.vm.stack.pop_two("Eq")?;
+                let result = self.vm.executor.execute_comparison(a, b, "eq")?;
+                self.vm.stack.push(result);
                 self.pc += 1;
                 Ok(())
             }
             BytecodeOp::Gt => {
-                let b = self.vm.pop_one("Gt")?;
-                let a = self.vm.pop_one("Gt")?;
-                self.vm.stack.push(if a > b { 1.0 } else { 0.0 });
+                let (a, b) = self.vm.stack.pop_two("Gt")?;
+                let result = self.vm.executor.execute_comparison(a, b, "gt")?;
+                self.vm.stack.push(result);
                 self.pc += 1;
                 Ok(())
             }
             BytecodeOp::Lt => {
-                let b = self.vm.pop_one("Lt")?;
-                let a = self.vm.pop_one("Lt")?;
-                self.vm.stack.push(if a < b { 1.0 } else { 0.0 });
+                let (a, b) = self.vm.stack.pop_two("Lt")?;
+                let result = self.vm.executor.execute_comparison(a, b, "lt")?;
+                self.vm.stack.push(result);
                 self.pc += 1;
                 Ok(())
             }
             BytecodeOp::Negate => {
-                let v = self.vm.pop_one("Negate")?;
-                self.vm.stack.push(-v);
+                let a = self.vm.stack.pop("Negate")?;
+                let result = self.vm.executor.execute_logical(a, "not")?;
+                self.vm.stack.push(result);
                 self.pc += 1;
                 Ok(())
             }
             BytecodeOp::And => {
-                let b = self.vm.pop_one("And")?;
-                let a = self.vm.pop_one("And")?;
-                self.vm
-                    .stack
-                    .push(if a != 0.0 && b != 0.0 { 1.0 } else { 0.0 });
+                let (a, b) = self.vm.stack.pop_two("And")?;
+                let result = self.vm.executor.execute_binary_logical(a, b, "and")?;
+                self.vm.stack.push(result);
                 self.pc += 1;
                 Ok(())
             }
             BytecodeOp::Or => {
-                let b = self.vm.pop_one("Or")?;
-                let a = self.vm.pop_one("Or")?;
-                self.vm
-                    .stack
-                    .push(if a != 0.0 || b != 0.0 { 1.0 } else { 0.0 });
+                let (a, b) = self.vm.stack.pop_two("Or")?;
+                let result = self.vm.executor.execute_binary_logical(a, b, "or")?;
+                self.vm.stack.push(result);
                 self.pc += 1;
                 Ok(())
             }
             BytecodeOp::Not => {
-                let v = self.vm.pop_one("Not")?;
-                self.vm.stack.push(if v == 0.0 { 1.0 } else { 0.0 });
+                let a = self.vm.stack.pop("Not")?;
+                let result = self.vm.executor.execute_logical(a, "not")?;
+                self.vm.stack.push(result);
                 self.pc += 1;
                 Ok(())
             }
             BytecodeOp::Mod => {
-                let b = self.vm.pop_one("Mod")?;
-                let a = self.vm.pop_one("Mod")?;
-                self.vm.stack.push(a % b);
+                let (a, b) = self.vm.stack.pop_two("Mod")?;
+                let result = self.vm.executor.execute_arithmetic(a, b, "mod")?;
+                self.vm.stack.push(result);
                 self.pc += 1;
                 Ok(())
             }
             BytecodeOp::CreateResource(resource) => {
-                self.vm.execute_create_resource(resource)?;
+                self.vm.executor.execute_create_resource(resource)?;
                 self.pc += 1;
                 Ok(())
             }
-            BytecodeOp::Mint {
-                resource,
-                account,
-                amount,
-                reason,
-            } => {
-                self.vm.execute_mint(resource, account, *amount, reason)?;
+            BytecodeOp::Mint { resource, account, amount, reason } => {
+                self.vm.executor.execute_mint(resource, account, *amount, reason)?;
                 self.pc += 1;
                 Ok(())
             }
-            BytecodeOp::Transfer {
-                resource,
-                from,
-                to,
-                amount,
-                reason,
-            } => {
-                self.vm
-                    .execute_transfer(resource, from, to, *amount, reason)?;
+            BytecodeOp::Transfer { resource, from, to, amount, reason } => {
+                self.vm.executor.execute_transfer(resource, from, to, *amount, reason)?;
                 self.pc += 1;
                 Ok(())
             }
-            BytecodeOp::Burn {
-                resource,
-                account,
-                amount,
-                reason,
-            } => {
-                self.vm.execute_burn(resource, account, *amount, reason)?;
+            BytecodeOp::Burn { resource, account, amount, reason } => {
+                self.vm.executor.execute_burn(resource, account, *amount, reason)?;
                 self.pc += 1;
                 Ok(())
             }
             BytecodeOp::Balance { resource, account } => {
-                self.vm.execute_balance(resource, account)?;
+                let balance = self.vm.executor.execute_balance(resource, account)?;
+                self.vm.stack.push(balance);
                 self.pc += 1;
                 Ok(())
             }
@@ -1179,979 +1186,67 @@ where
                 ));
             }
             BytecodeOp::StoreStorage(key) => {
-                let value = self.vm.pop_one("StoreStorage")?;
-                match &mut self.vm.storage_backend {
-                    Some(storage) => {
-                        let auth = self.vm.auth_context.as_ref();
-                        let ns = self.vm.namespace.clone();
-                        storage
-                            .set(auth, &ns, key, value.to_string().as_bytes().to_vec())
-                            .map_err(|e| VMError::StorageError(e.to_string()))?;
-                    }
-                    None => return Err(VMError::StorageUnavailable),
-                }
+                let value = self.vm.stack.pop("StoreStorage")?;
+                self.vm.executor.execute_store_p(key, value)?;
                 self.pc += 1;
                 Ok(())
             }
             BytecodeOp::LoadStorage(key) => {
-                match &mut self.vm.storage_backend {
-                    Some(storage) => {
-                        let auth = self.vm.auth_context.as_ref();
-                        let ns = self.vm.namespace.clone();
-                        let bytes = storage
-                            .get(auth, &ns, key)
-                            .map_err(|e| VMError::StorageError(e.to_string()))?;
-                        let s = String::from_utf8(bytes).map_err(|e| {
-                            VMError::StorageError(format!(
-                                "Failed to parse string from storage: {}",
-                                e
-                            ))
-                        })?;
-
-                        // Try to parse as a number
-                        match s.parse::<f64>() {
-                            Ok(val) => self.vm.stack.push(val),
-                            Err(_) => {
-                                // Put the string in output and return a memory reference
-                                self.vm.output = s;
-                                self.vm.stack.push(1.0); // Dummy value to indicate success
-                            }
-                        }
-                    }
-                    None => return Err(VMError::StorageUnavailable),
-                }
-                self.pc += 1;
-                Ok(())
-            }
-            BytecodeOp::LoadStorageVersion(key, version) => {
-                match &mut self.vm.storage_backend {
-                    Some(storage) => {
-                        let auth = self.vm.auth_context.as_ref();
-                        let ns = self.vm.namespace.clone();
-                        match storage.get_version(auth, &ns, key, *version).map_err(|e| {
-                            VMError::StorageError(format!(
-                                "Failed to get version {} of key {}: {}",
-                                version, key, e
-                            ))
-                        }) {
-                            Ok((bytes, _info)) => {
-                                let s = String::from_utf8(bytes).map_err(|e| {
-                                    VMError::StorageError(format!(
-                                        "Failed to parse string from storage: {}",
-                                        e
-                                    ))
-                                })?;
-
-                                // Try to parse as a number
-                                match s.parse::<f64>() {
-                                    Ok(val) => self.vm.stack.push(val),
-                                    Err(_) => {
-                                        // Put the string in output and return a memory reference
-                                        self.vm.output = s;
-                                        self.vm.stack.push(1.0); // Dummy value to indicate success
-                                    }
-                                }
-                            }
-                            Err(e) => return Err(e),
-                        }
-                    }
-                    None => return Err(VMError::StorageUnavailable),
-                }
-                self.pc += 1;
-                Ok(())
-            }
-            BytecodeOp::DiffStorageVersions(key, v1, v2) => {
-                match &mut self.vm.storage_backend {
-                    Some(storage) => {
-                        let auth = self.vm.auth_context.as_ref();
-                        let ns = self.vm.namespace.clone();
-                        match storage.get_version(auth, &ns, key, *v1).map_err(|e| {
-                            VMError::StorageError(format!(
-                                "Failed to get version {} of key {}: {}",
-                                v1, key, e
-                            ))
-                        }) {
-                            Ok((data1, _)) => {
-                                match storage.get_version(auth, &ns, key, *v2).map_err(|e| {
-                                    VMError::StorageError(format!(
-                                        "Failed to get version {} of key {}: {}",
-                                        v2, key, e
-                                    ))
-                                }) {
-                                    Ok((data2, _)) => {
-                                        // TODO: Implement a proper diff and return it
-                                        let str1 = String::from_utf8_lossy(&data1);
-                                        let str2 = String::from_utf8_lossy(&data2);
-
-                                        if str1 == str2 {
-                                            self.vm.stack.push(0.0); // No difference
-                                        } else {
-                                            self.vm.stack.push(1.0); // Different
-                                        }
-                                    }
-                                    Err(e) => return Err(e),
-                                }
-                            }
-                            Err(e) => return Err(e),
-                        }
-                    }
-                    None => return Err(VMError::StorageUnavailable),
-                }
-                self.pc += 1;
-                Ok(())
-            }
-            BytecodeOp::ListStorageVersions(key) => {
-                match &mut self.vm.storage_backend {
-                    Some(storage) => {
-                        let auth = self.vm.auth_context.as_ref();
-                        let ns = self.vm.namespace.clone();
-                        match storage.list_versions(auth, &ns, key).map_err(|e| {
-                            VMError::StorageError(format!(
-                                "Failed to list versions for key {}: {}",
-                                key, e
-                            ))
-                        }) {
-                            Ok(versions) => {
-                                // Create a JSON array of versions and put it in output
-                                let json = serde_json::to_string(&versions).map_err(|e| {
-                                    VMError::StorageError(format!(
-                                        "Failed to serialize versions: {}",
-                                        e
-                                    ))
-                                })?;
-
-                                self.vm.output = json;
-                                self.vm.stack.push(versions.len() as f64);
-                            }
-                            Err(e) => return Err(e),
-                        }
-                    }
-                    None => return Err(VMError::StorageUnavailable),
-                }
-                self.pc += 1;
-                Ok(())
-            }
-            BytecodeOp::Break => {
-                // TODO: Implement break
-                return Err(VMError::NotImplemented(
-                    "Break not implemented in bytecode".to_string(),
-                ));
-            }
-            BytecodeOp::Continue => {
-                // TODO: Implement continue
-                return Err(VMError::NotImplemented(
-                    "Continue not implemented in bytecode".to_string(),
-                ));
-            }
-            BytecodeOp::Assert => {
-                let val = self.vm.pop_one("Assert")?;
-                if val == 0.0 {
-                    return Err(VMError::AssertionFailed {
-                        message: "Assertion failed".to_string(),
-                    });
-                }
-                self.pc += 1;
-                Ok(())
-            }
-            BytecodeOp::AssertEq => {
-                let b = self.vm.pop_one("AssertEq")?;
-                let a = self.vm.pop_one("AssertEq")?;
-                if (a - b).abs() > f64::EPSILON {
-                    return Err(VMError::AssertionFailed {
-                        message: format!("Assertion failed: {} != {}", a, b),
-                    });
-                }
-                self.pc += 1;
-                Ok(())
-            }
-            BytecodeOp::AssertEqualStack(depth) => {
-                if self.vm.stack.len() < *depth {
-                    return Err(VMError::StackUnderflow {
-                        op_name: "AssertEqualStack".to_string(),
-                    });
-                }
-
-                let len = self.vm.stack.len();
-                let a = self.vm.stack[len - 1];
-                let b = self.vm.stack[len - *depth];
-
-                if (a - b).abs() > f64::EPSILON {
-                    return Err(VMError::AssertionFailed {
-                        message: format!("Assertion failed: Values not equal: {} != {}", a, b),
-                    });
-                }
-                self.pc += 1;
-                Ok(())
-            }
-            BytecodeOp::AssertTop(expected) => {
-                let actual = self.vm.top().ok_or_else(|| VMError::StackUnderflow {
-                    op_name: "AssertTop".to_string(),
-                })?;
-
-                if (actual - expected).abs() > f64::EPSILON {
-                    return Err(VMError::AssertionFailed {
-                        message: format!(
-                            "Assertion failed: Expected {} but found {}",
-                            expected, actual
-                        ),
-                    });
-                }
-                self.pc += 1;
-                Ok(())
-            }
-            BytecodeOp::AssertMemory(key, expected) => {
-                let actual = self
-                    .vm
-                    .memory
-                    .get(key)
-                    .cloned()
-                    .ok_or_else(|| VMError::VariableNotFound(key.clone()))?;
-
-                if (actual - *expected).abs() > f64::EPSILON {
-                    return Err(VMError::AssertionFailed {
-                        message: format!(
-                            "Assertion failed: Expected {} but found {} in memory at key {}",
-                            expected, actual, key
-                        ),
-                    });
-                }
-                self.pc += 1;
-                Ok(())
-            }
-            BytecodeOp::LiquidDelegate(from, to) => {
-                // TODO: Implement liquid democracy delegation
-                return Err(VMError::NotImplemented(
-                    "Liquid democracy delegation not implemented yet".to_string(),
-                ));
-            }
-            BytecodeOp::VoteThreshold(threshold) => {
-                // TODO: Implement vote threshold
-                return Err(VMError::NotImplemented(
-                    "Vote threshold not implemented yet".to_string(),
-                ));
-            }
-            BytecodeOp::QuorumThreshold(threshold) => {
-                // TODO: Implement quorum threshold
-                return Err(VMError::NotImplemented(
-                    "Quorum threshold not implemented yet".to_string(),
-                ));
-            }
-            BytecodeOp::RankedVote(candidates, ballots) => {
-                // TODO: Implement ranked voting
-                return Err(VMError::NotImplemented(
-                    "Ranked voting not implemented yet".to_string(),
-                ));
-            }
-            BytecodeOp::RequireIdentity(identity) => {
-                // TODO: Implement identity requirement
-                return Err(VMError::NotImplemented(
-                    "Require identity not implemented yet".to_string(),
-                ));
-            }
-            BytecodeOp::StoreP(key) => {
-                let value = self.vm.pop_one("StoreP")?;
-                match &mut self.vm.storage_backend {
-                    Some(storage) => {
-                        let auth = self.vm.auth_context.as_ref();
-                        let ns = self.vm.namespace.clone();
-                        storage
-                            .set(auth, &ns, key, value.to_string().as_bytes().to_vec())
-                            .map_err(|e| VMError::StorageError(e.to_string()))?;
-                    }
-                    None => return Err(VMError::StorageUnavailable),
-                }
-                self.pc += 1;
-                Ok(())
-            }
-            BytecodeOp::LoadP(key) => {
-                match &mut self.vm.storage_backend {
-                    Some(storage) => {
-                        let auth = self.vm.auth_context.as_ref();
-                        let ns = self.vm.namespace.clone();
-                        let bytes = storage
-                            .get(auth, &ns, key)
-                            .map_err(|e| VMError::StorageError(e.to_string()))?;
-                        let s = String::from_utf8(bytes).map_err(|e| {
-                            VMError::StorageError(format!(
-                                "Failed to parse string from storage: {}",
-                                e
-                            ))
-                        })?;
-
-                        // Try to parse as a number
-                        match s.parse::<f64>() {
-                            Ok(val) => self.vm.stack.push(val),
-                            Err(_) => {
-                                // Put the string in output and return a memory reference
-                                self.vm.output = s;
-                                self.vm.stack.push(1.0); // Dummy value to indicate success
-                            }
-                        }
-                    }
-                    None => return Err(VMError::StorageUnavailable),
-                }
-                self.pc += 1;
-                Ok(())
-            }
-            BytecodeOp::LoadParam(name) => {
-                // Parameters are no longer supported in the new VM implementation
-                return Err(VMError::NotImplemented(format!(
-                    "LoadParam('{}') is not implemented (vm.params field removed)",
-                    name
-                )));
-            }
-            BytecodeOp::GetIdentity(_identity_id) => {
-                // Return NotImplemented error for now
-                Err(VMError::NotImplemented(
-                    "GetIdentity operation not implemented yet".to_string(),
-                ))
-            }
-            BytecodeOp::RequireValidSignature {
-                voter,
-                message,
-                signature,
-            } => {
-                // Return NotImplemented error for now
-                Err(VMError::NotImplemented(
-                    "RequireValidSignature operation not implemented yet".to_string(),
-                ))
-            }
-            BytecodeOp::IncrementReputation {
-                identity_id,
-                amount,
-                reason,
-            } => {
-                self.vm
-                    .execute_increment_reputation(identity_id, amount.clone())?;
-                self.pc += 1;
-                Ok(())
-            }
-            BytecodeOp::IfPassed(block) => {
-                // Check if the proposal has passed (condition is 0.0)
-                let condition = self.vm.pop_one("IfPassed condition")?;
-                if condition == 0.0 {
-                    // Clone the block operations to avoid borrow checker issues
-                    let block_ops = block.clone();
-                    // Execute each operation in the block
-                    for op in block_ops {
-                        self.execute_op(&op)?;
-                    }
-                }
-                self.pc += 1;
-                Ok(())
-            }
-            BytecodeOp::Else(block) => {
-                // Check if the proposal has failed (condition is 0.0)
-                let condition = self.vm.pop_one("Else condition")?;
-                if condition == 0.0 {
-                    // Clone the block operations to avoid borrow checker issues
-                    let block_ops = block.clone();
-                    // Execute each operation in the block
-                    for op in block_ops {
-                        self.execute_op(&op)?;
-                    }
-                }
-                self.pc += 1;
-                Ok(())
-            }
-            BytecodeOp::Macro(name) => {
-                // This is handled in the step method
+                let value = self.vm.executor.execute_load_p(key)?;
+                self.vm.stack.push(value);
                 self.pc += 1;
                 Ok(())
             }
             BytecodeOp::Nop => {
-                self.pc += 1;
+                // No operation, do nothing
                 Ok(())
+            }
+            BytecodeOp::RequireRole(role) => {
+                // Check if the current user has the required role
+                if let Some(auth) = self.vm.get_auth_context() {
+                    if !auth.has_role("global", &role) && !auth.has_role(&self.vm.executor.namespace, &role) {
+                        return Err(VMError::PermissionDenied {
+                            user_id: auth.user_id().to_string(),
+                            action: "require_role".to_string(),
+                            key: role.clone(),
+                        });
+                    }
+                } else {
+                    return Err(VMError::IdentityContextUnavailable);
+                }
+                Ok(())
+            }
+            BytecodeOp::MinDeliberation(duration) => {
+                // This is a governance parameter that just needs to be recorded
+                self.vm.executor.emit_event(
+                    "governance",
+                    &format!("Minimum deliberation period: {:?}", duration),
+                );
+                Ok(())
+            }
+            BytecodeOp::ExpiresIn(duration) => {
+                // This is a governance parameter that just needs to be recorded
+                self.vm.executor.emit_event(
+                    "governance",
+                    &format!("Expires in: {:?}", duration),
+                );
+                Ok(())
+            }
+            _ => {
+                return Err(VMError::NotImplemented(format!(
+                    "Operation not implemented in bytecode: {:?}", op
+                )));
             }
         }
     }
 
-    /// Execute a single bytecode operation
-    fn execute_op(&mut self, op: &BytecodeOp) -> Result<(), VMError> {
-        match op {
-            BytecodeOp::Push(val) => {
-                self.vm.stack.push(*val);
-                Ok(())
-            }
-            BytecodeOp::Add => {
-                let b = self.vm.pop_one("Add")?;
-                let a = self.vm.pop_one("Add")?;
-                self.vm.stack.push(a + b);
-                Ok(())
-            }
-            BytecodeOp::Sub => {
-                let b = self.vm.pop_one("Sub")?;
-                let a = self.vm.pop_one("Sub")?;
-                self.vm.stack.push(a - b);
-                Ok(())
-            }
-            BytecodeOp::Mul => {
-                let b = self.vm.pop_one("Mul")?;
-                let a = self.vm.pop_one("Mul")?;
-                self.vm.stack.push(a * b);
-                Ok(())
-            }
-            BytecodeOp::Div => {
-                let b = self.vm.pop_one("Div")?;
-                if b.abs() < f64::EPSILON {
-                    return Err(VMError::DivisionByZero);
-                }
-                let a = self.vm.pop_one("Div")?;
-                self.vm.stack.push(a / b);
-                Ok(())
-            }
-            BytecodeOp::Store(name) => {
-                let value = self.vm.pop_one("Store")?;
-                self.vm.memory.insert(name.clone(), value);
-                Ok(())
-            }
-            BytecodeOp::Load(name) => {
-                let value = self
-                    .vm
-                    .memory
-                    .get(name)
-                    .cloned()
-                    .ok_or_else(|| VMError::VariableNotFound(name.clone()))?;
-                self.vm.stack.push(value);
-                Ok(())
-            }
-            BytecodeOp::Call(name) => {
-                // TODO: Implement function call
-                return Err(VMError::NotImplemented(
-                    "Function calls not implemented yet".to_string(),
-                ));
-            }
-            BytecodeOp::Return => {
-                // Currently unsupported in bytecode
-                return Err(VMError::NotImplemented(
-                    "Return not implemented yet".to_string(),
-                ));
-            }
-            BytecodeOp::JumpIfZero(addr) => {
-                let val = self.vm.pop_one("JumpIfZero")?;
-                if val == 0.0 {
-                    self.pc = *addr;
-                }
-                Ok(())
-            }
-            BytecodeOp::Jump(addr) => {
-                self.pc = *addr;
-                Ok(())
-            }
-            BytecodeOp::FunctionEntry(name, _params) => {
-                // Skip for now - we should never jump into the middle of a function
-                // TODO: Create a function table for bytecode
-                return Err(VMError::NotImplemented(format!(
-                    "Function entry '{}' not implemented yet",
-                    name
-                )));
-            }
-            BytecodeOp::Print => {
-                let value = self.vm.pop_one("Print")?;
-                println!("{}", value);
-                Ok(())
-            }
-            BytecodeOp::Emit(message) => {
-                self.vm.output.push_str(message);
-                self.vm.output.push('\n');
-                Ok(())
-            }
-            BytecodeOp::EmitEvent(category, message) => {
-                let event = crate::vm::VMEvent {
-                    category: category.clone(),
-                    message: message.clone(),
-                    timestamp: crate::storage::utils::now(),
-                };
-                self.vm.events.push(event);
-                Ok(())
-            }
-            BytecodeOp::Dup => {
-                let v = self.vm.pop_one("Dup")?;
-                self.vm.stack.push(v);
-                self.vm.stack.push(v);
-                Ok(())
-            }
-            BytecodeOp::Pop => {
-                self.vm.pop_one("Pop")?;
-                Ok(())
-            }
-            BytecodeOp::Swap => {
-                let b = self.vm.pop_one("Swap")?;
-                let a = self.vm.pop_one("Swap")?;
-                self.vm.stack.push(b);
-                self.vm.stack.push(a);
-                Ok(())
-            }
-            BytecodeOp::Eq => {
-                let b = self.vm.pop_one("Eq")?;
-                let a = self.vm.pop_one("Eq")?;
-                self.vm.stack.push(if (a - b).abs() < f64::EPSILON {
-                    1.0
-                } else {
-                    0.0
-                });
-                Ok(())
-            }
-            BytecodeOp::Gt => {
-                let b = self.vm.pop_one("Gt")?;
-                let a = self.vm.pop_one("Gt")?;
-                self.vm.stack.push(if a > b { 1.0 } else { 0.0 });
-                Ok(())
-            }
-            BytecodeOp::Lt => {
-                let b = self.vm.pop_one("Lt")?;
-                let a = self.vm.pop_one("Lt")?;
-                self.vm.stack.push(if a < b { 1.0 } else { 0.0 });
-                Ok(())
-            }
-            BytecodeOp::Negate => {
-                let v = self.vm.pop_one("Negate")?;
-                self.vm.stack.push(-v);
-                Ok(())
-            }
-            BytecodeOp::And => {
-                let b = self.vm.pop_one("And")?;
-                let a = self.vm.pop_one("And")?;
-                self.vm
-                    .stack
-                    .push(if a != 0.0 && b != 0.0 { 1.0 } else { 0.0 });
-                Ok(())
-            }
-            BytecodeOp::Or => {
-                let b = self.vm.pop_one("Or")?;
-                let a = self.vm.pop_one("Or")?;
-                self.vm
-                    .stack
-                    .push(if a != 0.0 || b != 0.0 { 1.0 } else { 0.0 });
-                Ok(())
-            }
-            BytecodeOp::Not => {
-                let v = self.vm.pop_one("Not")?;
-                self.vm.stack.push(if v == 0.0 { 1.0 } else { 0.0 });
-                Ok(())
-            }
-            BytecodeOp::Mod => {
-                let b = self.vm.pop_one("Mod")?;
-                let a = self.vm.pop_one("Mod")?;
-                self.vm.stack.push(a % b);
-                Ok(())
-            }
-            BytecodeOp::CreateResource(resource) => {
-                self.vm.execute_create_resource(resource)?;
-                Ok(())
-            }
-            BytecodeOp::Mint {
-                resource,
-                account,
-                amount,
-                reason,
-            } => {
-                self.vm.execute_mint(resource, account, *amount, reason)?;
-                Ok(())
-            }
-            BytecodeOp::Transfer {
-                resource,
-                from,
-                to,
-                amount,
-                reason,
-            } => {
-                self.vm
-                    .execute_transfer(resource, from, to, *amount, reason)?;
-                Ok(())
-            }
-            BytecodeOp::Burn {
-                resource,
-                account,
-                amount,
-                reason,
-            } => {
-                self.vm.execute_burn(resource, account, *amount, reason)?;
-                Ok(())
-            }
-            BytecodeOp::Balance { resource, account } => {
-                self.vm.execute_balance(resource, account)?;
-                Ok(())
-            }
-            BytecodeOp::VerifySignature => {
-                // VerifySignature is not implemented in the current VM implementation
-                return Err(VMError::NotImplemented(
-                    "VerifySignature not implemented".to_string(),
-                ));
-            }
-            BytecodeOp::StoreStorage(key) => {
-                let value = self.vm.pop_one("StoreStorage")?;
-                match &mut self.vm.storage_backend {
-                    Some(storage) => {
-                        let auth = self.vm.auth_context.as_ref();
-                        let ns = self.vm.namespace.clone();
-                        storage
-                            .set(auth, &ns, key, value.to_string().as_bytes().to_vec())
-                            .map_err(|e| VMError::StorageError(e.to_string()))?;
-                    }
-                    None => return Err(VMError::StorageUnavailable),
-                }
-                Ok(())
-            }
-            BytecodeOp::LoadStorage(key) => {
-                match &mut self.vm.storage_backend {
-                    Some(storage) => {
-                        let auth = self.vm.auth_context.as_ref();
-                        let ns = self.vm.namespace.clone();
-                        let bytes = storage
-                            .get(auth, &ns, key)
-                            .map_err(|e| VMError::StorageError(e.to_string()))?;
-                        let s = String::from_utf8(bytes).map_err(|e| {
-                            VMError::StorageError(format!(
-                                "Failed to parse string from storage: {}",
-                                e
-                            ))
-                        })?;
+    /// Get the current VM
+    pub fn get_vm(&self) -> &VM<S> {
+        &self.vm
+    }
 
-                        // Try to parse as a number
-                        match s.parse::<f64>() {
-                            Ok(val) => self.vm.stack.push(val),
-                            Err(_) => {
-                                // Put the string in output and return a memory reference
-                                self.vm.output = s;
-                                self.vm.stack.push(1.0); // Dummy value to indicate success
-                            }
-                        }
-                    }
-                    None => return Err(VMError::StorageUnavailable),
-                }
-                Ok(())
-            }
-            BytecodeOp::LoadStorageVersion(key, version) => {
-                match &mut self.vm.storage_backend {
-                    Some(storage) => {
-                        let auth = self.vm.auth_context.as_ref();
-                        let ns = self.vm.namespace.clone();
-                        match storage.get_version(auth, &ns, key, *version).map_err(|e| {
-                            VMError::StorageError(format!(
-                                "Failed to get version {} of key {}: {}",
-                                version, key, e
-                            ))
-                        }) {
-                            Ok((bytes, _info)) => {
-                                let s = String::from_utf8(bytes).map_err(|e| {
-                                    VMError::StorageError(format!(
-                                        "Failed to parse string from storage: {}",
-                                        e
-                                    ))
-                                })?;
-
-                                // Try to parse as a number
-                                match s.parse::<f64>() {
-                                    Ok(val) => self.vm.stack.push(val),
-                                    Err(_) => {
-                                        // Put the string in output and return a memory reference
-                                        self.vm.output = s;
-                                        self.vm.stack.push(1.0); // Dummy value to indicate success
-                                    }
-                                }
-                            }
-                            Err(e) => return Err(e),
-                        }
-                    }
-                    None => return Err(VMError::StorageUnavailable),
-                }
-                Ok(())
-            }
-            BytecodeOp::DiffStorageVersions(key, v1, v2) => {
-                match &mut self.vm.storage_backend {
-                    Some(storage) => {
-                        let auth = self.vm.auth_context.as_ref();
-                        let ns = self.vm.namespace.clone();
-                        match storage.get_version(auth, &ns, key, *v1).map_err(|e| {
-                            VMError::StorageError(format!(
-                                "Failed to get version {} of key {}: {}",
-                                v1, key, e
-                            ))
-                        }) {
-                            Ok((data1, _)) => {
-                                match storage.get_version(auth, &ns, key, *v2).map_err(|e| {
-                                    VMError::StorageError(format!(
-                                        "Failed to get version {} of key {}: {}",
-                                        v2, key, e
-                                    ))
-                                }) {
-                                    Ok((data2, _)) => {
-                                        // TODO: Implement a proper diff and return it
-                                        let str1 = String::from_utf8_lossy(&data1);
-                                        let str2 = String::from_utf8_lossy(&data2);
-
-                                        if str1 == str2 {
-                                            self.vm.stack.push(0.0); // No difference
-                                        } else {
-                                            self.vm.stack.push(1.0); // Different
-                                        }
-                                    }
-                                    Err(e) => return Err(e),
-                                }
-                            }
-                            Err(e) => return Err(e),
-                        }
-                    }
-                    None => return Err(VMError::StorageUnavailable),
-                }
-                Ok(())
-            }
-            BytecodeOp::ListStorageVersions(key) => {
-                match &mut self.vm.storage_backend {
-                    Some(storage) => {
-                        let auth = self.vm.auth_context.as_ref();
-                        let ns = self.vm.namespace.clone();
-                        match storage.list_versions(auth, &ns, key).map_err(|e| {
-                            VMError::StorageError(format!(
-                                "Failed to list versions for key {}: {}",
-                                key, e
-                            ))
-                        }) {
-                            Ok(versions) => {
-                                // Create a JSON array of versions and put it in output
-                                let json = serde_json::to_string(&versions).map_err(|e| {
-                                    VMError::StorageError(format!(
-                                        "Failed to serialize versions: {}",
-                                        e
-                                    ))
-                                })?;
-
-                                self.vm.output = json;
-                                self.vm.stack.push(versions.len() as f64);
-                            }
-                            Err(e) => return Err(e),
-                        }
-                    }
-                    None => return Err(VMError::StorageUnavailable),
-                }
-                Ok(())
-            }
-            BytecodeOp::Break => {
-                // TODO: Implement break
-                return Err(VMError::NotImplemented(
-                    "Break not implemented in bytecode".to_string(),
-                ));
-            }
-            BytecodeOp::Continue => {
-                // TODO: Implement continue
-                return Err(VMError::NotImplemented(
-                    "Continue not implemented in bytecode".to_string(),
-                ));
-            }
-            BytecodeOp::Assert => {
-                let val = self.vm.pop_one("Assert")?;
-                if val == 0.0 {
-                    return Err(VMError::AssertionFailed {
-                        message: "Assertion failed".to_string(),
-                    });
-                }
-                Ok(())
-            }
-            BytecodeOp::AssertEq => {
-                let b = self.vm.pop_one("AssertEq")?;
-                let a = self.vm.pop_one("AssertEq")?;
-                if (a - b).abs() > f64::EPSILON {
-                    return Err(VMError::AssertionFailed {
-                        message: format!("Assertion failed: {} != {}", a, b),
-                    });
-                }
-                Ok(())
-            }
-            BytecodeOp::AssertEqualStack(depth) => {
-                if self.vm.stack.len() < *depth {
-                    return Err(VMError::StackUnderflow {
-                        op_name: "AssertEqualStack".to_string(),
-                    });
-                }
-
-                let len = self.vm.stack.len();
-                let a = self.vm.stack[len - 1];
-                let b = self.vm.stack[len - *depth];
-
-                if (a - b).abs() > f64::EPSILON {
-                    return Err(VMError::AssertionFailed {
-                        message: format!("Assertion failed: Values not equal: {} != {}", a, b),
-                    });
-                }
-                Ok(())
-            }
-            BytecodeOp::AssertTop(expected) => {
-                let actual = self.vm.top().ok_or_else(|| VMError::StackUnderflow {
-                    op_name: "AssertTop".to_string(),
-                })?;
-
-                if (actual - expected).abs() > f64::EPSILON {
-                    return Err(VMError::AssertionFailed {
-                        message: format!(
-                            "Assertion failed: Expected {} but found {}",
-                            expected, actual
-                        ),
-                    });
-                }
-                Ok(())
-            }
-            BytecodeOp::AssertMemory(key, expected) => {
-                let actual = self
-                    .vm
-                    .memory
-                    .get(key)
-                    .cloned()
-                    .ok_or_else(|| VMError::VariableNotFound(key.clone()))?;
-
-                if (actual - *expected).abs() > f64::EPSILON {
-                    return Err(VMError::AssertionFailed {
-                        message: format!(
-                            "Assertion failed: Expected {} but found {} in memory at key {}",
-                            expected, actual, key
-                        ),
-                    });
-                }
-                Ok(())
-            }
-            BytecodeOp::LiquidDelegate(from, to) => {
-                // TODO: Implement liquid democracy delegation
-                return Err(VMError::NotImplemented(
-                    "Liquid democracy delegation not implemented yet".to_string(),
-                ));
-            }
-            BytecodeOp::VoteThreshold(threshold) => {
-                // TODO: Implement vote threshold
-                return Err(VMError::NotImplemented(
-                    "Vote threshold not implemented yet".to_string(),
-                ));
-            }
-            BytecodeOp::QuorumThreshold(threshold) => {
-                // TODO: Implement quorum threshold
-                return Err(VMError::NotImplemented(
-                    "Quorum threshold not implemented yet".to_string(),
-                ));
-            }
-            BytecodeOp::RankedVote(candidates, ballots) => {
-                // TODO: Implement ranked voting
-                return Err(VMError::NotImplemented(
-                    "Ranked voting not implemented yet".to_string(),
-                ));
-            }
-            BytecodeOp::RequireIdentity(identity) => {
-                // TODO: Implement identity requirement
-                return Err(VMError::NotImplemented(
-                    "Require identity not implemented yet".to_string(),
-                ));
-            }
-            BytecodeOp::StoreP(key) => {
-                let value = self.vm.pop_one("StoreP")?;
-                match &mut self.vm.storage_backend {
-                    Some(storage) => {
-                        let auth = self.vm.auth_context.as_ref();
-                        let ns = self.vm.namespace.clone();
-                        storage
-                            .set(auth, &ns, key, value.to_string().as_bytes().to_vec())
-                            .map_err(|e| VMError::StorageError(e.to_string()))?;
-                    }
-                    None => return Err(VMError::StorageUnavailable),
-                }
-                Ok(())
-            }
-            BytecodeOp::LoadP(key) => {
-                match &mut self.vm.storage_backend {
-                    Some(storage) => {
-                        let auth = self.vm.auth_context.as_ref();
-                        let ns = self.vm.namespace.clone();
-                        let bytes = storage
-                            .get(auth, &ns, key)
-                            .map_err(|e| VMError::StorageError(e.to_string()))?;
-                        let s = String::from_utf8(bytes).map_err(|e| {
-                            VMError::StorageError(format!(
-                                "Failed to parse string from storage: {}",
-                                e
-                            ))
-                        })?;
-
-                        // Try to parse as a number
-                        match s.parse::<f64>() {
-                            Ok(val) => self.vm.stack.push(val),
-                            Err(_) => {
-                                // Put the string in output and return a memory reference
-                                self.vm.output = s;
-                                self.vm.stack.push(1.0); // Dummy value to indicate success
-                            }
-                        }
-                    }
-                    None => return Err(VMError::StorageUnavailable),
-                }
-                Ok(())
-            }
-            BytecodeOp::LoadParam(name) => {
-                // Parameters are no longer supported in the new VM implementation
-                return Err(VMError::NotImplemented(format!(
-                    "LoadParam('{}') is not implemented (vm.params field removed)",
-                    name
-                )));
-            }
-            BytecodeOp::GetIdentity(_identity_id) => {
-                // Return NotImplemented error for now
-                Err(VMError::NotImplemented(
-                    "GetIdentity operation not implemented yet".to_string(),
-                ))
-            }
-            BytecodeOp::RequireValidSignature {
-                voter,
-                message,
-                signature,
-            } => {
-                // Return NotImplemented error for now
-                Err(VMError::NotImplemented(
-                    "RequireValidSignature operation not implemented yet".to_string(),
-                ))
-            }
-            BytecodeOp::IncrementReputation {
-                identity_id,
-                amount,
-                reason,
-            } => {
-                self.vm
-                    .execute_increment_reputation(identity_id, amount.clone())?;
-                self.pc += 1;
-                Ok(())
-            }
-            BytecodeOp::IfPassed(block) => {
-                // Check if the proposal has passed (condition is 0.0)
-                let condition = self.vm.pop_one("IfPassed condition")?;
-                if condition == 0.0 {
-                    // Clone the block operations to avoid borrow checker issues
-                    let block_ops = block.clone();
-                    // Execute each operation in the block
-                    for op in block_ops {
-                        self.execute_op(&op)?;
-                    }
-                }
-                self.pc += 1;
-                Ok(())
-            }
-            BytecodeOp::Else(block) => {
-                // Check if the proposal has failed (condition is 0.0)
-                let condition = self.vm.pop_one("Else condition")?;
-                if condition == 0.0 {
-                    // Clone the block operations to avoid borrow checker issues
-                    let block_ops = block.clone();
-                    // Execute each operation in the block
-                    for op in block_ops {
-                        self.execute_op(&op)?;
-                    }
-                }
-                self.pc += 1;
-                Ok(())
-            }
-            BytecodeOp::Macro(name) => {
-                // This is handled in the step method
-                self.pc += 1;
-                Ok(())
-            }
-            BytecodeOp::Nop => {
-                self.pc += 1;
-                Ok(())
-            }
-        }
+    /// Get a mutable reference to the current VM
+    pub fn get_vm_mut(&mut self) -> &mut VM<S> {
+        &mut self.vm
     }
 }

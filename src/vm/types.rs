@@ -2,6 +2,19 @@
 //!
 //! This module contains the core data types used by the VM, including operations,
 //! call frames, loop control, and events.
+//!
+//! Centralizing type definitions in this module:
+//! - Establishes a single source of truth for VM data structures
+//! - Prevents circular dependencies between modules
+//! - Facilitates serialization and deserialization
+//! - Makes the type system more maintainable
+//! - Provides a clear boundary for extending VM functionality with new operations
+//!
+//! The primary types defined here include:
+//! - `Op`: The main operation enum that defines all VM instructions
+//! - `CallFrame`: Function call scope management
+//! - `LoopControl`: Loop control flow signals
+//! - `VMEvent`: Event structure for tracking VM activity
 
 use chrono::Duration;
 use serde::{Deserialize, Serialize};

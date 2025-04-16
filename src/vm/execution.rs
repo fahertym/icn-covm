@@ -1,6 +1,23 @@
 //! VM Operation execution logic
 //! 
 //! This module provides the execution logic for VM operations.
+//!
+//! The execution module handles:
+//! - Storage backend interactions
+//! - Authentication and authorization
+//! - Operation execution semantics
+//! - Event generation and tracking
+//! - Transaction management
+//!
+//! Separating execution logic provides:
+//! - Clear boundaries for operation implementations
+//! - Isolation of storage interaction complexity
+//! - Focused testing of execution behaviors
+//! - Potential for alternative execution strategies
+//! - Easier implementation of new operation types
+//!
+//! The module defines an `ExecutorOps` trait that encapsulates operation execution,
+//! enabling alternative implementations for different execution models.
 
 use crate::storage::auth::AuthContext;
 use crate::storage::errors::{StorageError, StorageResult};
@@ -11,6 +28,107 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::marker::{Send, Sync};
 
+/// Defines operations for VM execution logic
+pub trait ExecutorOps<S>
+where
+    S: Storage + Send + Sync + Clone + Debug + 'static,
+{
+    /// Set the storage backend
+    fn set_storage_backend(&mut self, backend: S);
+    
+    /// Set the authentication context
+    fn set_auth_context(&mut self, auth: AuthContext);
+    
+    /// Set the namespace
+    fn set_namespace(&mut self, namespace: &str);
+    
+    /// Get the authentication context
+    fn get_auth_context(&self) -> Option<&AuthContext>;
+    
+    /// Execute a resource creation operation
+    fn execute_create_resource(&mut self, resource: &str) -> Result<(), VMError>;
+    
+    /// Execute a minting operation
+    fn execute_mint(
+        &mut self,
+        resource: &str,
+        account: &str,
+        amount: f64,
+        reason: &Option<String>,
+    ) -> Result<(), VMError>;
+    
+    /// Execute a transfer operation
+    fn execute_transfer(
+        &mut self,
+        resource: &str,
+        from: &str,
+        to: &str,
+        amount: f64,
+        reason: &Option<String>,
+    ) -> Result<(), VMError>;
+    
+    /// Execute a burn operation
+    fn execute_burn(
+        &mut self,
+        resource: &str,
+        account: &str,
+        amount: f64,
+        reason: &Option<String>,
+    ) -> Result<(), VMError>;
+    
+    /// Execute a balance query operation
+    fn execute_balance(&mut self, resource: &str, account: &str) -> Result<f64, VMError>;
+    
+    /// Execute increment reputation for an identity
+    fn execute_increment_reputation(
+        &mut self,
+        identity_id: &str,
+        amount: Option<f64>,
+    ) -> Result<(), VMError>;
+    
+    /// Execute a storage operation with the given key/value
+    fn execute_store_p(&mut self, key: &str, value: f64) -> Result<(), VMError>;
+    
+    /// Load a value from storage
+    fn execute_load_p(&mut self, key: &str) -> Result<f64, VMError>;
+    
+    /// Fork the VM for transaction support
+    fn fork(&mut self) -> Result<Self, VMError> where Self: Sized;
+    
+    /// Commit a transaction from a forked VM
+    fn commit_fork_transaction(&mut self) -> Result<(), VMError>;
+    
+    /// Rollback a transaction from a forked VM
+    fn rollback_fork_transaction(&mut self) -> Result<(), VMError>;
+    
+    /// Emit a message to the output
+    fn emit(&mut self, message: &str);
+    
+    /// Emit an event with the given category and message
+    fn emit_event(&mut self, category: &str, message: &str);
+    
+    /// Get the current output buffer
+    fn get_output(&self) -> &str;
+    
+    /// Get the events as a vector
+    fn get_events(&self) -> &[VMEvent];
+    
+    /// Clear the output buffer
+    fn clear_output(&mut self);
+    
+    /// Execute arithmetic operations
+    fn execute_arithmetic(&self, a: f64, b: f64, op: &str) -> Result<f64, VMError>;
+    
+    /// Execute comparison operations
+    fn execute_comparison(&self, a: f64, b: f64, op: &str) -> Result<f64, VMError>;
+    
+    /// Execute logical operations
+    fn execute_logical(&self, a: f64, op: &str) -> Result<f64, VMError>;
+    
+    /// Execute binary logical operations
+    fn execute_binary_logical(&self, a: f64, b: f64, op: &str) -> Result<f64, VMError>;
+}
+
 /// Provides execution logic for the virtual machine operations
 #[derive(Debug)]
 pub struct VMExecution<S>
@@ -18,22 +136,22 @@ where
     S: Storage + Send + Sync + Clone + Debug + 'static,
 {
     /// Storage backend for persistent operations
-    storage_backend: Option<S>,
+    pub(crate) storage_backend: Option<S>,
 
     /// Authentication context for the current execution
-    auth_context: Option<AuthContext>,
+    pub(crate) auth_context: Option<AuthContext>,
 
     /// Storage namespace for current execution
-    namespace: String,
+    pub(crate) namespace: String,
 
     /// Output buffer
-    output: String,
+    pub(crate) output: String,
 
     /// Event log
-    events: Vec<VMEvent>,
+    pub(crate) events: Vec<VMEvent>,
 
     /// Transaction state tracking
-    transaction_active: bool,
+    pub(crate) transaction_active: bool,
 }
 
 impl<S> VMExecution<S>
@@ -52,52 +170,26 @@ where
         }
     }
 
-    /// Set the storage backend
-    pub fn set_storage_backend(&mut self, backend: S) {
-        self.storage_backend = Some(backend);
-    }
-
-    /// Set the authentication context
-    pub fn set_auth_context(&mut self, auth: AuthContext) {
-        self.auth_context = Some(auth);
-    }
-
-    /// Set the namespace
-    pub fn set_namespace(&mut self, namespace: &str) {
-        self.namespace = namespace.to_string();
-    }
-
-    /// Get the authentication context
-    pub fn get_auth_context(&self) -> Option<&AuthContext> {
-        self.auth_context.as_ref()
-    }
-
     /// Execute a storage operation with proper error handling
-    pub fn storage_operation<F, T>(&mut self, operation_name: &str, mut f: F) -> Result<T, VMError>
+    pub(crate) fn storage_operation<F, T>(&mut self, operation_name: &str, mut f: F) -> Result<T, VMError>
     where
-        F: FnMut(&mut S, Option<&AuthContext>, &str) -> StorageResult<(T, Option<VMEvent>)>,
+        F: FnMut(&mut S, Option<&AuthContext>, &str) -> StorageResult<T>,
     {
-        let result = match &mut self.storage_backend {
+        match &mut self.storage_backend {
             Some(backend) => {
                 let auth_context = self.auth_context.as_ref();
                 match f(backend, auth_context, &self.namespace) {
-                    Ok((value, maybe_event)) => {
-                        // If the operation generated an event, log it
-                        if let Some(event) = maybe_event {
-                            self.events.push(event);
-                        }
-                        Ok(value)
-                    }
+                    Ok(value) => Ok(value),
                     Err(err) => Err(match err {
-                        StorageError::AuthError(msg) => VMError::InvalidSignature {
+                        StorageError::AuthenticationError { details } => VMError::InvalidSignature {
                             identity_id: "unknown".to_string(),
-                            reason: msg,
+                            reason: details,
                         },
-                        StorageError::PermissionDenied(msg) => VMError::StorageError(format!(
-                            "Permission denied during {}: {}",
-                            operation_name, msg
+                        StorageError::PermissionDenied { user_id, action, key } => VMError::StorageError(format!(
+                            "Permission denied for user '{}' during {}: operation '{}' on '{}'",
+                            user_id, operation_name, action, key
                         )),
-                        StorageError::NotFound(key) => VMError::StorageError(format!(
+                        StorageError::NotFound { key } => VMError::StorageError(format!(
                             "Key '{}' not found during {}",
                             key, operation_name
                         )),
@@ -109,13 +201,45 @@ where
                 }
             }
             None => Err(VMError::StorageUnavailable),
-        };
+        }
+    }
 
-        result
+    /// Convert a storage event to a VM event
+    fn storage_event_to_vm_event(&self, storage_event: &crate::storage::events::StorageEvent, category: &str) -> VMEvent {
+        VMEvent {
+            category: category.to_string(),
+            message: format!("{}: {}", storage_event.event_type, storage_event.details),
+            timestamp: storage_event.timestamp,
+        }
+    }
+}
+
+impl<S> ExecutorOps<S> for VMExecution<S>
+where
+    S: Storage + Send + Sync + Clone + Debug + 'static,
+{
+    /// Set the storage backend
+    fn set_storage_backend(&mut self, backend: S) {
+        self.storage_backend = Some(backend);
+    }
+
+    /// Set the authentication context
+    fn set_auth_context(&mut self, auth: AuthContext) {
+        self.auth_context = Some(auth);
+    }
+
+    /// Set the namespace
+    fn set_namespace(&mut self, namespace: &str) {
+        self.namespace = namespace.to_string();
+    }
+
+    /// Get the authentication context
+    fn get_auth_context(&self) -> Option<&AuthContext> {
+        self.auth_context.as_ref()
     }
 
     /// Execute a minting operation
-    pub fn execute_mint(
+    fn execute_mint(
         &mut self,
         resource: &str,
         account: &str,
@@ -133,11 +257,34 @@ where
                 amount as u64,
                 &reason_str,
             )
+            .map(|(_, event_opt)| {
+                // Log any event generated
+                if let Some(storage_event) = event_opt {
+                    // Create VM event
+                    let vm_event = VMEvent {
+                        category: "economic".to_string(),
+                        message: format!("mint: {}", storage_event.details),
+                        timestamp: storage_event.timestamp,
+                    };
+                    // Return VMEvent for logging outside this closure
+                    Some(vm_event)
+                } else {
+                    None
+                }
+            })
+        })
+        .map(|event_opt| {
+            // Log the event if one was generated
+            if let Some(event) = event_opt {
+                self.events.push(event);
+            }
+            // Return unit value
+            ()
         })
     }
 
     /// Execute a transfer operation
-    pub fn execute_transfer(
+    fn execute_transfer(
         &mut self,
         resource: &str,
         from: &str,
@@ -148,12 +295,43 @@ where
         let reason_str = reason.clone().unwrap_or_else(|| "No reason provided".to_string());
         
         self.storage_operation("transfer", |backend, auth, namespace| {
-            backend.transfer(auth, namespace, resource, from, to, amount as u64, &reason_str)
+            backend.transfer(
+                auth,
+                namespace,
+                resource,
+                from,
+                to,
+                amount as u64,
+                &reason_str,
+            )
+            .map(|(_, event_opt)| {
+                // Log any event generated
+                if let Some(storage_event) = event_opt {
+                    // Create VM event
+                    let vm_event = VMEvent {
+                        category: "economic".to_string(),
+                        message: format!("transfer: {}", storage_event.details),
+                        timestamp: storage_event.timestamp,
+                    };
+                    // Return VMEvent for logging outside this closure
+                    Some(vm_event)
+                } else {
+                    None
+                }
+            })
+        })
+        .map(|event_opt| {
+            // Log the event if one was generated
+            if let Some(event) = event_opt {
+                self.events.push(event);
+            }
+            // Return unit value
+            ()
         })
     }
 
     /// Execute a burn operation
-    pub fn execute_burn(
+    fn execute_burn(
         &mut self,
         resource: &str,
         account: &str,
@@ -163,28 +341,93 @@ where
         let reason_str = reason.clone().unwrap_or_else(|| "No reason provided".to_string());
         
         self.storage_operation("burn", |backend, auth, namespace| {
-            backend.burn(auth, namespace, resource, account, amount as u64, &reason_str)
+            backend.burn(
+                auth,
+                namespace,
+                resource,
+                account,
+                amount as u64,
+                &reason_str,
+            )
+            .map(|(_, event_opt)| {
+                // Log any event generated
+                if let Some(storage_event) = event_opt {
+                    // Create VM event
+                    let vm_event = VMEvent {
+                        category: "economic".to_string(),
+                        message: format!("burn: {}", storage_event.details),
+                        timestamp: storage_event.timestamp,
+                    };
+                    // Return VMEvent for logging outside this closure
+                    Some(vm_event)
+                } else {
+                    None
+                }
+            })
+        })
+        .map(|event_opt| {
+            // Log the event if one was generated
+            if let Some(event) = event_opt {
+                self.events.push(event);
+            }
+            // Return unit value
+            ()
         })
     }
 
     /// Execute a balance query operation
-    pub fn execute_balance(&mut self, resource: &str, account: &str) -> Result<f64, VMError> {
-        let result = self.storage_operation("get_balance", |backend, auth, namespace| {
+    fn execute_balance(&mut self, resource: &str, account: &str) -> Result<f64, VMError> {
+        self.storage_operation("get_balance", |backend, auth, namespace| {
             backend.get_balance(auth, namespace, resource, account)
-        })?;
-        
-        Ok(result as f64)
-    }
-
-    /// Execute a resource creation operation
-    pub fn execute_create_resource(&mut self, resource: &str) -> Result<(), VMError> {
-        self.storage_operation("create_resource", |backend, auth, namespace| {
-            backend.create_resource(auth, namespace, resource)
+                .map(|(balance, event_opt)| {
+                    // Log any event generated
+                    if let Some(storage_event) = event_opt {
+                        // Create VM event
+                        let vm_event = VMEvent {
+                            category: "economic".to_string(),
+                            message: format!("balance: {}", storage_event.details),
+                            timestamp: storage_event.timestamp,
+                        };
+                        // Push the event to the VM event log
+                        (balance as f64, Some(vm_event))
+                    } else {
+                        (balance as f64, None)
+                    }
+                })
+        })
+        .map(|(balance, event_opt)| {
+            // Log the event if one was generated
+            if let Some(event) = event_opt {
+                self.events.push(event);
+            }
+            // Return the balance
+            balance
         })
     }
 
+    /// Execute a resource creation operation
+    fn execute_create_resource(&mut self, resource: &str) -> Result<(), VMError> {
+        // Create the resource and emit event
+        let result = self.storage_operation("create_resource", |backend, auth, namespace| {
+            backend.create_resource(auth, namespace, resource)
+        })?;
+        
+        // Create and log an event for resource creation
+        let event = VMEvent {
+            category: "economic".to_string(),
+            message: format!("Resource created: {}", resource),
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        };
+        self.events.push(event);
+        
+        Ok(())
+    }
+
     /// Execute increment reputation for an identity
-    pub fn execute_increment_reputation(
+    fn execute_increment_reputation(
         &mut self,
         identity_id: &str,
         amount: Option<f64>,
@@ -205,37 +448,120 @@ where
             // Get current reputation
             let current = self.storage_operation("get_reputation", |backend, auth, namespace| {
                 backend.get_reputation(auth, namespace, identity_id)
+                    .map(|(rep, event_opt)| {
+                        // Log any event generated
+                        if let Some(storage_event) = event_opt {
+                            // Create VM event
+                            let vm_event = VMEvent {
+                                category: "reputation".to_string(),
+                                message: format!("get_reputation: {}", storage_event.details),
+                                timestamp: storage_event.timestamp,
+                            };
+                            // Return the reputation value and event
+                            (rep, Some(vm_event))
+                        } else {
+                            (rep, None)
+                        }
+                    })
+            })
+            .map(|(rep, event_opt)| {
+                // Log the event if one was generated
+                if let Some(event) = event_opt {
+                    self.events.push(event);
+                }
+                // Return the reputation value
+                rep
             })?;
 
             // Update reputation
-            let new_value = current + amount_val;
             self.storage_operation("set_reputation", |backend, auth, namespace| {
-                backend.set_reputation(auth, namespace, identity_id, new_value)
+                backend.set_reputation(auth, namespace, identity_id, current + amount_val)
+                    .map(|(_, event_opt)| {
+                        // Log any event generated
+                        if let Some(storage_event) = event_opt {
+                            // Create VM event
+                            let vm_event = VMEvent {
+                                category: "reputation".to_string(),
+                                message: format!("set_reputation: {}", storage_event.details),
+                                timestamp: storage_event.timestamp,
+                            };
+                            // Return the event
+                            Some(vm_event)
+                        } else {
+                            None
+                        }
+                    })
+            })
+            .map(|event_opt| {
+                // Log the event if one was generated
+                if let Some(event) = event_opt {
+                    self.events.push(event);
+                }
             })?;
         }
 
         Ok(())
     }
 
-    /// Execute a conditional block and return the result
-    pub fn execute_conditional_block(&mut self, ops: &[Op]) -> Result<f64, VMError> {
-        // This is a placeholder - the actual execution will happen in the VM
-        // We'll just indicate success or failure for now
-        Ok(1.0)
-    }
-
     /// Execute a storage operation with the given key/value
-    pub fn execute_store_p(&mut self, key: &str, value: f64) -> Result<(), VMError> {
+    fn execute_store_p(&mut self, key: &str, value: f64) -> Result<(), VMError> {
         self.storage_operation("store_p", |backend, auth, namespace| {
-            backend.store(auth, namespace, key, value.to_string().as_bytes())
+            backend.store(
+                auth,
+                namespace,
+                key,
+                value.to_string().as_bytes().to_vec()
+            )
+            .map(|(_, event_opt)| {
+                // Log any event generated
+                if let Some(storage_event) = event_opt {
+                    // Create VM event
+                    let vm_event = VMEvent {
+                        category: "storage".to_string(),
+                        message: format!("store: {}", storage_event.details),
+                        timestamp: storage_event.timestamp,
+                    };
+                    // Return the event
+                    Some(vm_event)
+                } else {
+                    None
+                }
+            })
+        })
+        .map(|event_opt| {
+            // Log the event if one was generated
+            if let Some(event) = event_opt {
+                self.events.push(event);
+            }
         })
     }
 
     /// Load a value from storage
-    pub fn execute_load_p(&mut self, key: &str) -> Result<f64, VMError> {
+    fn execute_load_p(&mut self, key: &str) -> Result<f64, VMError> {
         let bytes = self.storage_operation("load_p", |backend, auth, namespace| {
             backend.load(auth, namespace, key)
-        })?;
+                .map(|(data, event_opt)| {
+                    // Log any event generated
+                    if let Some(storage_event) = event_opt {
+                        // Create VM event
+                        let vm_event = VMEvent {
+                            category: "storage".to_string(),
+                            message: format!("load: {}", storage_event.details),
+                            timestamp: storage_event.timestamp,
+                        };
+                        // Return the data and event
+                        (data, Some(vm_event))
+                    } else {
+                        (data, None)
+                    }
+                })
+        })?
+        .0; // Extract just the data part from the tuple
+
+        // Process any events that were returned
+        if let Some(event) = self.storage_operation("load_p", |_, _, _| Ok(((), None)))?.1 {
+            self.events.push(event);
+        }
 
         let value_str = String::from_utf8(bytes).map_err(|_| {
             VMError::Deserialization(format!("Failed to parse value for key '{}'", key))
@@ -247,7 +573,7 @@ where
     }
 
     /// Fork the VM for transaction support
-    pub fn fork(&mut self) -> Result<Self, VMError> {
+    fn fork(&mut self) -> Result<Self, VMError> {
         // Clone the storage backend if available
         let storage_fork = match &self.storage_backend {
             Some(backend) => {
@@ -280,7 +606,7 @@ where
     }
 
     /// Commit a transaction from a forked VM
-    pub fn commit_fork_transaction(&mut self) -> Result<(), VMError> {
+    fn commit_fork_transaction(&mut self) -> Result<(), VMError> {
         if !self.transaction_active {
             return Err(VMError::StorageError(
                 "No active transaction to commit".to_string(),
@@ -298,7 +624,7 @@ where
     }
 
     /// Rollback a transaction from a forked VM
-    pub fn rollback_fork_transaction(&mut self) -> Result<(), VMError> {
+    fn rollback_fork_transaction(&mut self) -> Result<(), VMError> {
         if !self.transaction_active {
             return Err(VMError::StorageError(
                 "No active transaction to rollback".to_string(),
@@ -316,13 +642,13 @@ where
     }
 
     /// Emit a message to the output
-    pub fn emit(&mut self, message: &str) {
+    fn emit(&mut self, message: &str) {
         self.output.push_str(message);
         self.output.push('\n');
     }
 
     /// Emit an event with the given category and message
-    pub fn emit_event(&mut self, category: &str, message: &str) {
+    fn emit_event(&mut self, category: &str, message: &str) {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -338,22 +664,22 @@ where
     }
 
     /// Get the current output buffer
-    pub fn get_output(&self) -> &str {
+    fn get_output(&self) -> &str {
         &self.output
     }
 
     /// Get the events as a vector
-    pub fn get_events(&self) -> &[VMEvent] {
+    fn get_events(&self) -> &[VMEvent] {
         &self.events
     }
 
     /// Clear the output buffer
-    pub fn clear_output(&mut self) {
+    fn clear_output(&mut self) {
         self.output.clear();
     }
 
     /// Execute arithmetic operations
-    pub fn execute_arithmetic(&self, a: f64, b: f64, op: &str) -> Result<f64, VMError> {
+    fn execute_arithmetic(&self, a: f64, b: f64, op: &str) -> Result<f64, VMError> {
         match op {
             "add" => Ok(a + b),
             "sub" => Ok(a - b),
@@ -377,7 +703,7 @@ where
     }
 
     /// Execute comparison operations
-    pub fn execute_comparison(&self, a: f64, b: f64, op: &str) -> Result<f64, VMError> {
+    fn execute_comparison(&self, a: f64, b: f64, op: &str) -> Result<f64, VMError> {
         // In our VM, 0.0 is falsey and any non-zero value is truthy
         let result = match op {
             "eq" => (a - b).abs() < f64::EPSILON,
@@ -391,7 +717,7 @@ where
     }
 
     /// Execute logical operations
-    pub fn execute_logical(&self, a: f64, op: &str) -> Result<f64, VMError> {
+    fn execute_logical(&self, a: f64, op: &str) -> Result<f64, VMError> {
         // For NOT operation
         let result = match op {
             "not" => a == 0.0, // NOT truthy is falsey, NOT falsey is truthy
@@ -403,7 +729,7 @@ where
     }
 
     /// Execute binary logical operations
-    pub fn execute_binary_logical(&self, a: f64, b: f64, op: &str) -> Result<f64, VMError> {
+    fn execute_binary_logical(&self, a: f64, b: f64, op: &str) -> Result<f64, VMError> {
         // For binary operations (AND, OR)
         let a_truthy = a != 0.0;
         let b_truthy = b != 0.0;
