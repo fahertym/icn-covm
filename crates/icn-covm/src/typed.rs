@@ -39,6 +39,20 @@ impl TypedValue {
         }
     }
 
+    /// Check if a value is considered falsey in boolean context
+    /// - Numbers: 0.0 is falsey, any other number is truthy
+    /// - Booleans: false is falsey, true is truthy
+    /// - Strings: empty string is falsey, any other string is truthy
+    /// - Null: always falsey
+    pub fn is_falsey(&self) -> bool {
+        match self {
+            TypedValue::Number(n) => *n == 0.0,
+            TypedValue::Boolean(b) => !b,
+            TypedValue::String(s) => s.is_empty(),
+            TypedValue::Null => true,
+        }
+    }
+
     /// Try to convert the value to a number
     pub fn as_number(&self) -> Result<f64, TypedValueError> {
         match self {

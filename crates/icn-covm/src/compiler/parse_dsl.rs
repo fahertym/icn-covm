@@ -52,7 +52,9 @@ fn parse_duration(duration_str: &str) -> Result<Duration, CompilerError> {
         });
     }
 
-    let last_char = duration_str.chars().last()
+    let last_char = duration_str
+        .chars()
+        .last()
         .ok_or(CompilerError::SyntaxError {
             details: "Empty duration string".to_string(),
         })?;

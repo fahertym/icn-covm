@@ -1,0 +1,59 @@
+---
+# ICN-COVM pre-commit hooks
+# Install with: pre-commit install
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.4.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+
+  - repo: local
+    hooks:
+      - id: fmt
+        name: cargo fmt
+        description: Format files with rustfmt.
+        entry: cargo fmt --
+        language: system
+        types: [rust]
+        args: ["--"]
+        pass_filenames: false
+
+      - id: clippy
+        name: cargo clippy
+        description: Run clippy lints.
+        entry: cargo clippy --all-features --
+        language: system
+        types: [rust]
+        args: ["-D", "warnings"]
+        pass_filenames: false
+
+      - id: test
+        name: cargo test
+        description: Run cargo test.
+        entry: cargo test --all-features
+        language: system
+        types: [rust]
+        pass_filenames: false
+        stages: [push]
+
+      - id: check
+        name: cargo check
+        description: Check Rust code for errors.
+        entry: cargo check --all-features
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+      - id: audit
+        name: cargo audit
+        description: Audit Cargo.lock for vulnerabilities.
+        entry: cargo audit
+        language: system
+        files: ^Cargo\.lock$
+        pass_filenames: false
+        stages: [push] 

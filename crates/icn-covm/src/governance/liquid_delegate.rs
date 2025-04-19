@@ -1,12 +1,12 @@
 use crate::governance::traits::GovernanceOpHandler;
 use crate::storage::traits::Storage;
-use crate::vm::{VM, VMError};
-use crate::vm::types::Op;
 use crate::vm::execution::ExecutorOps;
 use crate::vm::memory::MemoryScope;
+use crate::vm::types::Op;
+use crate::vm::{VMError, VM};
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::marker::{Send, Sync};
-use std::collections::HashMap;
 
 /// Handler for LiquidDelegate operations
 pub struct LiquidDelegateHandler;
@@ -47,10 +47,8 @@ impl GovernanceOpHandler for LiquidDelegateHandler {
             if to.is_empty() {
                 // If 'to' is empty, it's a revocation
                 if delegations.remove(from).is_some() {
-                    vm.executor.emit_event(
-                        "governance",
-                        &format!("Delegation revoked for {}", from),
-                    );
+                    vm.executor
+                        .emit_event("governance", &format!("Delegation revoked for {}", from));
                 } else {
                     vm.executor.emit_event(
                         "governance",
@@ -61,26 +59,27 @@ impl GovernanceOpHandler for LiquidDelegateHandler {
                 // Check for cycles in the delegation graph
                 let mut visited = HashMap::new();
                 visited.insert(from.clone(), true);
-                
+
                 // Start with the immediate delegation target
                 let mut current = to.clone();
-                
+
                 // Follow the delegation chain to detect cycles
                 while !current.is_empty() {
                     // If we've seen this node before, we have a cycle
                     if visited.contains_key(&current) {
-                        return Err(VMError::GovernanceError(
-                            format!("Delegation from {} to {} would create a cycle", from, to),
-                        ));
+                        return Err(VMError::GovernanceError(format!(
+                            "Delegation from {} to {} would create a cycle",
+                            from, to
+                        )));
                     }
-                    
+
                     // Mark this node as visited
                     visited.insert(current.clone(), true);
-                    
+
                     // Move to the next node in the chain, if any
                     current = delegations.get(&current).cloned().unwrap_or_default();
                 }
-                
+
                 // No cycles found, add the delegation
                 delegations.insert(from.clone(), to.clone());
                 vm.executor.emit_event(
@@ -93,15 +92,17 @@ impl GovernanceOpHandler for LiquidDelegateHandler {
             let serialized = serde_json::to_string(&delegations).map_err(|e| {
                 VMError::Deserialization(format!("Failed to serialize delegations: {}", e))
             })?;
-            
+
             vm.memory.set_string_metadata(delegations_key, serialized);
-            
+
             // Also store a numeric value to indicate the delegation count
             vm.memory.store(delegations_key, delegations.len() as f64);
-            
+
             Ok(())
         } else {
-            Err(VMError::UndefinedOperation("Expected LiquidDelegate operation".into()))
+            Err(VMError::UndefinedOperation(
+                "Expected LiquidDelegate operation".into(),
+            ))
         }
     }
-} 
+}

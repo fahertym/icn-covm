@@ -23,9 +23,9 @@ use crate::storage::auth::AuthContext;
 use crate::storage::errors::{StorageError, StorageResult};
 use crate::storage::traits::Storage;
 use crate::vm::errors::VMError;
-use crate::vm::types::{LoopControl, Op, VMEvent};
+use crate::vm::types::VMEvent;
 use crate::vm::MissingKeyBehavior;
-use std::collections::HashMap;
+use crate::typed::TypedValue;
 use std::fmt::Debug;
 use std::marker::{Send, Sync};
 
@@ -54,7 +54,7 @@ where
         &mut self,
         resource: &str,
         account: &str,
-        amount: f64,
+        amount: &TypedValue,
         reason: &Option<String>,
     ) -> Result<(), VMError>;
 
@@ -64,7 +64,7 @@ where
         resource: &str,
         from: &str,
         to: &str,
-        amount: f64,
+        amount: &TypedValue,
         reason: &Option<String>,
     ) -> Result<(), VMError>;
 
@@ -73,25 +73,29 @@ where
         &mut self,
         resource: &str,
         account: &str,
-        amount: f64,
+        amount: &TypedValue,
         reason: &Option<String>,
     ) -> Result<(), VMError>;
 
     /// Execute a balance query operation
-    fn execute_balance(&mut self, resource: &str, account: &str) -> Result<f64, VMError>;
+    fn execute_balance(&mut self, resource: &str, account: &str) -> Result<TypedValue, VMError>;
 
     /// Execute increment reputation for an identity
     fn execute_increment_reputation(
         &mut self,
         identity_id: &str,
-        amount: Option<f64>,
+        amount: Option<&TypedValue>,
     ) -> Result<(), VMError>;
 
     /// Execute a storage operation with the given key/value
-    fn execute_store_p(&mut self, key: &str, value: f64) -> Result<(), VMError>;
+    fn execute_store_p(&mut self, key: &str, value: &TypedValue) -> Result<(), VMError>;
 
     /// Load a value from storage
-    fn execute_load_p(&mut self, key: &str, missing_key_behavior: MissingKeyBehavior) -> Result<f64, VMError>;
+    fn execute_load_p(
+        &mut self,
+        key: &str,
+        missing_key_behavior: MissingKeyBehavior,
+    ) -> Result<TypedValue, VMError>;
 
     /// Fork the VM for transaction support
     fn fork(&mut self) -> Result<Self, VMError>
@@ -120,16 +124,16 @@ where
     fn clear_output(&mut self);
 
     /// Execute arithmetic operations
-    fn execute_arithmetic(&self, a: f64, b: f64, op: &str) -> Result<f64, VMError>;
+    fn execute_arithmetic(&self, a: &TypedValue, b: &TypedValue, op: &str) -> Result<TypedValue, VMError>;
 
     /// Execute comparison operations
-    fn execute_comparison(&self, a: f64, b: f64, op: &str) -> Result<f64, VMError>;
+    fn execute_comparison(&self, a: &TypedValue, b: &TypedValue, op: &str) -> Result<TypedValue, VMError>;
 
     /// Execute logical operations
-    fn execute_logical(&self, a: f64, op: &str) -> Result<f64, VMError>;
+    fn execute_logical(&self, a: &TypedValue, op: &str) -> Result<TypedValue, VMError>;
 
     /// Execute binary logical operations
-    fn execute_binary_logical(&self, a: f64, b: f64, op: &str) -> Result<f64, VMError>;
+    fn execute_binary_logical(&self, a: &TypedValue, b: &TypedValue, op: &str) -> Result<TypedValue, VMError>;
 }
 
 /// Provides execution logic for the virtual machine operations
@@ -198,18 +202,24 @@ where
                             user_id,
                             action,
                             key,
-                        } => VMError::StorageError(format!(
-                            "Permission denied for user '{}' during {}: operation '{}' on '{}'",
-                            user_id, operation_name, action, key
-                        )),
-                        StorageError::NotFound { key } => VMError::StorageError(format!(
-                            "Key '{}' not found during {}",
-                            key, operation_name
-                        )),
-                        _ => VMError::StorageError(format!(
-                            "Error during {}: {:?}",
-                            operation_name, err
-                        )),
+                        } => VMError::StorageError {
+                            details: format!(
+                                "Permission denied for user '{}' during {}: operation '{}' on '{}'",
+                                user_id, operation_name, action, key
+                            )
+                        },
+                        StorageError::NotFound { key } => VMError::StorageError {
+                            details: format!(
+                                "Key '{}' not found during {}",
+                                key, operation_name
+                            )
+                        },
+                        _ => VMError::StorageError {
+                            details: format!(
+                                "Error during {}: {:?}",
+                                operation_name, err
+                            )
+                        },
                     }),
                 }
             }
@@ -255,12 +265,33 @@ where
         self.auth_context.as_ref()
     }
 
+    /// Execute a resource creation operation
+    fn execute_create_resource(&mut self, resource: &str) -> Result<(), VMError> {
+        // Create the resource and emit event
+        self.storage_operation("create_resource", |backend, auth, namespace| {
+            backend.create_resource(auth, namespace, resource)
+        })?;
+
+        // Create and log an event for resource creation
+        let event = VMEvent {
+            category: "economic".to_string(),
+            message: format!("Resource created: {}", resource),
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        };
+        self.events.push(event);
+
+        Ok(())
+    }
+
     /// Execute a minting operation
     fn execute_mint(
         &mut self,
         resource: &str,
         account: &str,
-        amount: f64,
+        amount: &TypedValue,
         reason: &Option<String>,
     ) -> Result<(), VMError> {
         let reason_str = reason
@@ -274,7 +305,7 @@ where
                     namespace,
                     resource,
                     account,
-                    amount as u64,
+                    amount.as_number().unwrap() as u64,
                     &reason_str,
                 )
                 .map(|(_, event_opt)| {
@@ -307,7 +338,7 @@ where
         resource: &str,
         from: &str,
         to: &str,
-        amount: f64,
+        amount: &TypedValue,
         reason: &Option<String>,
     ) -> Result<(), VMError> {
         let reason_str = reason
@@ -322,7 +353,7 @@ where
                     resource,
                     from,
                     to,
-                    amount as u64,
+                    amount.as_number().unwrap() as u64,
                     &reason_str,
                 )
                 .map(|(_, event_opt)| {
@@ -354,7 +385,7 @@ where
         &mut self,
         resource: &str,
         account: &str,
-        amount: f64,
+        amount: &TypedValue,
         reason: &Option<String>,
     ) -> Result<(), VMError> {
         let reason_str = reason
@@ -368,7 +399,7 @@ where
                     namespace,
                     resource,
                     account,
-                    amount as u64,
+                    amount.as_number().unwrap() as u64,
                     &reason_str,
                 )
                 .map(|(_, event_opt)| {
@@ -396,7 +427,7 @@ where
     }
 
     /// Execute a balance query operation
-    fn execute_balance(&mut self, resource: &str, account: &str) -> Result<f64, VMError> {
+    fn execute_balance(&mut self, resource: &str, account: &str) -> Result<TypedValue, VMError> {
         self.storage_operation("get_balance", |backend, auth, namespace| {
             backend
                 .get_balance(auth, namespace, resource, account)
@@ -421,39 +452,26 @@ where
             if let Some(event) = event_opt {
                 self.events.push(event);
             }
-            // Return the balance
-            balance
+            // Return the balance as a TypedValue
+            TypedValue::Number(balance)
         })
-    }
-
-    /// Execute a resource creation operation
-    fn execute_create_resource(&mut self, resource: &str) -> Result<(), VMError> {
-        // Create the resource and emit event
-        let result = self.storage_operation("create_resource", |backend, auth, namespace| {
-            backend.create_resource(auth, namespace, resource)
-        })?;
-
-        // Create and log an event for resource creation
-        let event = VMEvent {
-            category: "economic".to_string(),
-            message: format!("Resource created: {}", resource),
-            timestamp: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
-        };
-        self.events.push(event);
-
-        Ok(())
     }
 
     /// Execute increment reputation for an identity
     fn execute_increment_reputation(
         &mut self,
         identity_id: &str,
-        amount: Option<f64>,
+        amount: Option<&TypedValue>,
     ) -> Result<(), VMError> {
-        let amount_val = amount.unwrap_or(1.0) as u64;
+        // Default to 1.0 if no amount is provided, otherwise extract numeric value
+        let amount_val = match amount {
+            Some(value) => value.as_number().map_err(|_| VMError::TypeMismatch {
+                expected: "number".to_string(),
+                found: value.type_name().to_string(),
+                operation: "increment_reputation".to_string(),
+            })? as u64,
+            None => 1, // Default to 1 if no amount provided
+        };
 
         // Prepare the payload
         let payload = format!(
@@ -467,11 +485,11 @@ where
         // If we have a storage backend, persist the reputation
         if self.storage_backend.is_some() {
             // Get current reputation
-            let current = self
+            let current_rep = self
                 .storage_operation("get_reputation", |backend, auth, namespace| {
                     backend
                         .get_reputation(auth, namespace, identity_id)
-                        .map(|(rep, event_opt)| {
+                        .map(|(current_rep, event_opt)| {
                             // Log any event generated
                             if let Some(storage_event) = event_opt {
                                 // Create VM event
@@ -480,26 +498,29 @@ where
                                     message: format!("get_reputation: {}", storage_event.details),
                                     timestamp: storage_event.timestamp,
                                 };
-                                // Return the reputation value and event
-                                (rep, Some(vm_event))
+                                // Return current reputation and event
+                                (current_rep, Some(vm_event))
                             } else {
-                                (rep, None)
+                                (current_rep, None)
                             }
                         })
                 })
-                .map(|(rep, event_opt)| {
+                .map(|(current_rep, event_opt)| {
                     // Log the event if one was generated
                     if let Some(event) = event_opt {
                         self.events.push(event);
                     }
                     // Return the reputation value
-                    rep
+                    current_rep
                 })?;
 
-            // Update reputation
+            // Set the new reputation value
             self.storage_operation("set_reputation", |backend, auth, namespace| {
+                // Convert amount_val to f64 for set_reputation
+                let amount_val_f64 = amount_val as f64;
+                let new_value = current_rep + amount_val_f64;
                 backend
-                    .set_reputation(auth, namespace, identity_id, current + amount_val)
+                    .set_reputation(auth, namespace, identity_id, new_value)
                     .map(|(_, event_opt)| {
                         // Log any event generated
                         if let Some(storage_event) = event_opt {
@@ -509,7 +530,7 @@ where
                                 message: format!("set_reputation: {}", storage_event.details),
                                 timestamp: storage_event.timestamp,
                             };
-                            // Return the event
+                            // Return VMEvent for logging outside this closure
                             Some(vm_event)
                         } else {
                             None
@@ -528,7 +549,7 @@ where
     }
 
     /// Execute a storage operation with the given key/value
-    fn execute_store_p(&mut self, key: &str, value: f64) -> Result<(), VMError> {
+    fn execute_store_p(&mut self, key: &str, value: &TypedValue) -> Result<(), VMError> {
         self.storage_operation("store_p", |backend, auth, namespace| {
             backend
                 .store(auth, namespace, key, value.to_string().as_bytes().to_vec())
@@ -557,48 +578,69 @@ where
     }
 
     /// Load a value from storage
-    fn execute_load_p(&mut self, key: &str, missing_key_behavior: MissingKeyBehavior) -> Result<f64, VMError> {
-        let bytes = match self
-            .storage_operation("load_p", |backend, auth, namespace| {
-                backend.load(auth, namespace, key).map(|(data, event_opt)| {
-                    // Log any event generated
-                    if let Some(storage_event) = event_opt {
-                        // Create VM event
-                        let vm_event = VMEvent {
-                            category: "storage".to_string(),
-                            message: format!("load: {}", storage_event.details),
-                            timestamp: storage_event.timestamp,
-                        };
-                        // Return the data and event
-                        (data, Some(vm_event))
-                    } else {
-                        (data, None)
-                    }
-                })
-            }) {
-                Ok(result) => {
-                    // Process any events that were returned
-                    if let Some(event) = result.1 {
-                        self.events.push(event);
-                    }
-                    Ok(result.0) // Extract just the data part from the tuple
-                },
-                Err(VMError::StorageError(ref err_msg)) if err_msg.contains("not found") => {
-                    match missing_key_behavior {
-                        MissingKeyBehavior::Default => Ok(vec![48, 46, 48]) /* "0.0" in ASCII */,
-                        MissingKeyBehavior::Error => Err(VMError::StorageError(format!("Key '{}' not found during load_p", key)))
-                    }
-                },
-                Err(e) => Err(e)
-            }?;
-
-        let value_str = String::from_utf8(bytes).map_err(|_| {
-            VMError::Deserialization(format!("Failed to parse value for key '{}'", key))
-        })?;
-
-        value_str.parse::<f64>().map_err(|_| {
-            VMError::Deserialization(format!("Failed to parse value as f64 for key '{}'", key))
-        })
+    fn execute_load_p(
+        &mut self,
+        key: &str,
+        missing_key_behavior: MissingKeyBehavior,
+    ) -> Result<TypedValue, VMError> {
+        match self.storage_operation("load_p", |backend, auth, namespace| {
+            backend.load(auth, namespace, key).map(|(data, event_opt)| {
+                // Log any event generated
+                if let Some(storage_event) = event_opt {
+                    // Create VM event
+                    let vm_event = VMEvent {
+                        category: "storage".to_string(),
+                        message: format!("load: {}", storage_event.details),
+                        timestamp: storage_event.timestamp,
+                    };
+                    // Return the data and event
+                    (data, Some(vm_event))
+                } else {
+                    (data, None)
+                }
+            })
+        }) {
+            Ok(result) => {
+                // Process any events that were returned
+                if let Some(event) = result.1 {
+                    self.events.push(event);
+                }
+                
+                // Try to parse the stored value
+                let value_str = String::from_utf8(result.0).map_err(|_| {
+                    VMError::Deserialization(format!("Failed to parse value for key '{}'", key))
+                })?;
+                
+                // First try to parse as a number
+                if let Ok(num) = value_str.parse::<f64>() {
+                    return Ok(TypedValue::Number(num));
+                }
+                
+                // Then try as a boolean
+                if value_str == "true" {
+                    return Ok(TypedValue::Boolean(true));
+                } else if value_str == "false" {
+                    return Ok(TypedValue::Boolean(false));
+                } else if value_str == "null" {
+                    return Ok(TypedValue::Null);
+                }
+                
+                // Otherwise treat as a string
+                Ok(TypedValue::String(value_str))
+            }
+            Err(VMError::StorageError { details: ref err_msg }) if err_msg.contains("not found") => {
+                match missing_key_behavior {
+                    MissingKeyBehavior::Default => Ok(TypedValue::Number(0.0)),
+                    MissingKeyBehavior::Error => Err(VMError::StorageError {
+                        details: format!(
+                            "Key '{}' not found during load_p",
+                            key
+                        )
+                    }),
+                }
+            }
+            Err(e) => Err(e),
+        }
     }
 
     /// Fork the VM for transaction support
@@ -619,7 +661,9 @@ where
 
                 if let Some(backend) = &mut forked.storage_backend {
                     backend.begin_transaction().map_err(|e| {
-                        VMError::StorageError(format!("Failed to begin transaction: {:?}", e))
+                        VMError::StorageError {
+                            details: format!("Failed to begin transaction: {:?}", e)
+                        }
                     })?;
                 }
 
@@ -637,14 +681,16 @@ where
     /// Commit a transaction from a forked VM
     fn commit_fork_transaction(&mut self) -> Result<(), VMError> {
         if !self.transaction_active {
-            return Err(VMError::StorageError(
-                "No active transaction to commit".to_string(),
-            ));
+            return Err(VMError::StorageError {
+                details: "No active transaction to commit".to_string(),
+            });
         }
 
         if let Some(backend) = &mut self.storage_backend {
             backend.commit_transaction().map_err(|e| {
-                VMError::StorageError(format!("Failed to commit transaction: {:?}", e))
+                VMError::StorageError {
+                    details: format!("Failed to commit transaction: {:?}", e)
+                }
             })?;
         }
 
@@ -655,14 +701,16 @@ where
     /// Rollback a transaction from a forked VM
     fn rollback_fork_transaction(&mut self) -> Result<(), VMError> {
         if !self.transaction_active {
-            return Err(VMError::StorageError(
-                "No active transaction to rollback".to_string(),
-            ));
+            return Err(VMError::StorageError {
+                details: "No active transaction to rollback".to_string(),
+            });
         }
 
         if let Some(backend) = &mut self.storage_backend {
             backend.rollback_transaction().map_err(|e| {
-                VMError::StorageError(format!("Failed to rollback transaction: {:?}", e))
+                VMError::StorageError {
+                    details: format!("Failed to rollback transaction: {:?}", e)
+                }
             })?;
         }
 
@@ -708,39 +756,68 @@ where
     }
 
     /// Execute arithmetic operations
-    fn execute_arithmetic(&self, a: f64, b: f64, op: &str) -> Result<f64, VMError> {
-        match op {
-            "add" => Ok(a + b),
-            "sub" => Ok(a - b),
-            "mul" => Ok(a * b),
+    fn execute_arithmetic(&self, a: &TypedValue, b: &TypedValue, op: &str) -> Result<TypedValue, VMError> {
+        // Extract number values or return a type error
+        let a_num = a.as_number().map_err(|_| VMError::TypeMismatch {
+            expected: "number".to_string(),
+            found: a.type_name().to_string(),
+            operation: "arithmetic".to_string(),
+        })?;
+        
+        let b_num = b.as_number().map_err(|_| VMError::TypeMismatch {
+            expected: "number".to_string(),
+            found: b.type_name().to_string(),
+            operation: "arithmetic".to_string(),
+        })?;
+        
+        let result = match op {
+            "add" => a_num + b_num,
+            "sub" => a_num - b_num,
+            "mul" => a_num * b_num,
             "div" => {
-                if b == 0.0 {
-                    Err(VMError::DivisionByZero)
+                if b_num == 0.0 {
+                    return Err(VMError::DivisionByZero);
                 } else {
-                    Ok(a / b)
+                    a_num / b_num
                 }
             }
             "mod" => {
-                if b == 0.0 {
-                    Err(VMError::DivisionByZero)
+                if b_num == 0.0 {
+                    return Err(VMError::DivisionByZero);
                 } else {
-                    Ok(a % b)
+                    a_num % b_num
                 }
             }
-            _ => Err(VMError::NotImplemented(format!(
-                "Unknown arithmetic operation: {}",
-                op
-            ))),
-        }
+            _ => {
+                return Err(VMError::NotImplemented(format!(
+                    "Unknown arithmetic operation: {}",
+                    op
+                )))
+            }
+        };
+        
+        Ok(TypedValue::Number(result))
     }
 
     /// Execute comparison operations
-    fn execute_comparison(&self, a: f64, b: f64, op: &str) -> Result<f64, VMError> {
-        // In our VM, 0.0 is falsey and any non-zero value is truthy
+    fn execute_comparison(&self, a: &TypedValue, b: &TypedValue, op: &str) -> Result<TypedValue, VMError> {
+        // Extract number values or return a type error
+        let a_num = a.as_number().map_err(|_| VMError::TypeMismatch {
+            expected: "number".to_string(),
+            found: a.type_name().to_string(),
+            operation: "comparison".to_string(),
+        })?;
+        
+        let b_num = b.as_number().map_err(|_| VMError::TypeMismatch {
+            expected: "number".to_string(),
+            found: b.type_name().to_string(),
+            operation: "comparison".to_string(),
+        })?;
+        
         let result = match op {
-            "eq" => (a - b).abs() < f64::EPSILON,
-            "lt" => a < b,
-            "gt" => a > b,
+            "eq" => (a_num - b_num).abs() < f64::EPSILON,
+            "lt" => a_num < b_num,
+            "gt" => a_num > b_num,
             _ => {
                 return Err(VMError::NotImplemented(format!(
                     "Unknown comparison operation: {}",
@@ -748,16 +825,15 @@ where
                 )))
             }
         };
-
-        // Convert boolean to f64 (0.0 for false, 1.0 for true)
-        Ok(if result { 1.0 } else { 0.0 })
+        
+        Ok(TypedValue::Boolean(result))
     }
 
     /// Execute logical operations
-    fn execute_logical(&self, a: f64, op: &str) -> Result<f64, VMError> {
+    fn execute_logical(&self, a: &TypedValue, op: &str) -> Result<TypedValue, VMError> {
         // For NOT operation
         let result = match op {
-            "not" => a == 0.0, // NOT truthy is falsey, NOT falsey is truthy
+            "not" => a.is_falsey(),
             _ => {
                 return Err(VMError::NotImplemented(format!(
                     "Unknown logical operation: {}",
@@ -765,16 +841,16 @@ where
                 )))
             }
         };
-
-        // Convert boolean to f64 (0.0 for false, 1.0 for true)
-        Ok(if result { 1.0 } else { 0.0 })
+        
+        // Convert boolean result to TypedValue
+        Ok(TypedValue::Boolean(result))
     }
 
     /// Execute binary logical operations
-    fn execute_binary_logical(&self, a: f64, b: f64, op: &str) -> Result<f64, VMError> {
+    fn execute_binary_logical(&self, a: &TypedValue, b: &TypedValue, op: &str) -> Result<TypedValue, VMError> {
         // For binary operations (AND, OR)
-        let a_truthy = a != 0.0;
-        let b_truthy = b != 0.0;
+        let a_truthy = !a.is_falsey();
+        let b_truthy = !b.is_falsey();
 
         let result = match op {
             "and" => a_truthy && b_truthy,
@@ -787,8 +863,8 @@ where
             }
         };
 
-        // Convert boolean to f64 (0.0 for false, 1.0 for true)
-        Ok(if result { 1.0 } else { 0.0 })
+        // Convert boolean result to TypedValue
+        Ok(TypedValue::Boolean(result))
     }
 }
 
@@ -807,16 +883,69 @@ mod tests {
     fn test_arithmetic_operations() {
         let exec = VMExecution::<InMemoryStorage>::new();
 
-        assert_eq!(exec.execute_arithmetic(5.0, 3.0, "add").unwrap(), 8.0);
-        assert_eq!(exec.execute_arithmetic(5.0, 3.0, "sub").unwrap(), 2.0);
-        assert_eq!(exec.execute_arithmetic(5.0, 3.0, "mul").unwrap(), 15.0);
-        assert_eq!(exec.execute_arithmetic(6.0, 3.0, "div").unwrap(), 2.0);
-        assert_eq!(exec.execute_arithmetic(7.0, 3.0, "mod").unwrap(), 1.0);
+        assert_eq!(
+            exec.execute_arithmetic(
+                &TypedValue::Number(5.0), 
+                &TypedValue::Number(3.0), 
+                "add"
+            ).unwrap(), 
+            TypedValue::Number(8.0)
+        );
+        
+        assert_eq!(
+            exec.execute_arithmetic(
+                &TypedValue::Number(5.0), 
+                &TypedValue::Number(3.0), 
+                "sub"
+            ).unwrap(), 
+            TypedValue::Number(2.0)
+        );
+        
+        assert_eq!(
+            exec.execute_arithmetic(
+                &TypedValue::Number(5.0), 
+                &TypedValue::Number(3.0), 
+                "mul"
+            ).unwrap(), 
+            TypedValue::Number(15.0)
+        );
+        
+        assert_eq!(
+            exec.execute_arithmetic(
+                &TypedValue::Number(6.0), 
+                &TypedValue::Number(3.0), 
+                "div"
+            ).unwrap(), 
+            TypedValue::Number(2.0)
+        );
+        
+        assert_eq!(
+            exec.execute_arithmetic(
+                &TypedValue::Number(7.0), 
+                &TypedValue::Number(3.0), 
+                "mod"
+            ).unwrap(), 
+            TypedValue::Number(1.0)
+        );
 
         // Test division by zero
         assert!(matches!(
-            exec.execute_arithmetic(5.0, 0.0, "div"),
+            exec.execute_arithmetic(
+                &TypedValue::Number(5.0), 
+                &TypedValue::Number(0.0), 
+                "div"
+            ),
             Err(VMError::DivisionByZero)
+        ));
+        
+        // Test type error
+        assert!(matches!(
+            exec.execute_arithmetic(
+                &TypedValue::String("not a number".to_string()), 
+                &TypedValue::Number(5.0), 
+                "add"
+            ),
+            Err(VMError::TypeMismatch { .. })
         ));
     }
 
@@ -825,37 +954,185 @@ mod tests {
         let exec = VMExecution::<InMemoryStorage>::new();
 
         // Equal
-        assert_eq!(exec.execute_comparison(5.0, 5.0, "eq").unwrap(), 1.0);
-        assert_eq!(exec.execute_comparison(5.0, 3.0, "eq").unwrap(), 0.0);
+        assert_eq!(
+            exec.execute_comparison(
+                &TypedValue::Number(5.0), 
+                &TypedValue::Number(5.0), 
+                "eq"
+            ).unwrap(), 
+            TypedValue::Boolean(true)
+        );
+        
+        assert_eq!(
+            exec.execute_comparison(
+                &TypedValue::Number(5.0), 
+                &TypedValue::Number(3.0), 
+                "eq"
+            ).unwrap(), 
+            TypedValue::Boolean(false)
+        );
 
         // Less than
-        assert_eq!(exec.execute_comparison(3.0, 5.0, "lt").unwrap(), 1.0);
-        assert_eq!(exec.execute_comparison(5.0, 3.0, "lt").unwrap(), 0.0);
+        assert_eq!(
+            exec.execute_comparison(
+                &TypedValue::Number(3.0), 
+                &TypedValue::Number(5.0), 
+                "lt"
+            ).unwrap(), 
+            TypedValue::Boolean(true)
+        );
+        
+        assert_eq!(
+            exec.execute_comparison(
+                &TypedValue::Number(5.0), 
+                &TypedValue::Number(3.0), 
+                "lt"
+            ).unwrap(), 
+            TypedValue::Boolean(false)
+        );
 
         // Greater than
-        assert_eq!(exec.execute_comparison(5.0, 3.0, "gt").unwrap(), 1.0);
-        assert_eq!(exec.execute_comparison(3.0, 5.0, "gt").unwrap(), 0.0);
+        assert_eq!(
+            exec.execute_comparison(
+                &TypedValue::Number(5.0), 
+                &TypedValue::Number(3.0), 
+                "gt"
+            ).unwrap(), 
+            TypedValue::Boolean(true)
+        );
+        
+        assert_eq!(
+            exec.execute_comparison(
+                &TypedValue::Number(3.0), 
+                &TypedValue::Number(5.0), 
+                "gt"
+            ).unwrap(), 
+            TypedValue::Boolean(false)
+        );
     }
 
     #[test]
     fn test_logical_operations() {
         let exec = VMExecution::<InMemoryStorage>::new();
 
-        // NOT
-        assert_eq!(exec.execute_logical(0.0, "not").unwrap(), 1.0);
-        assert_eq!(exec.execute_logical(1.0, "not").unwrap(), 0.0);
+        // NOT with various types
+        assert_eq!(
+            exec.execute_logical(&TypedValue::Number(0.0), "not").unwrap(), 
+            TypedValue::Boolean(true)
+        );
+        
+        assert_eq!(
+            exec.execute_logical(&TypedValue::Number(1.0), "not").unwrap(), 
+            TypedValue::Boolean(false)
+        );
+        
+        assert_eq!(
+            exec.execute_logical(&TypedValue::Boolean(false), "not").unwrap(), 
+            TypedValue::Boolean(true)
+        );
+        
+        assert_eq!(
+            exec.execute_logical(&TypedValue::String("".to_string()), "not").unwrap(), 
+            TypedValue::Boolean(true)
+        );
+        
+        assert_eq!(
+            exec.execute_logical(&TypedValue::String("hello".to_string()), "not").unwrap(), 
+            TypedValue::Boolean(false)
+        );
 
         // AND
-        assert_eq!(exec.execute_binary_logical(0.0, 0.0, "and").unwrap(), 0.0);
-        assert_eq!(exec.execute_binary_logical(1.0, 0.0, "and").unwrap(), 0.0);
-        assert_eq!(exec.execute_binary_logical(0.0, 1.0, "and").unwrap(), 0.0);
-        assert_eq!(exec.execute_binary_logical(1.0, 1.0, "and").unwrap(), 1.0);
+        assert_eq!(
+            exec.execute_binary_logical(
+                &TypedValue::Number(0.0), 
+                &TypedValue::Number(0.0), 
+                "and"
+            ).unwrap(), 
+            TypedValue::Boolean(false)
+        );
+        
+        assert_eq!(
+            exec.execute_binary_logical(
+                &TypedValue::Number(1.0), 
+                &TypedValue::Number(0.0), 
+                "and"
+            ).unwrap(), 
+            TypedValue::Boolean(false)
+        );
+        
+        assert_eq!(
+            exec.execute_binary_logical(
+                &TypedValue::Number(0.0), 
+                &TypedValue::Number(1.0), 
+                "and"
+            ).unwrap(), 
+            TypedValue::Boolean(false)
+        );
+        
+        assert_eq!(
+            exec.execute_binary_logical(
+                &TypedValue::Number(1.0), 
+                &TypedValue::Number(1.0), 
+                "and"
+            ).unwrap(), 
+            TypedValue::Boolean(true)
+        );
 
         // OR
-        assert_eq!(exec.execute_binary_logical(0.0, 0.0, "or").unwrap(), 0.0);
-        assert_eq!(exec.execute_binary_logical(1.0, 0.0, "or").unwrap(), 1.0);
-        assert_eq!(exec.execute_binary_logical(0.0, 1.0, "or").unwrap(), 1.0);
-        assert_eq!(exec.execute_binary_logical(1.0, 1.0, "or").unwrap(), 1.0);
+        assert_eq!(
+            exec.execute_binary_logical(
+                &TypedValue::Number(0.0), 
+                &TypedValue::Number(0.0), 
+                "or"
+            ).unwrap(), 
+            TypedValue::Boolean(false)
+        );
+        
+        assert_eq!(
+            exec.execute_binary_logical(
+                &TypedValue::Number(1.0), 
+                &TypedValue::Number(0.0), 
+                "or"
+            ).unwrap(), 
+            TypedValue::Boolean(true)
+        );
+        
+        assert_eq!(
+            exec.execute_binary_logical(
+                &TypedValue::Number(0.0), 
+                &TypedValue::Number(1.0), 
+                "or"
+            ).unwrap(), 
+            TypedValue::Boolean(true)
+        );
+        
+        assert_eq!(
+            exec.execute_binary_logical(
+                &TypedValue::Number(1.0), 
+                &TypedValue::Number(1.0), 
+                "or"
+            ).unwrap(), 
+            TypedValue::Boolean(true)
+        );
+        
+        // Test with mixed types
+        assert_eq!(
+            exec.execute_binary_logical(
+                &TypedValue::Number(1.0), 
+                &TypedValue::Boolean(true), 
+                "and"
+            ).unwrap(), 
+            TypedValue::Boolean(true)
+        );
+        
+        assert_eq!(
+            exec.execute_binary_logical(
+                &TypedValue::String("hello".to_string()), 
+                &TypedValue::Number(0.0), 
+                "or"
+            ).unwrap(), 
+            TypedValue::Boolean(true)
+        );
     }
 
     #[test]

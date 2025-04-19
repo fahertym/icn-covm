@@ -429,9 +429,10 @@ pub trait EconomicOperations: StorageBackend {
 
         // Check if sufficient balance
         if from_balance < amount {
-            return Err(StorageError::InsufficientBalance(
-                format!("Account {} has insufficient balance for resource {}", from, resource),
-            ));
+            return Err(StorageError::InsufficientBalance(format!(
+                "Account {} has insufficient balance for resource {}",
+                from, resource
+            )));
         }
 
         // Get to balance
@@ -512,9 +513,10 @@ pub trait EconomicOperations: StorageBackend {
 
         // Check if sufficient balance
         if current_balance < amount {
-            return Err(StorageError::InsufficientBalance(
-                format!("Account {} has insufficient balance for resource {}", account, resource),
-            ));
+            return Err(StorageError::InsufficientBalance(format!(
+                "Account {} has insufficient balance for resource {}",
+                account, resource
+            )));
         }
 
         // Update balance

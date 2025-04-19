@@ -1,3 +1,4 @@
+use crate::federation::error::FederationError;
 use crate::federation::messages::{
     FederatedProposal, FederatedVote, ProposalScope, ProposalStatus, VotingModel,
 };
@@ -5,13 +6,12 @@ use crate::identity::Identity;
 use crate::storage::auth::AuthContext;
 use crate::storage::errors::{StorageError, StorageResult};
 use crate::storage::traits::StorageExtensions;
+use crate::storage::utils;
 use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
-use crate::federation::error::FederationError;
-use crate::storage::utils;
 
 // Storage namespace constants
 pub const FEDERATION_NAMESPACE: &str = "federation";
@@ -99,10 +99,9 @@ impl FederationStorage {
             })?;
 
         // Add to the cache
-        let mut cache = self.cache.lock()
-            .map_err(|e| StorageError::Other { 
-                details: format!("Failed to lock federation cache: poisoned mutex - {}", e) 
-            })?;
+        let mut cache = self.cache.lock().map_err(|e| StorageError::Other {
+            details: format!("Failed to lock federation cache: poisoned mutex - {}", e),
+        })?;
 
         cache
             .proposals
@@ -130,10 +129,9 @@ impl FederationStorage {
             })?;
 
         // Add to the cache
-        let mut cache = self.cache.lock()
-            .map_err(|e| StorageError::Other { 
-                details: format!("Failed to lock federation cache: poisoned mutex - {}", e) 
-            })?;
+        let mut cache = self.cache.lock().map_err(|e| StorageError::Other {
+            details: format!("Failed to lock federation cache: poisoned mutex - {}", e),
+        })?;
 
         cache
             .proposals
@@ -273,22 +271,26 @@ impl FederationStorage {
         let votes_namespace = String::from(VOTES_NAMESPACE);
 
         // Check if there's already a votes collection
-        let mut votes = match storage.get_json::<Vec<FederatedVote>>(None, &votes_namespace, &vote_key) {
-            Ok(existing_votes) => {
-                // Check if this voter already voted
-                if existing_votes.iter().any(|v| v.voter == vote.voter) {
-                    warn!("Vote overwritten: Voter {} already voted on {}", vote.voter, vote.proposal_id);
+        let mut votes =
+            match storage.get_json::<Vec<FederatedVote>>(None, &votes_namespace, &vote_key) {
+                Ok(existing_votes) => {
+                    // Check if this voter already voted
+                    if existing_votes.iter().any(|v| v.voter == vote.voter) {
+                        warn!(
+                            "Vote overwritten: Voter {} already voted on {}",
+                            vote.voter, vote.proposal_id
+                        );
+                    }
+                    existing_votes
                 }
-                existing_votes
-            }
-            Err(StorageError::NotFound { .. }) => Vec::new(),
-            Err(e) => {
-                warn!("Error retrieving existing votes: {}", e);
-                return Err(StorageError::Other {
-                    details: format!("Failed to retrieve existing votes: {}", e),
-                });
-            }
-        };
+                Err(StorageError::NotFound { .. }) => Vec::new(),
+                Err(e) => {
+                    warn!("Error retrieving existing votes: {}", e);
+                    return Err(StorageError::Other {
+                        details: format!("Failed to retrieve existing votes: {}", e),
+                    });
+                }
+            };
 
         // Add the new vote
         votes.push(vote.clone());
@@ -301,10 +303,14 @@ impl FederationStorage {
             })?;
 
         // Update the cache
-        let mut cache = self.cache.lock()
-            .map_err(|_| StorageError::Other { details: "Cache mutex poisoned".into() })?;
+        let mut cache = self.cache.lock().map_err(|_| StorageError::Other {
+            details: "Cache mutex poisoned".into(),
+        })?;
 
-        let cache_votes = cache.votes.entry(vote.proposal_id.clone()).or_insert_with(Vec::new);
+        let cache_votes = cache
+            .votes
+            .entry(vote.proposal_id.clone())
+            .or_insert_with(Vec::new);
         if let Some(existing_index) = cache_votes.iter().position(|v| v.voter == vote.voter) {
             // Replace existing vote
             cache_votes[existing_index] = vote;
@@ -363,8 +369,9 @@ impl FederationStorage {
     ) -> StorageResult<FederatedProposal> {
         // First check the cache
         {
-            let cache = self.cache.lock()
-                .map_err(|_| StorageError::Other { details: "Cache mutex poisoned".into() })?;
+            let cache = self.cache.lock().map_err(|_| StorageError::Other {
+                details: "Cache mutex poisoned".into(),
+            })?;
 
             if let Some(proposal) = cache.proposals.get(proposal_id) {
                 return Ok(proposal.clone());
@@ -388,8 +395,9 @@ impl FederationStorage {
     ) -> StorageResult<Vec<FederatedVote>> {
         // First check the cache
         {
-            let cache = self.cache.lock()
-                .map_err(|_| StorageError::Other { details: "Cache mutex poisoned".into() })?;
+            let cache = self.cache.lock().map_err(|_| StorageError::Other {
+                details: "Cache mutex poisoned".into(),
+            })?;
 
             if let Some(votes) = cache.votes.get(proposal_id) {
                 return Ok(votes.clone());
@@ -486,7 +494,7 @@ fn current_timestamp_or_default(default: i64) -> i64 {
         Err(e) => {
             // First log the error
             warn!("Error getting timestamp, using default: {}", e);
-            
+
             // If storage::utils::now_with_default() would also fail,
             // use the provided default instead of the hardcoded one
             default

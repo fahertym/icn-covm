@@ -717,7 +717,8 @@ impl FileStorage {
             }
             std::io::ErrorKind::AlreadyExists => StorageError::SerializationError {
                 data_type: "VersionData".to_string(),
-                details: format!("Resource already exists: {}:{} (during {})",
+                details: format!(
+                    "Resource already exists: {}:{} (during {})",
                     namespace,
                     key.unwrap_or(""),
                     operation

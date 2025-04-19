@@ -183,7 +183,8 @@ mod vote_tests {
         let federation_storage = FederationStorage::new();
 
         // Create an admin identity with correct permissions
-        let admin_identity = Identity::new("admin".to_string(), None, "admin".to_string(), None).expect("Failed to create admin identity");
+        let admin_identity = Identity::new("admin".to_string(), None, "admin".to_string(), None)
+            .expect("Failed to create admin identity");
 
         // Create auth context with admin identity
         let mut auth = AuthContext::new("admin");
@@ -242,7 +243,9 @@ mod vote_tests {
         let federation_storage = FederationStorage::new();
 
         // Create a voter identity
-        let mut identity = Identity::new("test-voter".to_string(), None, "member".to_string(), None).expect("Failed to create voter identity");
+        let mut identity =
+            Identity::new("test-voter".to_string(), None, "member".to_string(), None)
+                .expect("Failed to create voter identity");
         identity.add_metadata("coop_id", "test-node"); // Match the creator cooperative ID
 
         // Save the proposal

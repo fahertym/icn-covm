@@ -341,9 +341,11 @@ impl crate::vm::VM {
                     self.stack.push(num);
                     return Ok(());
                 } else {
-                    return Err(crate::vm::VMError::TypeError(format!(
-                        "Metadata value for key '{}' is not a number: {}", key, value
-                    )));
+                    return Err(crate::vm::VMError::TypeMismatch {
+                        expected: "number".to_string(),
+                        found: "string".to_string(),
+                        operation: format!("GetCallerMetadata({})", key),
+                    });
                 }
             } else {
                 return Err(crate::vm::VMError::VariableNotFound(format!(

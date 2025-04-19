@@ -56,7 +56,29 @@
 To run the program, use the following command:
 
 ```bash
-cargo run
+cargo run -p icn-covm
 ```
 
 This will start the calculation and output the final result.
+
+## 📁 Project Structure
+
+Always work with the `crates/icn-covm/src/` directory which contains the working code, not the legacy `src/` directory at the root.
+
+## 🚫 Legacy Structure Cleanup
+
+- Do not create or reference a top-level `./src/` directory.
+- All source code lives under `crates/icn-covm/` and `crates/icn-ledger/`.
+- Always operate within the workspace crates declared in the root `Cargo.toml`.
+
+## 🧭 Cursor Code Navigation Rules
+
+- All VM logic: `crates/icn-covm/src/vm/`
+- CLI commands: `crates/icn-covm/src/cli/`
+- Governance logic: `crates/icn-covm/src/governance/`
+- Federation: `crates/icn-covm/src/federation/`
+- Typed values: `crates/icn-covm/src/typed.rs`
+
+Cursor agents should avoid:
+- Opening or writing to `./src/`
+- Creating duplicate main.rs or lib.rs files outside the crates

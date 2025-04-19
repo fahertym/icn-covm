@@ -1,5 +1,5 @@
-use std::time::{SystemTime, UNIX_EPOCH};
 use crate::storage::errors::{StorageError, StorageResult};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Type alias for standard timestamps (seconds since UNIX epoch)
 pub type Timestamp = u64;
@@ -9,8 +9,8 @@ pub type Timestamp = u64;
 pub fn now() -> StorageResult<Timestamp> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_err(|e| StorageError::TimeError { 
-            details: format!("Failed to get timestamp: {}", e) 
+        .map_err(|e| StorageError::TimeError {
+            details: format!("Failed to get timestamp: {}", e),
         })
         .map(|d| d.as_secs())
 }

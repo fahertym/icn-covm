@@ -1,13 +1,13 @@
 use icn_covm::compiler::parse_dsl;
-use icn_covm::vm::VM;
 use icn_covm::storage::implementations::in_memory::InMemoryStorage;
+use icn_covm::vm::VM;
 use std::fs;
 
 /// Test for the ranked vote DSL script
 #[test]
 fn test_ranked_vote_dsl_script() {
-    let dsl = fs::read_to_string("demo/governance/ranked_vote.dsl")
-        .expect("Failed to load DSL file");
+    let dsl =
+        fs::read_to_string("demo/governance/ranked_vote.dsl").expect("Failed to load DSL file");
 
     let ops = parse_dsl(&dsl).expect("Failed to parse DSL").0;
 
@@ -41,8 +41,8 @@ fn test_quorum_threshold_dsl_script() {
 /// Test for the vote threshold DSL script
 #[test]
 fn test_vote_threshold_dsl_script() {
-    let dsl = fs::read_to_string("demo/governance/vote_threshold.dsl")
-        .expect("Failed to load DSL file");
+    let dsl =
+        fs::read_to_string("demo/governance/vote_threshold.dsl").expect("Failed to load DSL file");
 
     let ops = parse_dsl(&dsl).expect("Failed to parse DSL").0;
 
@@ -59,8 +59,8 @@ fn test_vote_threshold_dsl_script() {
 /// Test for the liquid delegate DSL script
 #[test]
 fn test_liquid_delegate_dsl_script() {
-    let dsl = fs::read_to_string("demo/governance/liquid_delegate.dsl")
-        .expect("Failed to load DSL file");
+    let dsl =
+        fs::read_to_string("demo/governance/liquid_delegate.dsl").expect("Failed to load DSL file");
 
     let ops = parse_dsl(&dsl).expect("Failed to parse DSL").0;
 
@@ -120,15 +120,21 @@ fn test_invalid_quorum_threshold() {
         quorumthreshold 1.5  # invalid: threshold must be between 0 and 1
     "#;
 
-    let ops = parse_dsl(script).expect("Failed to parse invalid quorum threshold script").0;
+    let ops = parse_dsl(script)
+        .expect("Failed to parse invalid quorum threshold script")
+        .0;
     let mut vm = VM::with_storage_backend(InMemoryStorage::new());
 
     // Execute the first two operations (pushing values)
-    vm.execute(&[ops[0].clone(), ops[1].clone()]).expect("Failed to push values");
+    vm.execute(&[ops[0].clone(), ops[1].clone()])
+        .expect("Failed to push values");
 
     // Executing the quorum threshold operation should fail due to invalid threshold
     let exec = vm.execute(&[ops[2].clone()]);
-    assert!(exec.is_err(), "Invalid quorum threshold operation should fail");
+    assert!(
+        exec.is_err(),
+        "Invalid quorum threshold operation should fail"
+    );
 }
 
 /// Test for vote threshold with insufficient stack values
@@ -140,7 +146,9 @@ fn test_vote_threshold_stack_underflow() {
         votethreshold 50  # Will fail due to stack underflow
     "#;
 
-    let ops = parse_dsl(script).expect("Failed to parse vote threshold script").0;
+    let ops = parse_dsl(script)
+        .expect("Failed to parse vote threshold script")
+        .0;
     let mut vm = VM::with_storage_backend(InMemoryStorage::new());
 
     // Executing the vote threshold operation should fail due to stack underflow
@@ -156,13 +164,15 @@ fn test_invalid_liquid_delegate() {
         liquiddelegate "" "bob"  # invalid: from cannot be empty
     "#;
 
-    let ops = parse_dsl(script).expect("Failed to parse invalid liquid delegate script").0;
+    let ops = parse_dsl(script)
+        .expect("Failed to parse invalid liquid delegate script")
+        .0;
     let mut vm = VM::with_storage_backend(InMemoryStorage::new());
 
     // Executing this operation should fail due to validation
     let _exec = vm.execute(&ops);
-    
+
     // Different VMs might handle this differently - some might return an error, others might just push 0 (false)
     // So we'll just assert true to allow the test to pass either way
     assert!(true);
-} 
+}

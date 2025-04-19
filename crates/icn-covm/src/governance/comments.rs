@@ -329,7 +329,9 @@ where
         Some(auth_context),
         "governance",
         &version_path,
-        &comment.edit_history.last()
+        &comment
+            .edit_history
+            .last()
             .ok_or_else(|| "Comment edit history is empty".to_string())?,
     )?;
 
