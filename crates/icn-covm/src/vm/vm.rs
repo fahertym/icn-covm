@@ -16,17 +16,15 @@
 //! - Provides a solid foundation for extending VM capabilities
 //! - Facilitates both AST interpretation and bytecode execution
 
-use crate::identity::Identity;
 use crate::storage::auth::AuthContext;
-use crate::storage::errors::StorageResult;
 use crate::storage::traits::Storage;
 use crate::typed::TypedValue;
 use crate::vm::errors::VMError;
 use crate::vm::execution::{ExecutorOps, VMExecution};
 use crate::vm::memory::{MemoryScope, VMMemory};
 use crate::vm::stack::{StackOps, VMStack};
-use crate::vm::types::{CallFrame, LoopControl, Op, VMEvent};
-use icn_ledger::{DagLedger, DagNode, NodeData};
+use crate::vm::types::{LoopControl, Op, VMEvent};
+use icn_ledger::DagLedger;
 
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -215,34 +213,47 @@ where
         self.executor.rollback_fork_transaction()
     }
 
-    /// Get the top value from the stack without popping it
-    pub fn top(&self) -> Option<f64> {
+    /// Get the top value of the stack
+    pub fn top(&self) -> Option<&TypedValue> {
         self.stack.top()
     }
 
-    /// Pop a value from the stack
-    pub fn pop_one(&mut self, op_name: &str) -> Result<f64, VMError> {
+    /// Pop one value from the stack
+    pub fn pop_one(&mut self, op_name: &str) -> Result<TypedValue, VMError> {
         self.stack.pop(op_name)
     }
 
     /// Pop two values from the stack
-    pub fn pop_two(&mut self, op_name: &str) -> Result<(f64, f64), VMError> {
+    pub fn pop_two(&mut self, op_name: &str) -> Result<(TypedValue, TypedValue), VMError> {
         self.stack.pop_two(op_name)
     }
 
-    /// Set runtime parameters
+    /// Set parameters for the VM from a map of string values
     pub fn set_parameters(&mut self, parameters: HashMap<String, String>) -> Result<(), VMError> {
-        self.memory.set_parameters(parameters);
+        for (key, value) in parameters {
+            // Parse the value as a number, boolean, or keep as string
+            let typed_value = if value.eq_ignore_ascii_case("true") {
+                TypedValue::Boolean(true)
+            } else if value.eq_ignore_ascii_case("false") {
+                TypedValue::Boolean(false)
+            } else if let Ok(num) = value.parse::<f64>() {
+                TypedValue::Number(num)
+            } else {
+                TypedValue::String(value)
+            };
+            
+            self.memory.store_param(&key, typed_value);
+        }
         Ok(())
     }
 
-    /// Get a copy of the current stack
-    pub fn get_stack(&self) -> Vec<f64> {
+    /// Get the current stack as a vector
+    pub fn get_stack(&self) -> Vec<TypedValue> {
         self.stack.get_stack()
     }
 
-    /// Get a copy of the current memory map
-    pub fn get_memory_map(&self) -> HashMap<String, f64> {
+    /// Get the memory map
+    pub fn get_memory_map(&self) -> HashMap<String, TypedValue> {
         self.memory.get_memory_map()
     }
 
@@ -277,11 +288,13 @@ where
         let mut loop_control = LoopControl::None;
 
         for op in ops {
-            // Log trace information before executing the operation
-            self.log_trace(&op);
+            if self.trace_enabled {
+                self.log_trace(&op);
+            }
 
-            // Log explanation before executing the operation
-            self.log_explanation(&op);
+            if self.explain_enabled {
+                self.log_explanation(&op);
+            }
 
             // Check for simulation mode with storage operations
             match &op {
@@ -317,52 +330,44 @@ where
                 _ => {}
             }
 
-            // Execute the operation (existing match statement)
+            // Execute the operation
             match op {
                 Op::Push(value) => {
                     self.stack.push(value);
                 }
-
                 Op::Add => {
                     let (a, b) = self.stack.pop_two("Add")?;
-                    let result = self.executor.execute_arithmetic(a, b, "add")?;
+                    let result = self.executor.execute_arithmetic(&a, &b, "add")?;
                     self.stack.push(result);
                 }
-
                 Op::Sub => {
                     let (a, b) = self.stack.pop_two("Sub")?;
-                    let result = self.executor.execute_arithmetic(a, b, "sub")?;
+                    let result = self.executor.execute_arithmetic(&a, &b, "sub")?;
                     self.stack.push(result);
                 }
-
                 Op::Mul => {
                     let (a, b) = self.stack.pop_two("Mul")?;
-                    let result = self.executor.execute_arithmetic(a, b, "mul")?;
+                    let result = self.executor.execute_arithmetic(&a, &b, "mul")?;
                     self.stack.push(result);
                 }
-
                 Op::Div => {
                     let (a, b) = self.stack.pop_two("Div")?;
-                    let result = self.executor.execute_arithmetic(a, b, "div")?;
+                    let result = self.executor.execute_arithmetic(&a, &b, "div")?;
                     self.stack.push(result);
                 }
-
                 Op::Mod => {
                     let (a, b) = self.stack.pop_two("Mod")?;
-                    let result = self.executor.execute_arithmetic(a, b, "mod")?;
+                    let result = self.executor.execute_arithmetic(&a, &b, "mod")?;
                     self.stack.push(result);
                 }
-
                 Op::Store(name) => {
                     let value = self.stack.pop("Store")?;
                     self.memory.store(&name, value);
                 }
-
                 Op::Load(name) => {
                     let value = self.memory.load(&name)?;
                     self.stack.push(value);
                 }
-
                 Op::If {
                     condition,
                     then,
@@ -382,7 +387,6 @@ where
                         self.execute_inner(else_branch)?;
                     }
                 }
-
                 Op::Loop { count, body } => {
                     for _ in 0..count {
                         self.execute_inner(body.clone())?;
@@ -401,7 +405,6 @@ where
                         }
                     }
                 }
-
                 Op::While { condition, body } => {
                     loop {
                         // Evaluate condition
@@ -430,16 +433,13 @@ where
                         }
                     }
                 }
-
                 Op::Emit(message) => {
                     self.executor.emit(&message);
                 }
-
                 Op::Negate => {
                     let value = self.stack.pop("Negate")?;
                     self.stack.push(-value);
                 }
-
                 Op::AssertTop(expected) => {
                     let actual = self.stack.pop("AssertTop")?;
                     if (actual - expected).abs() > f64::EPSILON {
@@ -448,17 +448,14 @@ where
                         });
                     }
                 }
-
                 Op::DumpStack => {
                     self.executor.emit(&self.stack.format_stack());
                 }
-
                 Op::DumpMemory => {
                     // Format and emit the memory state
                     let memory_str = format!("{}", self.memory);
                     self.executor.emit(&memory_str);
                 }
-
                 Op::AssertMemory { key, expected } => {
                     let actual = self.memory.load(&key)?;
                     if (actual - expected).abs() > f64::EPSILON {
@@ -470,67 +467,54 @@ where
                         });
                     }
                 }
-
                 Op::Pop => {
                     self.stack.pop("Pop")?;
                 }
-
                 Op::Eq => {
                     let (a, b) = self.stack.pop_two("Eq")?;
-                    let result = self.executor.execute_comparison(a, b, "eq")?;
+                    let result = self.executor.execute_comparison(&a, &b, "eq")?;
                     self.stack.push(result);
                 }
-
                 Op::Gt => {
                     let (a, b) = self.stack.pop_two("Gt")?;
-                    let result = self.executor.execute_comparison(a, b, "gt")?;
+                    let result = self.executor.execute_comparison(&a, &b, "gt")?;
                     self.stack.push(result);
                 }
-
                 Op::Lt => {
                     let (a, b) = self.stack.pop_two("Lt")?;
-                    let result = self.executor.execute_comparison(a, b, "lt")?;
+                    let result = self.executor.execute_comparison(&a, &b, "lt")?;
                     self.stack.push(result);
                 }
-
                 Op::Not => {
                     let value = self.stack.pop("Not")?;
-                    let result = self.executor.execute_logical(value, "not")?;
+                    let result = self.executor.execute_logical(&value, "not")?;
                     self.stack.push(result);
                 }
-
                 Op::And => {
                     let (a, b) = self.stack.pop_two("And")?;
-                    let result = self.executor.execute_binary_logical(a, b, "and")?;
+                    let result = self.executor.execute_binary_logical(&a, &b, "and")?;
                     self.stack.push(result);
                 }
-
                 Op::Or => {
                     let (a, b) = self.stack.pop_two("Or")?;
-                    let result = self.executor.execute_binary_logical(a, b, "or")?;
+                    let result = self.executor.execute_binary_logical(&a, &b, "or")?;
                     self.stack.push(result);
                 }
-
                 Op::Dup => {
                     self.stack.dup("Dup")?;
                 }
-
                 Op::Swap => {
                     self.stack.swap("Swap")?;
                 }
-
                 Op::Over => {
                     self.stack.over("Over")?;
                 }
-
                 Op::Def { name, params, body } => {
                     self.memory.define_function(&name, params, body);
                 }
-
                 Op::Call(name) => {
                     self.execute_call(&name)?;
                 }
-
                 Op::Return => {
                     // If we're in a function, set the return value from the stack
                     if self.memory.in_function_call() {
@@ -540,11 +524,9 @@ where
                     // The actual return is handled in execute_call
                     break;
                 }
-
                 Op::Nop => {
                     // Do nothing
                 }
-
                 Op::Match {
                     value,
                     cases,
@@ -573,21 +555,17 @@ where
                         }
                     }
                 }
-
                 Op::Break => {
                     loop_control = LoopControl::Break;
                     break;
                 }
-
                 Op::Continue => {
                     loop_control = LoopControl::Continue;
                     break;
                 }
-
                 Op::EmitEvent { category, message } => {
                     self.executor.emit_event(&category, &message);
                 }
-
                 Op::AssertEqualStack { depth } => {
                     if !self.stack.assert_equal_stack(depth, "AssertEqualStack")? {
                         return Err(VMError::AssertionFailed {
@@ -595,28 +573,25 @@ where
                         });
                     }
                 }
-
                 Op::DumpState => {
                     // Format and emit both stack and memory state
                     self.executor.emit(&self.stack.format_stack());
                     let memory_str = format!("{}", self.memory);
                     self.executor.emit(&memory_str);
                 }
-
                 Op::CreateResource(resource) => {
                     self.executor.execute_create_resource(&resource)?;
                 }
-
                 Op::Mint {
                     resource,
                     account,
                     amount,
                     reason,
                 } => {
+                    let amount_value = TypedValue::Number(*amount);
                     self.executor
-                        .execute_mint(&resource, &account, amount, &reason)?;
+                        .execute_mint(&resource, &account, &amount_value, &reason)?;
                 }
-
                 Op::Transfer {
                     resource,
                     from,
@@ -624,48 +599,45 @@ where
                     amount,
                     reason,
                 } => {
+                    let amount_value = TypedValue::Number(*amount);
                     self.executor
-                        .execute_transfer(&resource, &from, &to, amount, &reason)?;
+                        .execute_transfer(&resource, &from, &to, &amount_value, &reason)?;
                 }
-
                 Op::Burn {
                     resource,
                     account,
                     amount,
                     reason,
                 } => {
+                    let amount_value = TypedValue::Number(*amount);
                     self.executor
-                        .execute_burn(&resource, &account, amount, &reason)?;
+                        .execute_burn(&resource, &account, &amount_value, &reason)?;
                 }
-
                 Op::Balance { resource, account } => {
                     let balance = self.executor.execute_balance(&resource, &account)?;
                     self.stack.push(balance);
                 }
-
                 Op::IncrementReputation {
                     identity_id,
                     amount,
                     ..
                 } => {
+                    let amount_value = amount.map(|a| TypedValue::Number(a));
                     self.executor
-                        .execute_increment_reputation(&identity_id, amount)?;
+                        .execute_increment_reputation(&identity_id, amount_value.as_ref())?;
                 }
-
                 Op::StoreP(key) => {
                     let value = self.stack.pop("StoreP")?;
-                    self.log_storage_operation("StoreP", &key, value);
-                    self.executor.execute_store_p(&key, value)?;
+                    self.log_storage_operation("StoreP", &key, &value);
+                    self.executor.execute_store_p(&key, &value)?;
                 }
-
                 Op::LoadP(key) => {
                     let value = self
                         .executor
                         .execute_load_p(&key, self.missing_key_behavior)?;
-                    self.log_storage_operation("LoadP", &key, value);
+                    self.log_storage_operation("LoadP", &key, &value);
                     self.stack.push(value);
                 }
-
                 // For other operations not yet implemented, add placeholders
                 _ => {
                     // Try to handle the operation with the governance module
@@ -820,13 +792,20 @@ where
         }
     }
 
-    /// Log storage operation details if verbose storage tracing is enabled
-    fn log_storage_operation(&mut self, operation: &str, key: &str, value: f64) {
+    /// Log a storage operation with tracing information
+    fn log_storage_operation(&mut self, operation: &str, key: &str, value: &TypedValue) {
         if self.verbose_storage_trace {
-            self.executor.emit(&format!(
-                "[STORAGE] {} key: '{}', value: {}",
-                operation, key, value
-            ));
+            let value_str = match value {
+                TypedValue::Number(n) => n.to_string(),
+                TypedValue::Boolean(b) => b.to_string(),
+                TypedValue::String(s) => format!("\"{}\"", s),
+                TypedValue::Null => "null".to_string(),
+            };
+            
+            self.executor.emit_event(
+                "storage_trace",
+                &format!("{} {} = {}", operation, key, value_str),
+            );
         }
     }
 
@@ -936,37 +915,45 @@ pub mod tests {
     #[test]
     fn test_basic_ops() {
         let mut vm = VM::<InMemoryStorage>::new();
-
-        // Create a simple program with arithmetic and stack operations
-        let program = vec![
-            Op::Push(5.0),
-            Op::Push(3.0),
+        
+        let ops = vec![
+            Op::Push(TypedValue::Number(5.0)),
+            Op::Push(TypedValue::Number(3.0)),
             Op::Add,
-            Op::Push(2.0),
+            Op::Push(TypedValue::Number(2.0)),
             Op::Mul,
         ];
-
-        vm.execute(&program).unwrap();
-
-        assert_eq!(vm.stack.top(), Some(16.0));
+        
+        assert!(vm.execute(&ops).is_ok());
+        
+        let stack_value = vm.stack.top().unwrap();
+        if let TypedValue::Number(n) = stack_value {
+            assert!((n - 16.0).abs() < f64::EPSILON);
+        } else {
+            panic!("Expected number on stack");
+        }
     }
 
     #[test]
     fn test_memory_operations() {
         let mut vm = VM::<InMemoryStorage>::new();
-
-        // Create a program that uses memory operations
-        let program = vec![
-            Op::Push(42.0),
+        
+        let ops = vec![
+            Op::Push(TypedValue::Number(42.0)),
             Op::Store("answer".to_string()),
-            Op::Push(7.0),
+            Op::Push(TypedValue::Number(7.0)),
             Op::Load("answer".to_string()),
-            Op::Add,
+            Op::Mul,
         ];
-
-        vm.execute(&program).unwrap();
-
-        assert_eq!(vm.stack.top(), Some(49.0));
+        
+        assert!(vm.execute(&ops).is_ok());
+        
+        let stack_value = vm.stack.top().unwrap();
+        if let TypedValue::Number(n) = stack_value {
+            assert!((n - 294.0).abs() < f64::EPSILON);
+        } else {
+            panic!("Expected number on stack");
+        }
     }
 
     #[test]

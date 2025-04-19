@@ -138,6 +138,19 @@ impl VMMemory {
     pub fn set_string_metadata(&mut self, key: &str, value: String) {
         self.string_metadata.insert(key.to_string(), value);
     }
+    
+    /// Store a parameter as a TypedValue
+    pub fn store_param(&mut self, key: &str, value: TypedValue) {
+        // Convert TypedValue to string representation for parameters
+        let string_value = match &value {
+            TypedValue::Number(n) => n.to_string(),
+            TypedValue::Boolean(b) => b.to_string(),
+            TypedValue::String(s) => s.clone(),
+            TypedValue::Null => "null".to_string(),
+        };
+        
+        self.parameters.insert(key.to_string(), string_value);
+    }
 }
 
 impl MemoryScope for VMMemory {

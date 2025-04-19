@@ -602,13 +602,13 @@ impl fmt::Display for Op {
 #[derive(Clone, Debug)]
 pub struct CallFrame {
     /// Local memory for function scope
-    pub memory: HashMap<String, f64>,
+    pub memory: HashMap<String, TypedValue>,
 
     /// Function parameters
-    pub params: HashMap<String, f64>,
+    pub params: HashMap<String, TypedValue>,
 
     /// Return value
-    pub return_value: Option<f64>,
+    pub return_value: Option<TypedValue>,
 
     /// Function name (for debugging)
     pub function_name: String,

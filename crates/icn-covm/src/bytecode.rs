@@ -11,9 +11,16 @@
 //! The bytecode system improves performance for repeated execution by converting
 //! the nested AST representation into a flat, linear sequence of instructions.
 
+use crate::context::{OpExecutionContext, OpExecutor};
+use crate::federation::FederationName;
+use crate::identity::{IdentityId, IdentityName};
+use crate::resource::{ResourceId, ResourceName};
 use crate::storage::auth::AuthContext;
-use crate::storage::traits::Storage;
-use crate::vm::errors::VMError;
+use crate::storage::error::{ResourceError, StorageError, VMError};
+use crate::storage::types::Key;
+use crate::storage::Storage;
+use crate::vm::types::{LoopControlType, OperandType, TypedValue};
+use crate::vm::vm::{LogLevel, VMStatus};
 use crate::vm::types::{CallFrame, LoopControl, Op, VMEvent};
 use crate::vm::VM;
 use serde::{Deserialize, Serialize};
@@ -28,7 +35,7 @@ use crate::vm::{ExecutorOps, MemoryScope, StackOps};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum BytecodeOp {
     /// Push a value onto the stack
-    Push(f64),
+    Push(TypedValue),
 
     /// Store a value from the stack into memory
     Store(String),
@@ -70,10 +77,10 @@ pub enum BytecodeOp {
     Return,
 
     /// Assert that top of stack matches expected value
-    AssertTop(f64),
+    AssertTop(TypedValue),
 
     /// Assert that a memory value matches expected value
-    AssertMemory(String, f64),
+    AssertMemory(String, TypedValue),
 
     /// Assert that top two stack items are equal
     AssertEqualStack(usize),
@@ -180,7 +187,7 @@ pub enum BytecodeOp {
         account: String,
 
         /// Amount to mint
-        amount: f64,
+        amount: TypedValue,
 
         /// Optional reason for minting
         reason: Option<String>,
@@ -198,7 +205,7 @@ pub enum BytecodeOp {
         to: String,
 
         /// Amount to transfer
-        amount: f64,
+        amount: TypedValue,
 
         /// Optional reason for transfer
         reason: Option<String>,
@@ -213,7 +220,7 @@ pub enum BytecodeOp {
         account: String,
 
         /// Amount to burn
-        amount: f64,
+        amount: TypedValue,
 
         /// Optional reason for burning
         reason: Option<String>,
@@ -244,7 +251,7 @@ pub enum BytecodeOp {
         identity_id: String,
 
         /// The amount to increment by (default 1.0)
-        amount: Option<f64>,
+        amount: Option<TypedValue>,
 
         /// The reason for the reputation increment
         reason: Option<String>,
@@ -439,7 +446,7 @@ impl BytecodeCompiler {
     fn compile_ops(&mut self, ops: &[Op]) {
         for op in ops {
             match op {
-                Op::Push(val) => self.program.instructions.push(BytecodeOp::Push(*val)),
+                Op::Push(val) => self.program.instructions.push(BytecodeOp::Push(val.clone())),
                 Op::Add => self.program.instructions.push(BytecodeOp::Add),
                 Op::Sub => self.program.instructions.push(BytecodeOp::Sub),
                 Op::Mul => self.program.instructions.push(BytecodeOp::Mul),
@@ -482,11 +489,11 @@ impl BytecodeCompiler {
                 Op::DumpStack => self.program.instructions.push(BytecodeOp::Return),
                 Op::DumpMemory => self.program.instructions.push(BytecodeOp::Return),
                 Op::DumpState => self.program.instructions.push(BytecodeOp::Return),
-                Op::AssertTop(val) => self.program.instructions.push(BytecodeOp::AssertTop(*val)),
+                Op::AssertTop(val) => self.program.instructions.push(BytecodeOp::AssertTop(val.clone())),
                 Op::AssertMemory { key, expected } => self
                     .program
                     .instructions
-                    .push(BytecodeOp::AssertMemory(key.clone(), *expected)),
+                    .push(BytecodeOp::AssertMemory(key.clone(), expected.clone())),
                 Op::AssertEqualStack { depth } => self
                     .program
                     .instructions
@@ -591,7 +598,7 @@ impl BytecodeCompiler {
                 } => self.program.instructions.push(BytecodeOp::Mint {
                     resource: resource.clone(),
                     account: account.clone(),
-                    amount: *amount,
+                    amount: TypedValue::Number(*amount),
                     reason: reason.clone(),
                 }),
                 Op::Transfer {
@@ -604,7 +611,7 @@ impl BytecodeCompiler {
                     resource: resource.clone(),
                     from: from.clone(),
                     to: to.clone(),
-                    amount: *amount,
+                    amount: TypedValue::Number(*amount),
                     reason: reason.clone(),
                 }),
                 Op::Burn {
@@ -615,7 +622,7 @@ impl BytecodeCompiler {
                 } => self.program.instructions.push(BytecodeOp::Burn {
                     resource: resource.clone(),
                     account: account.clone(),
-                    amount: *amount,
+                    amount: TypedValue::Number(*amount),
                     reason: reason.clone(),
                 }),
                 Op::Balance { resource, account } => {
@@ -625,17 +632,19 @@ impl BytecodeCompiler {
                     })
                 }
                 Op::VerifySignature => self.program.instructions.push(BytecodeOp::VerifySignature),
-                Op::GetIdentity(_identity_id) => {
-                    // Return NotImplemented error for now
-                    self.program.instructions.push(BytecodeOp::Return);
+                Op::GetIdentity(identity_id) => {
+                    self.program.instructions.push(BytecodeOp::GetIdentity(identity_id.clone()));
                 }
                 Op::RequireValidSignature {
                     voter,
                     message,
                     signature,
                 } => {
-                    // Return NotImplemented error for now
-                    self.program.instructions.push(BytecodeOp::Return);
+                    self.program.instructions.push(BytecodeOp::RequireValidSignature {
+                        voter: voter.clone(),
+                        message: message.clone(),
+                        signature: signature.clone(),
+                    });
                 }
                 Op::IncrementReputation {
                     identity_id,
@@ -646,51 +655,55 @@ impl BytecodeCompiler {
                         .instructions
                         .push(BytecodeOp::IncrementReputation {
                             identity_id: identity_id.clone(),
-                            amount: amount.clone(),
+                            amount: amount.as_ref().map(|a| TypedValue::Number(*a)),
                             reason: reason.clone(),
                         });
                 }
                 Op::IfPassed(block) => {
-                    self.compile_ops(block);
+                    // Recursively compile the block operations
+                    let mut compiled_block = Vec::new();
+                    for op in block {
+                        match op {
+                            Op::Push(val) => compiled_block.push(BytecodeOp::Push(val.clone())),
+                            // Add other cases as needed
+                            _ => {
+                                // Handle the case as a no-op or emit a warning
+                                compiled_block.push(BytecodeOp::Nop);
+                            }
+                        }
+                    }
+                    self.program.instructions.push(BytecodeOp::IfPassed(compiled_block));
                 }
                 Op::Else(block) => {
-                    self.compile_ops(block);
+                    // Recursively compile the block operations
+                    let mut compiled_block = Vec::new();
+                    for op in block {
+                        match op {
+                            Op::Push(val) => compiled_block.push(BytecodeOp::Push(val.clone())),
+                            // Add other cases as needed
+                            _ => {
+                                // Handle the case as a no-op or emit a warning
+                                compiled_block.push(BytecodeOp::Nop);
+                            }
+                        }
+                    }
+                    self.program.instructions.push(BytecodeOp::Else(compiled_block));
                 }
                 Op::Macro(name) => {
                     // Macros are handled separately during parsing
                     // Just emit an event for debugging
-                    let event = crate::vm::VMEvent {
-                        category: "macro".to_string(),
-                        message: format!("Macro '{}' execution not implemented", name),
-                        timestamp: crate::storage::utils::now_with_default(),
-                    };
-                    self.program.instructions.push(BytecodeOp::Nop);
+                    self.program.instructions.push(BytecodeOp::Macro(name.clone()));
                 }
                 Op::RequireRole(role) => {
-                    self.program.instructions.push(BytecodeOp::Nop);
-                    // Not directly implemented in bytecode yet, just log as an event
-                    self.program.instructions.push(BytecodeOp::EmitEvent(
-                        "governance".to_string(),
-                        format!("Require role: {}", role),
-                    ));
+                    self.program.instructions.push(BytecodeOp::RequireRole(role.clone()));
                 }
 
                 Op::MinDeliberation(duration) => {
-                    self.program.instructions.push(BytecodeOp::Nop);
-                    // Not directly implemented in bytecode yet, just log as an event
-                    self.program.instructions.push(BytecodeOp::EmitEvent(
-                        "governance".to_string(),
-                        format!("Minimum deliberation period: {:?}", duration),
-                    ));
+                    self.program.instructions.push(BytecodeOp::MinDeliberation(*duration));
                 }
 
                 Op::ExpiresIn(duration) => {
-                    self.program.instructions.push(BytecodeOp::Nop);
-                    // Not directly implemented in bytecode yet, just log as an event
-                    self.program.instructions.push(BytecodeOp::EmitEvent(
-                        "governance".to_string(),
-                        format!("Expires in: {:?}", duration),
-                    ));
+                    self.program.instructions.push(BytecodeOp::ExpiresIn(*duration));
                 }
             }
         }
@@ -781,7 +794,7 @@ impl BytecodeCompiler {
             // Push the loop counter (kept on stack instead of memory for speed)
             self.program
                 .instructions
-                .push(BytecodeOp::Push(count as f64));
+                .push(BytecodeOp::Push(TypedValue::Number(count as f64)));
 
             // Loop start
             let loop_start = self.program.instructions.len();
@@ -790,7 +803,7 @@ impl BytecodeCompiler {
             self.program.instructions.push(BytecodeOp::Dup);
 
             // Check if counter > 0
-            self.program.instructions.push(BytecodeOp::Push(0.0));
+            self.program.instructions.push(BytecodeOp::Push(TypedValue::Number(0.0)));
             self.program.instructions.push(BytecodeOp::Gt);
 
             // Exit loop if counter <= 0
@@ -801,7 +814,7 @@ impl BytecodeCompiler {
             self.compile_ops(body);
 
             // Decrement counter that's still on stack
-            self.program.instructions.push(BytecodeOp::Push(1.0));
+            self.program.instructions.push(BytecodeOp::Push(TypedValue::Number(1.0)));
             self.program.instructions.push(BytecodeOp::Sub);
 
             // Jump back to loop start
@@ -823,7 +836,7 @@ impl BytecodeCompiler {
         // Push the loop counter
         self.program
             .instructions
-            .push(BytecodeOp::Push(count as f64));
+            .push(BytecodeOp::Push(TypedValue::Number(count as f64)));
 
         // Store the counter in a temporary variable
         let counter_var = format!("__loop_counter_{}", self.program.instructions.len());
@@ -838,7 +851,7 @@ impl BytecodeCompiler {
         self.program
             .instructions
             .push(BytecodeOp::Load(counter_var.clone()));
-        self.program.instructions.push(BytecodeOp::Push(0.0));
+        self.program.instructions.push(BytecodeOp::Push(TypedValue::Number(0.0)));
         self.program.instructions.push(BytecodeOp::Gt);
 
         // Exit the loop if counter <= 0
@@ -852,7 +865,7 @@ impl BytecodeCompiler {
         self.program
             .instructions
             .push(BytecodeOp::Load(counter_var.clone()));
-        self.program.instructions.push(BytecodeOp::Push(1.0));
+        self.program.instructions.push(BytecodeOp::Push(TypedValue::Number(1.0)));
         self.program.instructions.push(BytecodeOp::Sub);
         self.program
             .instructions
@@ -886,7 +899,7 @@ impl BytecodeCompiler {
     }
 
     /// Compile a match statement
-    fn compile_match(&mut self, value: &[Op], cases: &[(f64, Vec<Op>)], default: &Option<Vec<Op>>) {
+    fn compile_match(&mut self, value: &[Op], cases: &[(TypedValue, Vec<Op>)], default: &Option<Vec<Op>>) {
         // Compile the value expression
         self.compile_ops(value);
 
@@ -907,7 +920,7 @@ impl BytecodeCompiler {
                 .push(BytecodeOp::Load(match_var.clone()));
 
             // Compare with the case value
-            self.program.instructions.push(BytecodeOp::Push(*case_val));
+            self.program.instructions.push(BytecodeOp::Push(case_val.clone()));
             self.program.instructions.push(BytecodeOp::Eq);
 
             // Skip this case if not equal
@@ -984,7 +997,7 @@ where
     pub fn execute_instruction(&mut self, op: &BytecodeOp) -> Result<(), VMError> {
         match op {
             BytecodeOp::Push(value) => {
-                self.vm.stack.push(*value);
+                self.vm.stack.push(value.clone());
                 self.pc += 1;
                 Ok(())
             }
@@ -1002,28 +1015,28 @@ where
             }
             BytecodeOp::Add => {
                 let (a, b) = self.vm.stack.pop_two("Add")?;
-                let result = self.vm.executor.execute_arithmetic(a, b, "add")?;
+                let result = self.vm.executor.execute_arithmetic(&a, &b, "add")?;
                 self.vm.stack.push(result);
                 self.pc += 1;
                 Ok(())
             }
             BytecodeOp::Sub => {
                 let (a, b) = self.vm.stack.pop_two("Sub")?;
-                let result = self.vm.executor.execute_arithmetic(a, b, "sub")?;
+                let result = self.vm.executor.execute_arithmetic(&a, &b, "sub")?;
                 self.vm.stack.push(result);
                 self.pc += 1;
                 Ok(())
             }
             BytecodeOp::Mul => {
                 let (a, b) = self.vm.stack.pop_two("Mul")?;
-                let result = self.vm.executor.execute_arithmetic(a, b, "mul")?;
+                let result = self.vm.executor.execute_arithmetic(&a, &b, "mul")?;
                 self.vm.stack.push(result);
                 self.pc += 1;
                 Ok(())
             }
             BytecodeOp::Div => {
                 let (a, b) = self.vm.stack.pop_two("Div")?;
-                let result = self.vm.executor.execute_arithmetic(a, b, "div")?;
+                let result = self.vm.executor.execute_arithmetic(&a, &b, "div")?;
                 self.vm.stack.push(result);
                 self.pc += 1;
                 Ok(())
@@ -1053,7 +1066,7 @@ where
             }
             BytecodeOp::JumpIfZero(addr) => {
                 let val = self.vm.stack.pop("JumpIfZero")?;
-                if val == 0.0 {
+                if val.is_falsey() {
                     self.pc = *addr;
                 } else {
                     self.pc += 1;
@@ -1095,56 +1108,56 @@ where
             }
             BytecodeOp::Eq => {
                 let (a, b) = self.vm.stack.pop_two("Eq")?;
-                let result = self.vm.executor.execute_comparison(a, b, "eq")?;
+                let result = self.vm.executor.execute_comparison(&a, &b, "eq")?;
                 self.vm.stack.push(result);
                 self.pc += 1;
                 Ok(())
             }
             BytecodeOp::Gt => {
                 let (a, b) = self.vm.stack.pop_two("Gt")?;
-                let result = self.vm.executor.execute_comparison(a, b, "gt")?;
+                let result = self.vm.executor.execute_comparison(&a, &b, "gt")?;
                 self.vm.stack.push(result);
                 self.pc += 1;
                 Ok(())
             }
             BytecodeOp::Lt => {
                 let (a, b) = self.vm.stack.pop_two("Lt")?;
-                let result = self.vm.executor.execute_comparison(a, b, "lt")?;
+                let result = self.vm.executor.execute_comparison(&a, &b, "lt")?;
                 self.vm.stack.push(result);
                 self.pc += 1;
                 Ok(())
             }
             BytecodeOp::Negate => {
                 let a = self.vm.stack.pop("Negate")?;
-                let result = self.vm.executor.execute_logical(a, "not")?;
+                let result = self.vm.executor.execute_logical(&a, "not")?;
                 self.vm.stack.push(result);
                 self.pc += 1;
                 Ok(())
             }
             BytecodeOp::And => {
                 let (a, b) = self.vm.stack.pop_two("And")?;
-                let result = self.vm.executor.execute_binary_logical(a, b, "and")?;
+                let result = self.vm.executor.execute_binary_logical(&a, &b, "and")?;
                 self.vm.stack.push(result);
                 self.pc += 1;
                 Ok(())
             }
             BytecodeOp::Or => {
                 let (a, b) = self.vm.stack.pop_two("Or")?;
-                let result = self.vm.executor.execute_binary_logical(a, b, "or")?;
+                let result = self.vm.executor.execute_binary_logical(&a, &b, "or")?;
                 self.vm.stack.push(result);
                 self.pc += 1;
                 Ok(())
             }
             BytecodeOp::Not => {
                 let a = self.vm.stack.pop("Not")?;
-                let result = self.vm.executor.execute_logical(a, "not")?;
+                let result = self.vm.executor.execute_logical(&a, "not")?;
                 self.vm.stack.push(result);
                 self.pc += 1;
                 Ok(())
             }
             BytecodeOp::Mod => {
                 let (a, b) = self.vm.stack.pop_two("Mod")?;
-                let result = self.vm.executor.execute_arithmetic(a, b, "mod")?;
+                let result = self.vm.executor.execute_arithmetic(&a, &b, "mod")?;
                 self.vm.stack.push(result);
                 self.pc += 1;
                 Ok(())
@@ -1162,7 +1175,7 @@ where
             } => {
                 self.vm
                     .executor
-                    .execute_mint(resource, account, *amount, reason)?;
+                    .execute_mint(resource, account, amount, reason)?;
                 self.pc += 1;
                 Ok(())
             }
@@ -1175,7 +1188,7 @@ where
             } => {
                 self.vm
                     .executor
-                    .execute_transfer(resource, from, to, *amount, reason)?;
+                    .execute_transfer(resource, from, to, amount, reason)?;
                 self.pc += 1;
                 Ok(())
             }
@@ -1187,13 +1200,13 @@ where
             } => {
                 self.vm
                     .executor
-                    .execute_burn(resource, account, *amount, reason)?;
+                    .execute_burn(resource, account, amount, reason)?;
                 self.pc += 1;
                 Ok(())
             }
             BytecodeOp::Balance { resource, account } => {
                 let balance = self.vm.executor.execute_balance(resource, account)?;
-                self.vm.stack.push(balance);
+                self.vm.stack.push(TypedValue::Number(balance));
                 self.pc += 1;
                 Ok(())
             }
@@ -1205,28 +1218,26 @@ where
             }
             BytecodeOp::StoreStorage(key) => {
                 let value = self.vm.stack.pop("StoreStorage")?;
-                self.vm.executor.execute_store_p(key, value)?;
+                self.vm.executor.execute_store_p(key, &value)?;
                 self.pc += 1;
                 Ok(())
             }
             BytecodeOp::LoadStorage(key) => {
-                let value = self
-                    .vm
-                    .executor
-                    .execute_load_p(key, self.vm.missing_key_behavior)?;
+                let value = self.vm.executor.execute_load_p(key, self.vm.missing_key_behavior)?;
                 self.vm.stack.push(value);
                 self.pc += 1;
                 Ok(())
             }
             BytecodeOp::Nop => {
                 // No operation, do nothing
+                self.pc += 1;
                 Ok(())
             }
             BytecodeOp::RequireRole(role) => {
                 // Check if the current user has the required role
                 if let Some(auth) = self.vm.get_auth_context() {
-                    if !auth.has_role("global", &role)
-                        && !auth.has_role(&self.vm.executor.namespace, &role)
+                    if !auth.has_role("global", role)
+                        && !auth.has_role(&self.vm.executor.namespace, role)
                     {
                         return Err(VMError::PermissionDenied {
                             user: auth.user_id().to_string(),
@@ -1237,6 +1248,7 @@ where
                 } else {
                     return Err(VMError::IdentityContextUnavailable);
                 }
+                self.pc += 1;
                 Ok(())
             }
             BytecodeOp::MinDeliberation(duration) => {
@@ -1245,6 +1257,7 @@ where
                     "governance",
                     &format!("Minimum deliberation period: {:?}", duration),
                 );
+                self.pc += 1;
                 Ok(())
             }
             BytecodeOp::ExpiresIn(duration) => {
@@ -1252,6 +1265,22 @@ where
                 self.vm
                     .executor
                     .emit_event("governance", &format!("Expires in: {:?}", duration));
+                self.pc += 1;
+                Ok(())
+            }
+            BytecodeOp::IncrementReputation {
+                identity_id,
+                amount,
+                reason,
+            } => {
+                self.program
+                    .instructions
+                    .push(BytecodeOp::IncrementReputation {
+                        identity_id: identity_id.clone(),
+                        amount: amount.as_ref().map(|a| TypedValue::Number(*a)),
+                        reason: reason.clone(),
+                    });
+                self.pc += 1;
                 Ok(())
             }
             _ => {

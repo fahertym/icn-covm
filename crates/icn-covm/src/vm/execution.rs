@@ -54,7 +54,7 @@ where
         &mut self,
         resource: &str,
         account: &str,
-        amount: f64,
+        amount: &TypedValue,
         reason: &Option<String>,
     ) -> Result<(), VMError>;
 
@@ -64,7 +64,7 @@ where
         resource: &str,
         from: &str,
         to: &str,
-        amount: f64,
+        amount: &TypedValue,
         reason: &Option<String>,
     ) -> Result<(), VMError>;
 
@@ -73,29 +73,29 @@ where
         &mut self,
         resource: &str,
         account: &str,
-        amount: f64,
+        amount: &TypedValue,
         reason: &Option<String>,
     ) -> Result<(), VMError>;
 
     /// Execute a balance query operation
-    fn execute_balance(&mut self, resource: &str, account: &str) -> Result<f64, VMError>;
+    fn execute_balance(&mut self, resource: &str, account: &str) -> Result<TypedValue, VMError>;
 
     /// Execute increment reputation for an identity
     fn execute_increment_reputation(
         &mut self,
         identity_id: &str,
-        amount: Option<f64>,
+        amount: Option<&TypedValue>,
     ) -> Result<(), VMError>;
 
     /// Execute a storage operation with the given key/value
-    fn execute_store_p(&mut self, key: &str, value: f64) -> Result<(), VMError>;
+    fn execute_store_p(&mut self, key: &str, value: &TypedValue) -> Result<(), VMError>;
 
     /// Load a value from storage
     fn execute_load_p(
         &mut self,
         key: &str,
         missing_key_behavior: MissingKeyBehavior,
-    ) -> Result<f64, VMError>;
+    ) -> Result<TypedValue, VMError>;
 
     /// Fork the VM for transaction support
     fn fork(&mut self) -> Result<Self, VMError>
@@ -265,12 +265,33 @@ where
         self.auth_context.as_ref()
     }
 
+    /// Execute a resource creation operation
+    fn execute_create_resource(&mut self, resource: &str) -> Result<(), VMError> {
+        // Create the resource and emit event
+        self.storage_operation("create_resource", |backend, auth, namespace| {
+            backend.create_resource(auth, namespace, resource)
+        })?;
+
+        // Create and log an event for resource creation
+        let event = VMEvent {
+            category: "economic".to_string(),
+            message: format!("Resource created: {}", resource),
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        };
+        self.events.push(event);
+
+        Ok(())
+    }
+
     /// Execute a minting operation
     fn execute_mint(
         &mut self,
         resource: &str,
         account: &str,
-        amount: f64,
+        amount: &TypedValue,
         reason: &Option<String>,
     ) -> Result<(), VMError> {
         let reason_str = reason
@@ -284,7 +305,7 @@ where
                     namespace,
                     resource,
                     account,
-                    amount as u64,
+                    amount.as_number().unwrap() as u64,
                     &reason_str,
                 )
                 .map(|(_, event_opt)| {
@@ -317,7 +338,7 @@ where
         resource: &str,
         from: &str,
         to: &str,
-        amount: f64,
+        amount: &TypedValue,
         reason: &Option<String>,
     ) -> Result<(), VMError> {
         let reason_str = reason
@@ -332,7 +353,7 @@ where
                     resource,
                     from,
                     to,
-                    amount as u64,
+                    amount.as_number().unwrap() as u64,
                     &reason_str,
                 )
                 .map(|(_, event_opt)| {
@@ -364,7 +385,7 @@ where
         &mut self,
         resource: &str,
         account: &str,
-        amount: f64,
+        amount: &TypedValue,
         reason: &Option<String>,
     ) -> Result<(), VMError> {
         let reason_str = reason
@@ -378,7 +399,7 @@ where
                     namespace,
                     resource,
                     account,
-                    amount as u64,
+                    amount.as_number().unwrap() as u64,
                     &reason_str,
                 )
                 .map(|(_, event_opt)| {
@@ -406,7 +427,7 @@ where
     }
 
     /// Execute a balance query operation
-    fn execute_balance(&mut self, resource: &str, account: &str) -> Result<f64, VMError> {
+    fn execute_balance(&mut self, resource: &str, account: &str) -> Result<TypedValue, VMError> {
         self.storage_operation("get_balance", |backend, auth, namespace| {
             backend
                 .get_balance(auth, namespace, resource, account)
@@ -431,39 +452,26 @@ where
             if let Some(event) = event_opt {
                 self.events.push(event);
             }
-            // Return the balance
-            balance
+            // Return the balance as a TypedValue
+            TypedValue::Number(balance)
         })
-    }
-
-    /// Execute a resource creation operation
-    fn execute_create_resource(&mut self, resource: &str) -> Result<(), VMError> {
-        // Create the resource and emit event
-        self.storage_operation("create_resource", |backend, auth, namespace| {
-            backend.create_resource(auth, namespace, resource)
-        })?;
-
-        // Create and log an event for resource creation
-        let event = VMEvent {
-            category: "economic".to_string(),
-            message: format!("Resource created: {}", resource),
-            timestamp: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
-        };
-        self.events.push(event);
-
-        Ok(())
     }
 
     /// Execute increment reputation for an identity
     fn execute_increment_reputation(
         &mut self,
         identity_id: &str,
-        amount: Option<f64>,
+        amount: Option<&TypedValue>,
     ) -> Result<(), VMError> {
-        let amount_val = amount.unwrap_or(1.0) as u64;
+        // Default to 1.0 if no amount is provided, otherwise extract numeric value
+        let amount_val = match amount {
+            Some(value) => value.as_number().map_err(|_| VMError::TypeMismatch {
+                expected: "number".to_string(),
+                found: value.type_name().to_string(),
+                operation: "increment_reputation".to_string(),
+            })? as u64,
+            None => 1, // Default to 1 if no amount provided
+        };
 
         // Prepare the payload
         let payload = format!(
@@ -477,11 +485,11 @@ where
         // If we have a storage backend, persist the reputation
         if self.storage_backend.is_some() {
             // Get current reputation
-            let current = self
+            let current_rep = self
                 .storage_operation("get_reputation", |backend, auth, namespace| {
                     backend
                         .get_reputation(auth, namespace, identity_id)
-                        .map(|(rep, event_opt)| {
+                        .map(|(current_rep, event_opt)| {
                             // Log any event generated
                             if let Some(storage_event) = event_opt {
                                 // Create VM event
@@ -490,26 +498,29 @@ where
                                     message: format!("get_reputation: {}", storage_event.details),
                                     timestamp: storage_event.timestamp,
                                 };
-                                // Return the reputation value and event
-                                (rep, Some(vm_event))
+                                // Return current reputation and event
+                                (current_rep, Some(vm_event))
                             } else {
-                                (rep, None)
+                                (current_rep, None)
                             }
                         })
                 })
-                .map(|(rep, event_opt)| {
+                .map(|(current_rep, event_opt)| {
                     // Log the event if one was generated
                     if let Some(event) = event_opt {
                         self.events.push(event);
                     }
                     // Return the reputation value
-                    rep
+                    current_rep
                 })?;
 
-            // Update reputation
+            // Set the new reputation value
             self.storage_operation("set_reputation", |backend, auth, namespace| {
+                // Convert amount_val to f64 for set_reputation
+                let amount_val_f64 = amount_val as f64;
+                let new_value = current_rep + amount_val_f64;
                 backend
-                    .set_reputation(auth, namespace, identity_id, current + amount_val)
+                    .set_reputation(auth, namespace, identity_id, new_value)
                     .map(|(_, event_opt)| {
                         // Log any event generated
                         if let Some(storage_event) = event_opt {
@@ -519,7 +530,7 @@ where
                                 message: format!("set_reputation: {}", storage_event.details),
                                 timestamp: storage_event.timestamp,
                             };
-                            // Return the event
+                            // Return VMEvent for logging outside this closure
                             Some(vm_event)
                         } else {
                             None
@@ -538,7 +549,7 @@ where
     }
 
     /// Execute a storage operation with the given key/value
-    fn execute_store_p(&mut self, key: &str, value: f64) -> Result<(), VMError> {
+    fn execute_store_p(&mut self, key: &str, value: &TypedValue) -> Result<(), VMError> {
         self.storage_operation("store_p", |backend, auth, namespace| {
             backend
                 .store(auth, namespace, key, value.to_string().as_bytes().to_vec())
@@ -571,8 +582,8 @@ where
         &mut self,
         key: &str,
         missing_key_behavior: MissingKeyBehavior,
-    ) -> Result<f64, VMError> {
-        let bytes = match self.storage_operation("load_p", |backend, auth, namespace| {
+    ) -> Result<TypedValue, VMError> {
+        match self.storage_operation("load_p", |backend, auth, namespace| {
             backend.load(auth, namespace, key).map(|(data, event_opt)| {
                 // Log any event generated
                 if let Some(storage_event) = event_opt {
@@ -594,11 +605,32 @@ where
                 if let Some(event) = result.1 {
                     self.events.push(event);
                 }
-                Ok(result.0) // Extract just the data part from the tuple
+                
+                // Try to parse the stored value
+                let value_str = String::from_utf8(result.0).map_err(|_| {
+                    VMError::Deserialization(format!("Failed to parse value for key '{}'", key))
+                })?;
+                
+                // First try to parse as a number
+                if let Ok(num) = value_str.parse::<f64>() {
+                    return Ok(TypedValue::Number(num));
+                }
+                
+                // Then try as a boolean
+                if value_str == "true" {
+                    return Ok(TypedValue::Boolean(true));
+                } else if value_str == "false" {
+                    return Ok(TypedValue::Boolean(false));
+                } else if value_str == "null" {
+                    return Ok(TypedValue::Null);
+                }
+                
+                // Otherwise treat as a string
+                Ok(TypedValue::String(value_str))
             }
             Err(VMError::StorageError { details: ref err_msg }) if err_msg.contains("not found") => {
                 match missing_key_behavior {
-                    MissingKeyBehavior::Default => Ok(vec![48, 46, 48]) /* "0.0" in ASCII */,
+                    MissingKeyBehavior::Default => Ok(TypedValue::Number(0.0)),
                     MissingKeyBehavior::Error => Err(VMError::StorageError {
                         details: format!(
                             "Key '{}' not found during load_p",
@@ -608,15 +640,7 @@ where
                 }
             }
             Err(e) => Err(e),
-        }?;
-
-        let value_str = String::from_utf8(bytes).map_err(|_| {
-            VMError::Deserialization(format!("Failed to parse value for key '{}'", key))
-        })?;
-
-        value_str.parse::<f64>().map_err(|_| {
-            VMError::Deserialization(format!("Failed to parse value as f64 for key '{}'", key))
-        })
+        }
     }
 
     /// Fork the VM for transaction support
