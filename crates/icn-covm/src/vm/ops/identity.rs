@@ -11,6 +11,7 @@ use crate::identity::Identity;
 use crate::storage::auth::AuthContext;
 use crate::storage::errors::{StorageError, StorageResult};
 use crate::storage::traits::Storage;
+use crate::typed::TypedValue;
 use crate::vm::errors::VMError;
 use crate::vm::ops::IdentityOpHandler;
 use crate::vm::ops::storage::StorageOpImpl;
@@ -47,6 +48,22 @@ where
         }
     }
 
+    /// Extract a numeric value from a TypedValue, with validation for reputation
+    fn extract_reputation_amount(&self, amount: Option<&TypedValue>) -> Result<f64, VMError> {
+        match amount {
+            None => Ok(1.0), // Default increment
+            Some(typed_val) => match typed_val.as_number() {
+                Ok(num) if num > 0.0 => Ok(num),
+                Ok(num) => Err(VMError::InvalidAmount { amount: num }),
+                Err(_) => Err(VMError::TypeMismatch {
+                    expected: "Number".to_string(),
+                    found: typed_val.type_name().to_string(),
+                    operation: "increment_reputation".to_string(),
+                }),
+            },
+        }
+    }
+
     /// Execute a storage operation with proper error handling
     pub(crate) fn storage_operation<F, T>(
         &mut self,
@@ -76,14 +93,9 @@ where
     fn execute_increment_reputation(
         &mut self,
         identity_id: &str,
-        amount: Option<f64>,
+        amount: Option<&TypedValue>,
     ) -> Result<(), VMError> {
-        let increment_amount = amount.unwrap_or(1.0);
-        
-        // Validate amount
-        if increment_amount <= 0.0 {
-            return Err(VMError::InvalidAmount { amount: increment_amount });
-        }
+        let increment_amount = self.extract_reputation_amount(amount)?;
 
         // Verify identity exists
         self.storage_operation("get_identity", |storage, auth, namespace| {
@@ -156,7 +168,7 @@ mod tests {
         
         id_impl.storage_backend = Some(backend);
 
-        // Increment reputation
+        // Increment reputation with default amount
         id_impl.execute_increment_reputation("test_user", None).unwrap();
         
         // Check reputation (by directly accessing storage)
@@ -168,7 +180,7 @@ mod tests {
         }
 
         // Increment again with specific amount
-        id_impl.execute_increment_reputation("test_user", Some(2.5)).unwrap();
+        id_impl.execute_increment_reputation("test_user", Some(&TypedValue::Number(2.5))).unwrap();
         
         // Check again
         if let Some(backend) = &mut id_impl.storage_backend {
@@ -191,21 +203,24 @@ mod tests {
         id_impl.storage_backend = Some(backend);
 
         // Try to increment with negative amount
-        let result = id_impl.execute_increment_reputation("test_user", Some(-1.0));
+        let result = id_impl.execute_increment_reputation("test_user", Some(&TypedValue::Number(-1.0)));
         assert!(matches!(result, Err(VMError::InvalidAmount { .. })));
+        
+        // Try to increment with non-numeric value
+        let result = id_impl.execute_increment_reputation(
+            "test_user", 
+            Some(&TypedValue::String("not a number".to_string()))
+        );
+        assert!(matches!(result, Err(VMError::TypeMismatch { .. })));
     }
 
     #[test]
     fn test_nonexistent_identity() {
         let mut id_impl = IdentityOpImpl::new();
-        let backend = InMemoryStorage::new();
-        id_impl.storage_backend = Some(backend);
-
+        id_impl.storage_backend = Some(InMemoryStorage::new());
+        
         // Try to increment reputation for nonexistent identity
         let result = id_impl.execute_increment_reputation("nonexistent", None);
         assert!(matches!(result, Err(VMError::IdentityNotFound { .. })));
     }
-
-    // Test signature verification and membership checking would require more complex setup
-    // with actual cryptographic operations, so we'll omit them for now
 } 

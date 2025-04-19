@@ -10,6 +10,7 @@
 use crate::storage::auth::AuthContext;
 use crate::storage::errors::{StorageError, StorageResult};
 use crate::storage::traits::Storage;
+use crate::typed::TypedValue;
 use crate::vm::errors::VMError;
 use crate::vm::MissingKeyBehavior;
 use crate::vm::ops::StorageOpHandler;
@@ -163,31 +164,66 @@ where
         self.auth_context.as_ref()
     }
 
-    fn execute_store_p(&mut self, key: &str, value: f64) -> Result<(), VMError> {
-        self.storage_operation("store_p", |storage, auth, namespace| {
-            storage.store_float(key, value, auth, namespace)
-        })
+    fn execute_store_p(&mut self, key: &str, value: &TypedValue) -> Result<(), VMError> {
+        match value {
+            TypedValue::Number(num) => {
+                // For numeric values, use the existing float storage
+                self.storage_operation("store_p", |storage, auth, namespace| {
+                    storage.store_float(key, *num, auth, namespace)
+                })
+            }
+            _ => {
+                // For non-numeric values, serialize to JSON
+                let json_str = serde_json::to_string(value)
+                    .map_err(|e| VMError::SerializationError { details: e.to_string() })?;
+                
+                self.storage_operation("store_p", |storage, auth, namespace| {
+                    storage.store_string(key, &json_str, auth, namespace)
+                })
+            }
+        }
     }
 
     fn execute_load_p(
         &mut self,
         key: &str,
         missing_key_behavior: MissingKeyBehavior,
-    ) -> Result<f64, VMError> {
-        let result = self.storage_operation("load_p", |storage, auth, namespace| {
+    ) -> Result<TypedValue, VMError> {
+        // First try to load as a float (for backward compatibility)
+        let float_result = self.storage_operation("load_p", |storage, auth, namespace| {
             storage.load_float(key, auth, namespace)
         });
 
-        match result {
-            Ok(value) => Ok(value),
-            Err(VMError::ResourceNotFound { .. }) => match missing_key_behavior {
-                MissingKeyBehavior::ReturnZero => Ok(0.0),
-                MissingKeyBehavior::ReturnNaN => Ok(f64::NAN),
-                MissingKeyBehavior::Error => Err(VMError::ResourceNotFound {
-                    resource: key.to_string(),
-                    namespace: self.namespace.clone(),
-                }),
-            },
+        match float_result {
+            Ok(value) => Ok(TypedValue::Number(value)),
+            Err(VMError::ResourceNotFound { .. }) => {
+                // If not found as float, try as string (which might be JSON)
+                let string_result = self.storage_operation("load_p", |storage, auth, namespace| {
+                    storage.load_string(key, auth, namespace)
+                });
+
+                match string_result {
+                    Ok(json_str) => {
+                        // Try to parse as TypedValue
+                        match serde_json::from_str::<TypedValue>(&json_str) {
+                            Ok(typed_value) => Ok(typed_value),
+                            Err(_) => {
+                                // If not valid JSON, treat as string value
+                                Ok(TypedValue::String(json_str))
+                            }
+                        }
+                    }
+                    Err(VMError::ResourceNotFound { .. }) => match missing_key_behavior {
+                        MissingKeyBehavior::ReturnZero => Ok(TypedValue::Number(0.0)),
+                        MissingKeyBehavior::ReturnNaN => Ok(TypedValue::Number(f64::NAN)),
+                        MissingKeyBehavior::Error => Err(VMError::ResourceNotFound {
+                            resource: key.to_string(),
+                            namespace: self.namespace.clone(),
+                        }),
+                    },
+                    Err(err) => Err(err),
+                }
+            }
             Err(err) => Err(err),
         }
     }
@@ -201,75 +237,88 @@ mod tests {
 
     #[test]
     fn test_store_and_load() {
-        let mut storage_impl = StorageOpImpl::new();
-        let backend = InMemoryStorage::new();
-        storage_impl.set_storage_backend(backend);
+        let mut storage_op = StorageOpImpl::new();
+        storage_op.set_storage_backend(InMemoryStorage::new());
 
-        // Store a value
-        storage_impl.execute_store_p("test_key", 42.0).unwrap();
+        // Store and load a number
+        let num_value = TypedValue::Number(42.0);
+        storage_op.execute_store_p("test_number", &num_value).unwrap();
+        let loaded_num = storage_op.execute_load_p("test_number", MissingKeyBehavior::Error).unwrap();
+        assert_eq!(loaded_num, num_value);
 
-        // Load the value
-        let value = storage_impl
-            .execute_load_p("test_key", MissingKeyBehavior::Error)
-            .unwrap();
-        assert_eq!(value, 42.0);
+        // Store and load a string
+        let str_value = TypedValue::String("Hello, world!".to_string());
+        storage_op.execute_store_p("test_string", &str_value).unwrap();
+        let loaded_str = storage_op.execute_load_p("test_string", MissingKeyBehavior::Error).unwrap();
+        assert_eq!(loaded_str, str_value);
+
+        // Store and load a boolean
+        let bool_value = TypedValue::Boolean(true);
+        storage_op.execute_store_p("test_bool", &bool_value).unwrap();
+        let loaded_bool = storage_op.execute_load_p("test_bool", MissingKeyBehavior::Error).unwrap();
+        assert_eq!(loaded_bool, bool_value);
+
+        // Store and load null
+        let null_value = TypedValue::Null;
+        storage_op.execute_store_p("test_null", &null_value).unwrap();
+        let loaded_null = storage_op.execute_load_p("test_null", MissingKeyBehavior::Error).unwrap();
+        assert_eq!(loaded_null, null_value);
     }
 
     #[test]
     fn test_missing_key_behavior() {
-        let mut storage_impl = StorageOpImpl::new();
-        let backend = InMemoryStorage::new();
-        storage_impl.set_storage_backend(backend);
+        let mut storage_op = StorageOpImpl::new();
+        storage_op.set_storage_backend(InMemoryStorage::new());
 
         // Test ReturnZero behavior
-        let value = storage_impl
-            .execute_load_p("nonexistent_key", MissingKeyBehavior::ReturnZero)
+        let result = storage_op
+            .execute_load_p("nonexistent", MissingKeyBehavior::ReturnZero)
             .unwrap();
-        assert_eq!(value, 0.0);
+        assert_eq!(result, TypedValue::Number(0.0));
 
         // Test ReturnNaN behavior
-        let value = storage_impl
-            .execute_load_p("nonexistent_key", MissingKeyBehavior::ReturnNaN)
+        let result = storage_op
+            .execute_load_p("nonexistent", MissingKeyBehavior::ReturnNaN)
             .unwrap();
-        assert!(value.is_nan());
+        if let TypedValue::Number(num) = result {
+            assert!(num.is_nan());
+        } else {
+            panic!("Expected Number type");
+        }
 
         // Test Error behavior
-        let result = storage_impl.execute_load_p("nonexistent_key", MissingKeyBehavior::Error);
+        let result = storage_op.execute_load_p("nonexistent", MissingKeyBehavior::Error);
         assert!(matches!(result, Err(VMError::ResourceNotFound { .. })));
     }
 
     #[test]
     fn test_no_storage_backend() {
-        let mut storage_impl = StorageOpImpl::<InMemoryStorage>::new();
-        
-        // Try to store without a backend
-        let result = storage_impl.execute_store_p("test_key", 42.0);
+        let mut storage_op = StorageOpImpl::<InMemoryStorage>::new();
+
+        let result = storage_op.execute_store_p("test", &TypedValue::Number(42.0));
+        assert!(matches!(result, Err(VMError::NoStorageBackend)));
+
+        let result = storage_op.execute_load_p("test", MissingKeyBehavior::Error);
         assert!(matches!(result, Err(VMError::NoStorageBackend)));
     }
 
     #[test]
     fn test_different_namespaces() {
-        let mut storage_impl = StorageOpImpl::new();
-        let backend = InMemoryStorage::new();
-        storage_impl.set_storage_backend(backend);
+        let mut storage_op = StorageOpImpl::new();
+        storage_op.set_storage_backend(InMemoryStorage::new());
 
-        // Store a value in default namespace
-        storage_impl.execute_store_p("test_key", 42.0).unwrap();
-        
-        // Change namespace
-        storage_impl.set_namespace("other_namespace");
-        
-        // Verify key doesn't exist in new namespace
-        let result = storage_impl.execute_load_p("test_key", MissingKeyBehavior::Error);
+        // Store in namespace1
+        storage_op.set_namespace("namespace1");
+        storage_op.execute_store_p("test", &TypedValue::Number(42.0)).unwrap();
+
+        // Should not be found in namespace2
+        storage_op.set_namespace("namespace2");
+        let result = storage_op.execute_load_p("test", MissingKeyBehavior::Error);
         assert!(matches!(result, Err(VMError::ResourceNotFound { .. })));
 
-        // Store value in new namespace
-        storage_impl.execute_store_p("test_key", 99.0).unwrap();
-        
-        // Load value from new namespace
-        let value = storage_impl
-            .execute_load_p("test_key", MissingKeyBehavior::Error)
-            .unwrap();
-        assert_eq!(value, 99.0);
+        // Should be found in namespace1
+        storage_op.set_namespace("namespace1");
+        let result = storage_op.execute_load_p("test", MissingKeyBehavior::Error).unwrap();
+        assert_eq!(result, TypedValue::Number(42.0));
     }
 } 

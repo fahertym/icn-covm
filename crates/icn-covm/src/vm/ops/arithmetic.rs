@@ -6,6 +6,7 @@
 //! - Comparison operations (equals, greater than, less than)
 //! - Logical operations (not, and, or)
 
+use crate::typed::{TypedValue, TypedValueError};
 use crate::vm::errors::VMError;
 use crate::vm::ops::{ArithmeticOpHandler, ComparisonOpHandler};
 
@@ -21,25 +22,13 @@ impl ArithmeticOpImpl {
 }
 
 impl ArithmeticOpHandler for ArithmeticOpImpl {
-    fn execute_arithmetic(&self, a: f64, b: f64, op: &str) -> Result<f64, VMError> {
+    fn execute_arithmetic(&self, a: &TypedValue, b: &TypedValue, op: &str) -> Result<TypedValue, VMError> {
         match op {
-            "add" => Ok(a + b),
-            "sub" => Ok(a - b),
-            "mul" => Ok(a * b),
-            "div" => {
-                if b == 0.0 {
-                    Err(VMError::DivisionByZero)
-                } else {
-                    Ok(a / b)
-                }
-            }
-            "mod" => {
-                if b == 0.0 {
-                    Err(VMError::DivisionByZero)
-                } else {
-                    Ok(a % b)
-                }
-            }
+            "add" => a.add(b).map_err(|e| VMError::TypedValueError(e)),
+            "sub" => a.sub(b).map_err(|e| VMError::TypedValueError(e)),
+            "mul" => a.mul(b).map_err(|e| VMError::TypedValueError(e)),
+            "div" => a.div(b).map_err(|e| VMError::TypedValueError(e)),
+            "mod" => a.modulo(b).map_err(|e| VMError::TypedValueError(e)),
             _ => Err(VMError::InvalidOperation {
                 operation: op.to_string(),
             }),
@@ -48,34 +37,52 @@ impl ArithmeticOpHandler for ArithmeticOpImpl {
 }
 
 impl ComparisonOpHandler for ArithmeticOpImpl {
-    fn execute_comparison(&self, a: f64, b: f64, op: &str) -> Result<f64, VMError> {
+    fn execute_comparison(&self, a: &TypedValue, b: &TypedValue, op: &str) -> Result<TypedValue, VMError> {
         match op {
-            "eq" => Ok(if (a - b).abs() < f64::EPSILON { 1.0 } else { 0.0 }),
-            "gt" => Ok(if a > b { 1.0 } else { 0.0 }),
-            "lt" => Ok(if a < b { 1.0 } else { 0.0 }),
-            "gte" => Ok(if a >= b { 1.0 } else { 0.0 }),
-            "lte" => Ok(if a <= b { 1.0 } else { 0.0 }),
-            "neq" => Ok(if (a - b).abs() >= f64::EPSILON { 1.0 } else { 0.0 }),
+            "eq" => a.equals(b).map_err(|e| VMError::TypedValueError(e)),
+            "gt" => a.greater_than(b).map_err(|e| VMError::TypedValueError(e)),
+            "lt" => a.less_than(b).map_err(|e| VMError::TypedValueError(e)),
+            "gte" => {
+                // A >= B is equivalent to !(A < B)
+                let lt_result = a.less_than(b).map_err(|e| VMError::TypedValueError(e))?;
+                lt_result.logical_not().map_err(|e| VMError::TypedValueError(e))
+            },
+            "lte" => {
+                // A <= B is equivalent to !(A > B)
+                let gt_result = a.greater_than(b).map_err(|e| VMError::TypedValueError(e))?;
+                gt_result.logical_not().map_err(|e| VMError::TypedValueError(e))
+            },
+            "neq" => {
+                // A != B is equivalent to !(A == B)
+                let eq_result = a.equals(b).map_err(|e| VMError::TypedValueError(e))?;
+                eq_result.logical_not().map_err(|e| VMError::TypedValueError(e))
+            },
             _ => Err(VMError::InvalidOperation {
                 operation: op.to_string(),
             }),
         }
     }
 
-    fn execute_logical(&self, a: f64, op: &str) -> Result<f64, VMError> {
+    fn execute_logical(&self, a: &TypedValue, op: &str) -> Result<TypedValue, VMError> {
         match op {
-            "not" => Ok(if a == 0.0 { 1.0 } else { 0.0 }),
+            "not" => a.logical_not().map_err(|e| VMError::TypedValueError(e)),
             _ => Err(VMError::InvalidOperation {
                 operation: op.to_string(),
             }),
         }
     }
 
-    fn execute_binary_logical(&self, a: f64, b: f64, op: &str) -> Result<f64, VMError> {
+    fn execute_binary_logical(&self, a: &TypedValue, b: &TypedValue, op: &str) -> Result<TypedValue, VMError> {
         match op {
-            "and" => Ok(if a != 0.0 && b != 0.0 { 1.0 } else { 0.0 }),
-            "or" => Ok(if a != 0.0 || b != 0.0 { 1.0 } else { 0.0 }),
-            "xor" => Ok(if (a != 0.0) != (b != 0.0) { 1.0 } else { 0.0 }),
+            "and" => a.logical_and(b).map_err(|e| VMError::TypedValueError(e)),
+            "or" => a.logical_or(b).map_err(|e| VMError::TypedValueError(e)),
+            "xor" => {
+                // A XOR B = (A OR B) AND NOT (A AND B)
+                let and_result = a.logical_and(b).map_err(|e| VMError::TypedValueError(e))?;
+                let not_and = and_result.logical_not().map_err(|e| VMError::TypedValueError(e))?;
+                let or_result = a.logical_or(b).map_err(|e| VMError::TypedValueError(e))?;
+                or_result.logical_and(&not_and).map_err(|e| VMError::TypedValueError(e))
+            },
             _ => Err(VMError::InvalidOperation {
                 operation: op.to_string(),
             }),
@@ -91,27 +98,48 @@ mod tests {
     fn test_arithmetic_operations() {
         let arith = ArithmeticOpImpl::new();
         
-        assert_eq!(arith.execute_arithmetic(3.0, 2.0, "add").unwrap(), 5.0);
-        assert_eq!(arith.execute_arithmetic(3.0, 2.0, "sub").unwrap(), 1.0);
-        assert_eq!(arith.execute_arithmetic(3.0, 2.0, "mul").unwrap(), 6.0);
-        assert_eq!(arith.execute_arithmetic(6.0, 2.0, "div").unwrap(), 3.0);
-        assert_eq!(arith.execute_arithmetic(7.0, 2.0, "mod").unwrap(), 1.0);
+        assert_eq!(
+            arith.execute_arithmetic(&TypedValue::Number(3.0), &TypedValue::Number(2.0), "add").unwrap(),
+            TypedValue::Number(5.0)
+        );
+        assert_eq!(
+            arith.execute_arithmetic(&TypedValue::Number(3.0), &TypedValue::Number(2.0), "sub").unwrap(),
+            TypedValue::Number(1.0)
+        );
+        assert_eq!(
+            arith.execute_arithmetic(&TypedValue::Number(3.0), &TypedValue::Number(2.0), "mul").unwrap(),
+            TypedValue::Number(6.0)
+        );
+        assert_eq!(
+            arith.execute_arithmetic(&TypedValue::Number(6.0), &TypedValue::Number(2.0), "div").unwrap(),
+            TypedValue::Number(3.0)
+        );
+        assert_eq!(
+            arith.execute_arithmetic(&TypedValue::Number(7.0), &TypedValue::Number(2.0), "mod").unwrap(),
+            TypedValue::Number(1.0)
+        );
         
         // Test division by zero
         assert!(matches!(
-            arith.execute_arithmetic(5.0, 0.0, "div"),
-            Err(VMError::DivisionByZero)
+            arith.execute_arithmetic(&TypedValue::Number(5.0), &TypedValue::Number(0.0), "div"),
+            Err(VMError::TypedValueError(_))
         ));
         
-        // Test modulo by zero
-        assert!(matches!(
-            arith.execute_arithmetic(5.0, 0.0, "mod"),
-            Err(VMError::DivisionByZero)
-        ));
+        // Test string concatenation
+        assert_eq!(
+            arith.execute_arithmetic(&TypedValue::String("Hello, ".to_string()), &TypedValue::String("World!".to_string()), "add").unwrap(),
+            TypedValue::String("Hello, World!".to_string())
+        );
+        
+        // Test string and number
+        assert_eq!(
+            arith.execute_arithmetic(&TypedValue::String("Count: ".to_string()), &TypedValue::Number(42.0), "add").unwrap(),
+            TypedValue::String("Count: 42".to_string())
+        );
         
         // Test invalid operation
         assert!(matches!(
-            arith.execute_arithmetic(1.0, 2.0, "invalid"),
+            arith.execute_arithmetic(&TypedValue::Number(1.0), &TypedValue::Number(2.0), "invalid"),
             Err(VMError::InvalidOperation { .. })
         ));
     }
@@ -120,29 +148,42 @@ mod tests {
     fn test_comparison_operations() {
         let arith = ArithmeticOpImpl::new();
         
-        assert_eq!(arith.execute_comparison(2.0, 2.0, "eq").unwrap(), 1.0);
-        assert_eq!(arith.execute_comparison(3.0, 2.0, "eq").unwrap(), 0.0);
+        assert_eq!(
+            arith.execute_comparison(&TypedValue::Number(2.0), &TypedValue::Number(2.0), "eq").unwrap(),
+            TypedValue::Boolean(true)
+        );
+        assert_eq!(
+            arith.execute_comparison(&TypedValue::Number(3.0), &TypedValue::Number(2.0), "eq").unwrap(),
+            TypedValue::Boolean(false)
+        );
         
-        assert_eq!(arith.execute_comparison(3.0, 2.0, "gt").unwrap(), 1.0);
-        assert_eq!(arith.execute_comparison(2.0, 3.0, "gt").unwrap(), 0.0);
+        assert_eq!(
+            arith.execute_comparison(&TypedValue::Number(3.0), &TypedValue::Number(2.0), "gt").unwrap(),
+            TypedValue::Boolean(true)
+        );
+        assert_eq!(
+            arith.execute_comparison(&TypedValue::Number(2.0), &TypedValue::Number(3.0), "gt").unwrap(),
+            TypedValue::Boolean(false)
+        );
         
-        assert_eq!(arith.execute_comparison(2.0, 3.0, "lt").unwrap(), 1.0);
-        assert_eq!(arith.execute_comparison(3.0, 2.0, "lt").unwrap(), 0.0);
+        assert_eq!(
+            arith.execute_comparison(&TypedValue::Number(2.0), &TypedValue::Number(3.0), "lt").unwrap(),
+            TypedValue::Boolean(true)
+        );
+        assert_eq!(
+            arith.execute_comparison(&TypedValue::Number(3.0), &TypedValue::Number(2.0), "lt").unwrap(),
+            TypedValue::Boolean(false)
+        );
         
-        assert_eq!(arith.execute_comparison(3.0, 3.0, "gte").unwrap(), 1.0);
-        assert_eq!(arith.execute_comparison(4.0, 3.0, "gte").unwrap(), 1.0);
-        assert_eq!(arith.execute_comparison(2.0, 3.0, "gte").unwrap(), 0.0);
-        
-        assert_eq!(arith.execute_comparison(3.0, 3.0, "lte").unwrap(), 1.0);
-        assert_eq!(arith.execute_comparison(2.0, 3.0, "lte").unwrap(), 1.0);
-        assert_eq!(arith.execute_comparison(4.0, 3.0, "lte").unwrap(), 0.0);
-        
-        assert_eq!(arith.execute_comparison(2.0, 3.0, "neq").unwrap(), 1.0);
-        assert_eq!(arith.execute_comparison(3.0, 3.0, "neq").unwrap(), 0.0);
+        // Test string comparisons
+        assert_eq!(
+            arith.execute_comparison(&TypedValue::String("abc".to_string()), &TypedValue::String("def".to_string()), "lt").unwrap(),
+            TypedValue::Boolean(true)
+        );
         
         // Test invalid operation
         assert!(matches!(
-            arith.execute_comparison(1.0, 2.0, "invalid"),
+            arith.execute_comparison(&TypedValue::Number(1.0), &TypedValue::Number(2.0), "invalid"),
             Err(VMError::InvalidOperation { .. })
         ));
     }
@@ -151,13 +192,22 @@ mod tests {
     fn test_logical_operations() {
         let arith = ArithmeticOpImpl::new();
         
-        assert_eq!(arith.execute_logical(0.0, "not").unwrap(), 1.0);
-        assert_eq!(arith.execute_logical(1.0, "not").unwrap(), 0.0);
-        assert_eq!(arith.execute_logical(42.0, "not").unwrap(), 0.0);
+        assert_eq!(
+            arith.execute_logical(&TypedValue::Boolean(false), "not").unwrap(),
+            TypedValue::Boolean(true)
+        );
+        assert_eq!(
+            arith.execute_logical(&TypedValue::Boolean(true), "not").unwrap(),
+            TypedValue::Boolean(false)
+        );
+        assert_eq!(
+            arith.execute_logical(&TypedValue::Number(0.0), "not").unwrap(),
+            TypedValue::Boolean(true)
+        );
         
         // Test invalid operation
         assert!(matches!(
-            arith.execute_logical(1.0, "invalid"),
+            arith.execute_logical(&TypedValue::Number(1.0), "invalid"),
             Err(VMError::InvalidOperation { .. })
         ));
     }
@@ -167,26 +217,34 @@ mod tests {
         let arith = ArithmeticOpImpl::new();
         
         // AND
-        assert_eq!(arith.execute_binary_logical(1.0, 1.0, "and").unwrap(), 1.0);
-        assert_eq!(arith.execute_binary_logical(1.0, 0.0, "and").unwrap(), 0.0);
-        assert_eq!(arith.execute_binary_logical(0.0, 1.0, "and").unwrap(), 0.0);
-        assert_eq!(arith.execute_binary_logical(0.0, 0.0, "and").unwrap(), 0.0);
+        assert_eq!(
+            arith.execute_binary_logical(&TypedValue::Boolean(true), &TypedValue::Boolean(true), "and").unwrap(),
+            TypedValue::Boolean(true)
+        );
+        assert_eq!(
+            arith.execute_binary_logical(&TypedValue::Boolean(true), &TypedValue::Boolean(false), "and").unwrap(),
+            TypedValue::Boolean(false)
+        );
         
         // OR
-        assert_eq!(arith.execute_binary_logical(1.0, 1.0, "or").unwrap(), 1.0);
-        assert_eq!(arith.execute_binary_logical(1.0, 0.0, "or").unwrap(), 1.0);
-        assert_eq!(arith.execute_binary_logical(0.0, 1.0, "or").unwrap(), 1.0);
-        assert_eq!(arith.execute_binary_logical(0.0, 0.0, "or").unwrap(), 0.0);
+        assert_eq!(
+            arith.execute_binary_logical(&TypedValue::Boolean(true), &TypedValue::Boolean(false), "or").unwrap(),
+            TypedValue::Boolean(true)
+        );
+        assert_eq!(
+            arith.execute_binary_logical(&TypedValue::Boolean(false), &TypedValue::Boolean(false), "or").unwrap(),
+            TypedValue::Boolean(false)
+        );
         
-        // XOR
-        assert_eq!(arith.execute_binary_logical(1.0, 1.0, "xor").unwrap(), 0.0);
-        assert_eq!(arith.execute_binary_logical(1.0, 0.0, "xor").unwrap(), 1.0);
-        assert_eq!(arith.execute_binary_logical(0.0, 1.0, "xor").unwrap(), 1.0);
-        assert_eq!(arith.execute_binary_logical(0.0, 0.0, "xor").unwrap(), 0.0);
+        // Test with Numbers (should coerce to boolean)
+        assert_eq!(
+            arith.execute_binary_logical(&TypedValue::Number(1.0), &TypedValue::Number(0.0), "and").unwrap(),
+            TypedValue::Boolean(false)
+        );
         
         // Test invalid operation
         assert!(matches!(
-            arith.execute_binary_logical(1.0, 2.0, "invalid"),
+            arith.execute_binary_logical(&TypedValue::Number(1.0), &TypedValue::Number(2.0), "invalid"),
             Err(VMError::InvalidOperation { .. })
         ));
     }

@@ -18,6 +18,7 @@ use crate::identity::Identity;
 use crate::storage::auth::AuthContext;
 use crate::storage::errors::StorageResult;
 use crate::storage::traits::Storage;
+use crate::typed::TypedValue;
 use crate::vm::errors::VMError;
 use crate::vm::types::VMEvent;
 
@@ -42,10 +43,10 @@ where
     fn get_auth_context(&self) -> Option<&AuthContext>;
 
     /// Execute a storage operation to store a value
-    fn execute_store_p(&mut self, key: &str, value: f64) -> Result<(), VMError>;
+    fn execute_store_p(&mut self, key: &str, value: &TypedValue) -> Result<(), VMError>;
 
     /// Execute a storage operation to load a value
-    fn execute_load_p(&mut self, key: &str, missing_key_behavior: crate::vm::MissingKeyBehavior) -> Result<f64, VMError>;
+    fn execute_load_p(&mut self, key: &str, missing_key_behavior: crate::vm::MissingKeyBehavior) -> Result<TypedValue, VMError>;
 }
 
 /// Defines operations for handling governance-related VM operations
@@ -61,7 +62,7 @@ where
         &mut self,
         resource: &str, 
         account: &str, 
-        amount: f64, 
+        amount: &TypedValue, 
         reason: &Option<String>
     ) -> Result<(), VMError>;
 
@@ -71,7 +72,7 @@ where
         resource: &str,
         from: &str,
         to: &str,
-        amount: f64,
+        amount: &TypedValue,
         reason: &Option<String>,
     ) -> Result<(), VMError>;
 
@@ -80,12 +81,12 @@ where
         &mut self,
         resource: &str,
         account: &str,
-        amount: f64,
+        amount: &TypedValue,
         reason: &Option<String>,
     ) -> Result<(), VMError>;
 
     /// Execute a balance query operation
-    fn execute_balance(&mut self, resource: &str, account: &str) -> Result<f64, VMError>;
+    fn execute_balance(&mut self, resource: &str, account: &str) -> Result<TypedValue, VMError>;
 }
 
 /// Defines operations for handling identity-related VM operations
@@ -97,7 +98,7 @@ where
     fn execute_increment_reputation(
         &mut self,
         identity_id: &str,
-        amount: Option<f64>,
+        amount: Option<&TypedValue>,
     ) -> Result<(), VMError>;
 
     /// Verify a signature from an identity
@@ -119,19 +120,19 @@ where
 /// Defines operations for arithmetic calculations
 pub trait ArithmeticOpHandler {
     /// Execute arithmetic operations
-    fn execute_arithmetic(&self, a: f64, b: f64, op: &str) -> Result<f64, VMError>;
+    fn execute_arithmetic(&self, a: &TypedValue, b: &TypedValue, op: &str) -> Result<TypedValue, VMError>;
 }
 
 /// Defines operations for comparisons and logical operations
 pub trait ComparisonOpHandler {
     /// Execute comparison operations
-    fn execute_comparison(&self, a: f64, b: f64, op: &str) -> Result<f64, VMError>;
+    fn execute_comparison(&self, a: &TypedValue, b: &TypedValue, op: &str) -> Result<TypedValue, VMError>;
 
     /// Execute logical operations
-    fn execute_logical(&self, a: f64, op: &str) -> Result<f64, VMError>;
+    fn execute_logical(&self, a: &TypedValue, op: &str) -> Result<TypedValue, VMError>;
 
     /// Execute binary logical operations
-    fn execute_binary_logical(&self, a: f64, b: f64, op: &str) -> Result<f64, VMError>;
+    fn execute_binary_logical(&self, a: &TypedValue, b: &TypedValue, op: &str) -> Result<TypedValue, VMError>;
 }
 
 /// Defines operations for handling VM events and output

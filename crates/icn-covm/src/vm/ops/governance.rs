@@ -11,6 +11,7 @@
 use crate::storage::auth::AuthContext;
 use crate::storage::errors::{StorageError, StorageResult};
 use crate::storage::traits::Storage;
+use crate::typed::TypedValue;
 use crate::vm::errors::VMError;
 use crate::vm::ops::GovernanceOpHandler;
 use crate::vm::ops::storage::StorageOpImpl;
@@ -44,6 +45,19 @@ where
             storage_backend: None,
             auth_context: None,
             namespace: "default".to_string(),
+        }
+    }
+
+    /// Extract a numeric value from a TypedValue, with validation
+    fn extract_numeric_amount(&self, amount: &TypedValue) -> Result<f64, VMError> {
+        match amount.as_number() {
+            Ok(num) if num >= 0.0 => Ok(num),
+            Ok(num) => Err(VMError::InvalidAmount { amount: num }),
+            Err(_) => Err(VMError::TypeMismatch {
+                expected: "Number".to_string(),
+                found: amount.type_name().to_string(),
+                operation: "resource operation".to_string(),
+            }),
         }
     }
 
@@ -83,20 +97,18 @@ where
         &mut self,
         resource: &str,
         account: &str,
-        amount: f64,
+        amount: &TypedValue,
         reason: &Option<String>,
     ) -> Result<(), VMError> {
-        // Validate amount
-        if amount < 0.0 {
-            return Err(VMError::InvalidAmount { amount });
-        }
+        // Extract and validate numeric amount
+        let numeric_amount = self.extract_numeric_amount(amount)?;
 
         // Execute the mint operation
         self.storage_operation("mint", |storage, auth, namespace| {
             storage.mint(
                 resource,
                 account,
-                amount,
+                numeric_amount,
                 reason.as_deref().unwrap_or("VM mint operation"),
                 auth,
                 namespace,
@@ -109,13 +121,11 @@ where
         resource: &str,
         from: &str,
         to: &str,
-        amount: f64,
+        amount: &TypedValue,
         reason: &Option<String>,
     ) -> Result<(), VMError> {
-        // Validate amount
-        if amount < 0.0 {
-            return Err(VMError::InvalidAmount { amount });
-        }
+        // Extract and validate numeric amount
+        let numeric_amount = self.extract_numeric_amount(amount)?;
 
         // Execute the transfer operation
         self.storage_operation("transfer", |storage, auth, namespace| {
@@ -123,7 +133,7 @@ where
                 resource,
                 from,
                 to,
-                amount,
+                numeric_amount,
                 reason.as_deref().unwrap_or("VM transfer operation"),
                 auth,
                 namespace,
@@ -135,20 +145,18 @@ where
         &mut self,
         resource: &str,
         account: &str,
-        amount: f64,
+        amount: &TypedValue,
         reason: &Option<String>,
     ) -> Result<(), VMError> {
-        // Validate amount
-        if amount < 0.0 {
-            return Err(VMError::InvalidAmount { amount });
-        }
+        // Extract and validate numeric amount
+        let numeric_amount = self.extract_numeric_amount(amount)?;
 
         // Execute the burn operation
         self.storage_operation("burn", |storage, auth, namespace| {
             storage.burn(
                 resource,
                 account,
-                amount,
+                numeric_amount,
                 reason.as_deref().unwrap_or("VM burn operation"),
                 auth,
                 namespace,
@@ -156,10 +164,12 @@ where
         })
     }
 
-    fn execute_balance(&mut self, resource: &str, account: &str) -> Result<f64, VMError> {
-        self.storage_operation("balance", |storage, auth, namespace| {
+    fn execute_balance(&mut self, resource: &str, account: &str) -> Result<TypedValue, VMError> {
+        let balance = self.storage_operation("balance", |storage, auth, namespace| {
             storage.balance(resource, account, auth, namespace)
-        })
+        })?;
+        
+        Ok(TypedValue::Number(balance))
     }
 }
 
@@ -193,12 +203,12 @@ mod tests {
 
         // Mint some units
         gov_impl
-            .execute_mint("test_resource", "user1", 100.0, &None)
+            .execute_mint("test_resource", "user1", &TypedValue::Number(100.0), &None)
             .unwrap();
 
         // Check the balance
         let balance = gov_impl.execute_balance("test_resource", "user1").unwrap();
-        assert_eq!(balance, 100.0);
+        assert_eq!(balance, TypedValue::Number(100.0));
     }
 
     #[test]
@@ -210,9 +220,23 @@ mod tests {
         // Create a resource
         gov_impl.execute_create_resource("test_resource").unwrap();
 
-        // Try to mint a negative amount
-        let result = gov_impl.execute_mint("test_resource", "user1", -50.0, &None);
+        // Try to mint negative amount
+        let result = gov_impl.execute_mint(
+            "test_resource", 
+            "user1", 
+            &TypedValue::Number(-100.0), 
+            &None
+        );
         assert!(matches!(result, Err(VMError::InvalidAmount { .. })));
+
+        // Try to mint with non-numeric value
+        let result = gov_impl.execute_mint(
+            "test_resource", 
+            "user1", 
+            &TypedValue::String("not a number".to_string()), 
+            &None
+        );
+        assert!(matches!(result, Err(VMError::TypeMismatch { .. })));
     }
 
     #[test]
@@ -226,19 +250,26 @@ mod tests {
 
         // Mint some units
         gov_impl
-            .execute_mint("test_resource", "user1", 100.0, &None)
+            .execute_mint("test_resource", "user1", &TypedValue::Number(100.0), &None)
             .unwrap();
 
-        // Transfer units
+        // Transfer some units
         gov_impl
-            .execute_transfer("test_resource", "user1", "user2", 50.0, &None)
+            .execute_transfer(
+                "test_resource",
+                "user1",
+                "user2",
+                &TypedValue::Number(50.0),
+                &None,
+            )
             .unwrap();
 
         // Check balances
         let balance1 = gov_impl.execute_balance("test_resource", "user1").unwrap();
         let balance2 = gov_impl.execute_balance("test_resource", "user2").unwrap();
-        assert_eq!(balance1, 50.0);
-        assert_eq!(balance2, 50.0);
+        
+        assert_eq!(balance1, TypedValue::Number(50.0));
+        assert_eq!(balance2, TypedValue::Number(50.0));
     }
 
     #[test]
@@ -252,11 +283,18 @@ mod tests {
 
         // Mint some units
         gov_impl
-            .execute_mint("test_resource", "user1", 100.0, &None)
+            .execute_mint("test_resource", "user1", &TypedValue::Number(100.0), &None)
             .unwrap();
 
         // Try to transfer more than available
-        let result = gov_impl.execute_transfer("test_resource", "user1", "user2", 150.0, &None);
+        let result = gov_impl.execute_transfer(
+            "test_resource",
+            "user1",
+            "user2",
+            &TypedValue::Number(150.0),
+            &None,
+        );
+        
         assert!(matches!(result, Err(VMError::InsufficientBalance { .. })));
     }
 
@@ -271,17 +309,27 @@ mod tests {
 
         // Mint some units
         gov_impl
-            .execute_mint("test_resource", "user1", 100.0, &None)
+            .execute_mint("test_resource", "user1", &TypedValue::Number(100.0), &None)
             .unwrap();
 
         // Burn some units
         gov_impl
-            .execute_burn("test_resource", "user1", 30.0, &None)
+            .execute_burn("test_resource", "user1", &TypedValue::Number(30.0), &None)
             .unwrap();
 
         // Check balance
         let balance = gov_impl.execute_balance("test_resource", "user1").unwrap();
-        assert_eq!(balance, 70.0);
+        assert_eq!(balance, TypedValue::Number(70.0));
+
+        // Try to burn more than available
+        let result = gov_impl.execute_burn(
+            "test_resource",
+            "user1",
+            &TypedValue::Number(100.0),
+            &None,
+        );
+        
+        assert!(matches!(result, Err(VMError::InsufficientBalance { .. })));
     }
 
     #[test]
@@ -290,8 +338,16 @@ mod tests {
         let backend = InMemoryStorage::new();
         gov_impl.storage_backend = Some(backend);
 
-        // Try to mint a nonexistent resource
-        let result = gov_impl.execute_mint("nonexistent", "user1", 100.0, &None);
+        // Try operations on nonexistent resource
+        let result = gov_impl.execute_mint(
+            "nonexistent_resource",
+            "user1",
+            &TypedValue::Number(100.0),
+            &None,
+        );
+        assert!(matches!(result, Err(VMError::ResourceNotFound { .. })));
+
+        let result = gov_impl.execute_balance("nonexistent_resource", "user1");
         assert!(matches!(result, Err(VMError::ResourceNotFound { .. })));
     }
 } 
