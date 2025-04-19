@@ -19,9 +19,10 @@ use thiserror::Error;
 use crate::storage::errors::StorageError;
 use std::fmt;
 use std::io;
+use serde::{Deserialize, Serialize};
 
 /// Error variants that can occur during VM execution
-#[derive(Error, Debug)]
+#[derive(Error, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum VMError {
     /// Storage backend is not available
     #[error("Storage backend not available")]
@@ -188,6 +189,32 @@ pub enum VMError {
         user: String,
         action: String,
         resource: String,
+    },
+
+    /// Error when a type mismatch occurs
+    #[error("Type mismatch in operation {operation}: expected {expected}, found {found}")]
+    TypeMismatch {
+        expected: String,
+        found: String,
+        operation: String,
+    },
+
+    /// Error when an undefined variable is accessed
+    #[error("Undefined variable: {name}")]
+    UndefinedVariable {
+        name: String,
+    },
+
+    /// Error when an undefined function is called
+    #[error("Undefined function: {name}")]
+    UndefinedFunction {
+        name: String,
+    },
+
+    /// Error when an undefined parameter is accessed
+    #[error("Undefined parameter: {name}")]
+    UndefinedParameter {
+        name: String,
     },
 }
 

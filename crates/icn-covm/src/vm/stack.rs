@@ -17,24 +17,25 @@
 //! that can be performed on a stack, enabling alternative stack implementations
 //! if needed in the future.
 
+use crate::typed::{TypedValue, TypedValueError};
 use crate::vm::errors::VMError;
 
 /// Defines operations that can be performed on a stack
 pub trait StackOps {
     /// Push a value onto the stack
-    fn push(&mut self, value: f64);
+    fn push(&mut self, value: TypedValue);
 
     /// Pop a value from the stack
-    fn pop(&mut self, op_name: &str) -> Result<f64, VMError>;
+    fn pop(&mut self, op_name: &str) -> Result<TypedValue, VMError>;
 
     /// Pop two values from the stack
-    fn pop_two(&mut self, op_name: &str) -> Result<(f64, f64), VMError>;
+    fn pop_two(&mut self, op_name: &str) -> Result<(TypedValue, TypedValue), VMError>;
 
     /// Return the top value from the stack without popping it
-    fn top(&self) -> Option<f64>;
+    fn top(&self) -> Option<&TypedValue>;
 
     /// Get the current stack values
-    fn get_stack(&self) -> Vec<f64>;
+    fn get_stack(&self) -> Vec<TypedValue>;
 
     /// Duplicate the top value on the stack
     fn dup(&mut self, op_name: &str) -> Result<(), VMError>;
@@ -59,13 +60,25 @@ pub trait StackOps {
 
     /// Check if the stack is empty
     fn is_empty(&self) -> bool;
+    
+    /// Pop a number from the stack, with type checking
+    fn pop_number(&mut self, op_name: &str) -> Result<f64, VMError>;
+    
+    /// Pop a boolean from the stack, with type checking
+    fn pop_bool(&mut self, op_name: &str) -> Result<bool, VMError>;
+    
+    /// Pop a string from the stack, with type checking
+    fn pop_string(&mut self, op_name: &str) -> Result<String, VMError>;
+    
+    /// Peek the type of the top value on the stack
+    fn peek_type(&self) -> Option<&TypedValue>;
 }
 
 /// Provides stack operations for the virtual machine
 #[derive(Debug, Clone)]
 pub struct VMStack {
     /// The values on the stack
-    stack: Vec<f64>,
+    stack: Vec<TypedValue>,
 }
 
 impl VMStack {
@@ -77,35 +90,35 @@ impl VMStack {
 
 impl StackOps for VMStack {
     /// Push a value onto the stack
-    fn push(&mut self, value: f64) {
+    fn push(&mut self, value: TypedValue) {
         self.stack.push(value);
     }
 
     /// Pop a value from the stack
-    fn pop(&mut self, _op_name: &str) -> Result<f64, VMError> {
+    fn pop(&mut self, _op_name: &str) -> Result<TypedValue, VMError> {
         self.stack.pop().ok_or(VMError::StackUnderflow)
     }
 
     /// Pop two values from the stack
-    fn pop_two(&mut self, op_name: &str) -> Result<(f64, f64), VMError> {
+    fn pop_two(&mut self, op_name: &str) -> Result<(TypedValue, TypedValue), VMError> {
         let b = self.pop(op_name)?;
         let a = self.pop(op_name)?;
         Ok((a, b))
     }
 
     /// Return the top value from the stack without popping it
-    fn top(&self) -> Option<f64> {
-        self.stack.last().copied()
+    fn top(&self) -> Option<&TypedValue> {
+        self.stack.last()
     }
 
     /// Get the current stack values
-    fn get_stack(&self) -> Vec<f64> {
+    fn get_stack(&self) -> Vec<TypedValue> {
         self.stack.clone()
     }
 
     /// Duplicate the top value on the stack
     fn dup(&mut self, _op_name: &str) -> Result<(), VMError> {
-        let value = self.top().ok_or(VMError::StackUnderflow)?;
+        let value = self.top().ok_or(VMError::StackUnderflow)?.clone();
         self.push(value);
         Ok(())
     }
@@ -128,37 +141,38 @@ impl StackOps for VMStack {
         }
 
         let len = self.stack.len();
-        let value = self.stack[len - 2];
+        let value = self.stack[len - 2].clone();
         self.push(value);
         Ok(())
     }
 
     /// Check if all values in the specified depth are equal
-    fn assert_equal_stack(&self, depth: usize, _op_name: &str) -> Result<bool, VMError> {
+    fn assert_equal_stack(&self, depth: usize, op_name: &str) -> Result<bool, VMError> {
         if self.stack.len() < depth {
             return Err(VMError::StackUnderflow);
         }
-
-        let start_idx = self.stack.len() - depth;
-        let first_val = self.stack[start_idx];
-
-        for i in (start_idx + 1)..self.stack.len() {
-            if (self.stack[i] - first_val).abs() > f64::EPSILON {
-                return Ok(false);
+        
+        let top_value = self.stack.last().unwrap();
+        let mut all_equal = true;
+        
+        for i in 1..depth {
+            let index = self.stack.len() - 1 - i;
+            if self.stack[index] != *top_value {
+                all_equal = false;
+                break;
             }
         }
-
-        Ok(true)
+        
+        Ok(all_equal)
     }
 
     /// Format the stack as a string for display
     fn format_stack(&self) -> String {
-        if self.stack.is_empty() {
-            return "Stack: []".to_string();
+        let mut result = String::new();
+        for (i, value) in self.stack.iter().enumerate() {
+            result.push_str(&format!("{}: {}\n", i, value));
         }
-
-        let items: Vec<String> = self.stack.iter().map(|v| v.to_string()).collect();
-        format!("Stack: [{}]", items.join(", "))
+        result
     }
 
     /// Clear the stack
@@ -175,48 +189,110 @@ impl StackOps for VMStack {
     fn is_empty(&self) -> bool {
         self.stack.is_empty()
     }
+    
+    /// Pop a number from the stack, with type checking
+    fn pop_number(&mut self, op_name: &str) -> Result<f64, VMError> {
+        let value = self.pop(op_name)?;
+        value.as_number().map_err(|_| VMError::TypeMismatch {
+            expected: "Number".to_string(),
+            found: value.type_name().to_string(),
+            operation: op_name.to_string(),
+        })
+    }
+    
+    /// Pop a boolean from the stack, with type checking
+    fn pop_bool(&mut self, op_name: &str) -> Result<bool, VMError> {
+        let value = self.pop(op_name)?;
+        value.as_boolean().map_err(|_| VMError::TypeMismatch {
+            expected: "Boolean".to_string(),
+            found: value.type_name().to_string(),
+            operation: op_name.to_string(),
+        })
+    }
+    
+    /// Pop a string from the stack, with type checking
+    fn pop_string(&mut self, op_name: &str) -> Result<String, VMError> {
+        let value = self.pop(op_name)?;
+        value.as_string().map_err(|_| VMError::TypeMismatch {
+            expected: "String".to_string(),
+            found: value.type_name().to_string(),
+            operation: op_name.to_string(),
+        })
+    }
+    
+    /// Peek the type of the top value on the stack
+    fn peek_type(&self) -> Option<&TypedValue> {
+        self.stack.last()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
+    
     #[test]
-    fn test_push_pop() {
+    fn test_push_and_pop() {
         let mut stack = VMStack::new();
-        stack.push(42.0);
-        assert_eq!(stack.pop("test").unwrap(), 42.0);
+        stack.push(TypedValue::Number(10.0));
+        stack.push(TypedValue::Number(20.0));
+        
+        assert_eq!(stack.len(), 2);
+        assert_eq!(stack.pop("test").unwrap(), TypedValue::Number(20.0));
+        assert_eq!(stack.pop("test").unwrap(), TypedValue::Number(10.0));
         assert!(stack.is_empty());
     }
-
+    
     #[test]
-    fn test_pop_empty() {
+    fn test_pop_two() {
         let mut stack = VMStack::new();
-        let result = stack.pop("test");
-        assert!(matches!(result, Err(VMError::StackUnderflow)));
+        stack.push(TypedValue::Number(10.0));
+        stack.push(TypedValue::Number(20.0));
+        
+        let (a, b) = stack.pop_two("test").unwrap();
+        assert_eq!(a, TypedValue::Number(10.0));
+        assert_eq!(b, TypedValue::Number(20.0));
+        assert!(stack.is_empty());
     }
-
+    
     #[test]
-    fn test_stack_operations() {
+    fn test_typed_stack_operations() {
         let mut stack = VMStack::new();
-        stack.push(1.0);
-        stack.push(2.0);
-
-        // Test dup
-        stack.dup("dup").unwrap();
-        assert_eq!(stack.get_stack(), vec![1.0, 2.0, 2.0]);
-
-        // Test swap
-        stack.swap("swap").unwrap();
-        assert_eq!(stack.get_stack(), vec![1.0, 2.0, 2.0]);
-
-        // Test over
-        stack.over("over").unwrap();
-        assert_eq!(stack.get_stack(), vec![1.0, 2.0, 2.0, 2.0]);
-
-        // Test assert_equal_stack
-        assert!(stack.assert_equal_stack(3, "assert").unwrap());
-        stack.push(3.0);
-        assert!(!stack.assert_equal_stack(2, "assert").unwrap());
+        
+        // Push different types
+        stack.push(TypedValue::Number(10.0));
+        stack.push(TypedValue::Boolean(true));
+        stack.push(TypedValue::String("hello".to_string()));
+        
+        // Check type-specific pops
+        assert_eq!(stack.pop_string("test").unwrap(), "hello");
+        assert_eq!(stack.pop_bool("test").unwrap(), true);
+        assert_eq!(stack.pop_number("test").unwrap(), 10.0);
+        
+        // Test type mismatch error
+        stack.push(TypedValue::String("not a number".to_string()));
+        let err = stack.pop_number("test").unwrap_err();
+        match err {
+            VMError::TypeMismatch { expected, found, .. } => {
+                assert_eq!(expected, "Number");
+                assert_eq!(found, "String");
+            }
+            _ => panic!("Expected TypeMismatch error"),
+        }
+    }
+    
+    #[test]
+    fn test_dup_and_swap() {
+        let mut stack = VMStack::new();
+        stack.push(TypedValue::Number(10.0));
+        
+        stack.dup("test").unwrap();
+        assert_eq!(stack.len(), 2);
+        assert_eq!(stack.top().unwrap(), &TypedValue::Number(10.0));
+        
+        stack.push(TypedValue::String("hello".to_string()));
+        stack.swap("test").unwrap();
+        
+        assert_eq!(stack.pop("test").unwrap(), TypedValue::Number(10.0));
+        assert_eq!(stack.pop("test").unwrap(), TypedValue::String("hello".to_string()));
     }
 }

@@ -1,24 +1,29 @@
-//! Cooperative Value Network Modules
+//! Cooperative Value Module for the Internet Computer Network
 //!
-//! This library provides the core functionality for Cooperative Value Networks.
+//! The `icn-covm` crate provides a virtual machine for executing
+//! cooperative governance operations on the Internet Computer Network.
+//!
+//! Key features:
+//! - Stack-based VM with rich operation types
+//! - Serializable operations for storage and transmission
+//! - DSL for writing governance programs
+//! - Compiler for transforming DSL into VM operations
+//! - Runtime for executing operations
+//! - Storage abstractions for persistence
+//!
+//! This crate is intended to be used in contexts where multiple parties
+//! need to cooperatively manage resources using programmatic governance.
 
-pub mod api;
-pub mod bytecode;
-pub mod cli;
-pub mod compiler;
-pub mod events;
-pub mod federation;
-pub mod governance;
-pub mod identity;
-pub mod storage;
-#[cfg(feature = "typed-values")]
-pub mod typed;
 pub mod vm;
+pub mod compiler;
+pub mod storage;
+pub mod typed;
+pub mod governance;
+pub mod federation;
+pub mod identity;
+pub mod bytecode;
 
-// Use specific imports rather than assuming re-exports for clarity
-pub use crate::compiler::parse_dsl;
-pub use crate::events::Event;
-pub use crate::identity::Identity;
-pub use crate::storage::errors::{StorageError, StorageResult};
-pub use crate::storage::traits::{Storage, StorageBackend, StorageExtensions};
-pub use crate::vm::{Op, VMError, VM};
+// Re-export key types for convenience
+pub use vm::VM;
+pub use vm::types::Op;
+pub use typed::TypedValue;

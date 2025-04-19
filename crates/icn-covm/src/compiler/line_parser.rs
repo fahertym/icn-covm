@@ -1,4 +1,5 @@
 use super::{common, macros::ProposalLifecycleMacro, CompilerError, SourcePosition};
+use crate::typed::TypedValue;
 use crate::vm::Op;
 use chrono;
 
@@ -17,17 +18,34 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
 
     match command {
         "push" => {
-            let num_str = parts
+            let val_str = parts
                 .next()
                 .ok_or(CompilerError::MissingPushValue(pos.line, pos.column))?;
-            let num = num_str.parse::<f64>().map_err(|_| {
-                CompilerError::InvalidPushValue(
-                    num_str.to_string(),
-                    pos.line,
-                    common::adjusted_position(pos, line, num_str).column,
-                )
-            })?;
-            Ok(Op::Push(num))
+            
+            // Try to parse as different types
+            let value = if val_str == "true" {
+                TypedValue::Boolean(true)
+            } else if val_str == "false" {
+                TypedValue::Boolean(false)
+            } else if val_str == "null" {
+                TypedValue::Null
+            } else if val_str.starts_with('"') && val_str.ends_with('"') {
+                // String literal (strip quotes)
+                let str_content = &val_str[1..val_str.len()-1];
+                TypedValue::String(str_content.to_string())
+            } else {
+                // Try to parse as number
+                match val_str.parse::<f64>() {
+                    Ok(num) => TypedValue::Number(num),
+                    Err(_) => {
+                        // If it doesn't start with quotes but is not a number or boolean,
+                        // treat it as a string
+                        TypedValue::String(val_str.to_string())
+                    }
+                }
+            };
+            
+            Ok(Op::Push(value))
         }
         "emit" => {
             if let Some(inner) = line.find('"') {
@@ -775,5 +793,32 @@ fn parse_quoted_string(input: &str) -> Result<String, CompilerError> {
         Err(CompilerError::SyntaxError {
             details: format!("Expected a quoted string, got: '{}'", input),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_push_typed() {
+        // Number
+        let op = parse_line("push 42.5", SourcePosition::new(1, 1)).unwrap();
+        assert_eq!(op, Op::Push(TypedValue::Number(42.5)));
+        
+        // Boolean
+        let op = parse_line("push true", SourcePosition::new(1, 1)).unwrap();
+        assert_eq!(op, Op::Push(TypedValue::Boolean(true)));
+        
+        let op = parse_line("push false", SourcePosition::new(1, 1)).unwrap();
+        assert_eq!(op, Op::Push(TypedValue::Boolean(false)));
+        
+        // String
+        let op = parse_line("push \"hello\"", SourcePosition::new(1, 1)).unwrap();
+        assert_eq!(op, Op::Push(TypedValue::String("hello".to_string())));
+        
+        // Null
+        let op = parse_line("push null", SourcePosition::new(1, 1)).unwrap();
+        assert_eq!(op, Op::Push(TypedValue::Null));
     }
 }

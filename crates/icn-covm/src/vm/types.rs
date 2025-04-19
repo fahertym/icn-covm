@@ -20,6 +20,7 @@ use chrono::Duration;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
+use crate::typed::TypedValue;
 
 /// Operation types for the virtual machine
 ///
@@ -27,8 +28,8 @@ use std::fmt;
 /// memory, and control flow according to each operation's semantics.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum Op {
-    /// Push a numeric value onto the stack
-    Push(f64),
+    /// Push a value onto the stack
+    Push(TypedValue),
 
     /// Pop two values, add them, and push the result
     Add,
@@ -74,7 +75,7 @@ pub enum Op {
     Negate,
 
     /// Assert that the top value on the stack equals the expected value
-    AssertTop(f64),
+    AssertTop(TypedValue),
 
     /// Display the current stack contents
     DumpStack,
@@ -83,7 +84,7 @@ pub enum Op {
     DumpMemory,
 
     /// Assert that a value in memory equals the expected value
-    AssertMemory { key: String, expected: f64 },
+    AssertMemory { key: String, expected: TypedValue },
 
     /// Pop a value from the stack
     Pop,
@@ -138,7 +139,7 @@ pub enum Op {
     /// If no match is found and a default is provided, executes the default.
     Match {
         value: Vec<Op>,
-        cases: Vec<(f64, Vec<Op>)>,
+        cases: Vec<(TypedValue, Vec<Op>)>,
         default: Option<Vec<Op>>,
     },
 
