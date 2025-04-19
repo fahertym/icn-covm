@@ -23,9 +23,8 @@ use crate::storage::auth::AuthContext;
 use crate::storage::errors::{StorageError, StorageResult};
 use crate::storage::traits::Storage;
 use crate::vm::errors::VMError;
-use crate::vm::types::{LoopControl, Op, VMEvent};
+use crate::vm::types::VMEvent;
 use crate::vm::MissingKeyBehavior;
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::marker::{Send, Sync};
 
@@ -91,7 +90,11 @@ where
     fn execute_store_p(&mut self, key: &str, value: f64) -> Result<(), VMError>;
 
     /// Load a value from storage
-    fn execute_load_p(&mut self, key: &str, missing_key_behavior: MissingKeyBehavior) -> Result<f64, VMError>;
+    fn execute_load_p(
+        &mut self,
+        key: &str,
+        missing_key_behavior: MissingKeyBehavior,
+    ) -> Result<f64, VMError>;
 
     /// Fork the VM for transaction support
     fn fork(&mut self) -> Result<Self, VMError>
@@ -198,18 +201,24 @@ where
                             user_id,
                             action,
                             key,
-                        } => VMError::StorageError(format!(
-                            "Permission denied for user '{}' during {}: operation '{}' on '{}'",
-                            user_id, operation_name, action, key
-                        )),
-                        StorageError::NotFound { key } => VMError::StorageError(format!(
-                            "Key '{}' not found during {}",
-                            key, operation_name
-                        )),
-                        _ => VMError::StorageError(format!(
-                            "Error during {}: {:?}",
-                            operation_name, err
-                        )),
+                        } => VMError::StorageError {
+                            details: format!(
+                                "Permission denied for user '{}' during {}: operation '{}' on '{}'",
+                                user_id, operation_name, action, key
+                            )
+                        },
+                        StorageError::NotFound { key } => VMError::StorageError {
+                            details: format!(
+                                "Key '{}' not found during {}",
+                                key, operation_name
+                            )
+                        },
+                        _ => VMError::StorageError {
+                            details: format!(
+                                "Error during {}: {:?}",
+                                operation_name, err
+                            )
+                        },
                     }),
                 }
             }
@@ -429,7 +438,7 @@ where
     /// Execute a resource creation operation
     fn execute_create_resource(&mut self, resource: &str) -> Result<(), VMError> {
         // Create the resource and emit event
-        let result = self.storage_operation("create_resource", |backend, auth, namespace| {
+        self.storage_operation("create_resource", |backend, auth, namespace| {
             backend.create_resource(auth, namespace, resource)
         })?;
 
@@ -557,40 +566,48 @@ where
     }
 
     /// Load a value from storage
-    fn execute_load_p(&mut self, key: &str, missing_key_behavior: MissingKeyBehavior) -> Result<f64, VMError> {
-        let bytes = match self
-            .storage_operation("load_p", |backend, auth, namespace| {
-                backend.load(auth, namespace, key).map(|(data, event_opt)| {
-                    // Log any event generated
-                    if let Some(storage_event) = event_opt {
-                        // Create VM event
-                        let vm_event = VMEvent {
-                            category: "storage".to_string(),
-                            message: format!("load: {}", storage_event.details),
-                            timestamp: storage_event.timestamp,
-                        };
-                        // Return the data and event
-                        (data, Some(vm_event))
-                    } else {
-                        (data, None)
-                    }
-                })
-            }) {
-                Ok(result) => {
-                    // Process any events that were returned
-                    if let Some(event) = result.1 {
-                        self.events.push(event);
-                    }
-                    Ok(result.0) // Extract just the data part from the tuple
-                },
-                Err(VMError::StorageError(ref err_msg)) if err_msg.contains("not found") => {
-                    match missing_key_behavior {
-                        MissingKeyBehavior::Default => Ok(vec![48, 46, 48]) /* "0.0" in ASCII */,
-                        MissingKeyBehavior::Error => Err(VMError::StorageError(format!("Key '{}' not found during load_p", key)))
-                    }
-                },
-                Err(e) => Err(e)
-            }?;
+    fn execute_load_p(
+        &mut self,
+        key: &str,
+        missing_key_behavior: MissingKeyBehavior,
+    ) -> Result<f64, VMError> {
+        let bytes = match self.storage_operation("load_p", |backend, auth, namespace| {
+            backend.load(auth, namespace, key).map(|(data, event_opt)| {
+                // Log any event generated
+                if let Some(storage_event) = event_opt {
+                    // Create VM event
+                    let vm_event = VMEvent {
+                        category: "storage".to_string(),
+                        message: format!("load: {}", storage_event.details),
+                        timestamp: storage_event.timestamp,
+                    };
+                    // Return the data and event
+                    (data, Some(vm_event))
+                } else {
+                    (data, None)
+                }
+            })
+        }) {
+            Ok(result) => {
+                // Process any events that were returned
+                if let Some(event) = result.1 {
+                    self.events.push(event);
+                }
+                Ok(result.0) // Extract just the data part from the tuple
+            }
+            Err(VMError::StorageError { details: ref err_msg }) if err_msg.contains("not found") => {
+                match missing_key_behavior {
+                    MissingKeyBehavior::Default => Ok(vec![48, 46, 48]) /* "0.0" in ASCII */,
+                    MissingKeyBehavior::Error => Err(VMError::StorageError {
+                        details: format!(
+                            "Key '{}' not found during load_p",
+                            key
+                        )
+                    }),
+                }
+            }
+            Err(e) => Err(e),
+        }?;
 
         let value_str = String::from_utf8(bytes).map_err(|_| {
             VMError::Deserialization(format!("Failed to parse value for key '{}'", key))
@@ -619,7 +636,9 @@ where
 
                 if let Some(backend) = &mut forked.storage_backend {
                     backend.begin_transaction().map_err(|e| {
-                        VMError::StorageError(format!("Failed to begin transaction: {:?}", e))
+                        VMError::StorageError {
+                            details: format!("Failed to begin transaction: {:?}", e)
+                        }
                     })?;
                 }
 
@@ -637,14 +656,16 @@ where
     /// Commit a transaction from a forked VM
     fn commit_fork_transaction(&mut self) -> Result<(), VMError> {
         if !self.transaction_active {
-            return Err(VMError::StorageError(
-                "No active transaction to commit".to_string(),
-            ));
+            return Err(VMError::StorageError {
+                details: "No active transaction to commit".to_string(),
+            });
         }
 
         if let Some(backend) = &mut self.storage_backend {
             backend.commit_transaction().map_err(|e| {
-                VMError::StorageError(format!("Failed to commit transaction: {:?}", e))
+                VMError::StorageError {
+                    details: format!("Failed to commit transaction: {:?}", e)
+                }
             })?;
         }
 
@@ -655,14 +676,16 @@ where
     /// Rollback a transaction from a forked VM
     fn rollback_fork_transaction(&mut self) -> Result<(), VMError> {
         if !self.transaction_active {
-            return Err(VMError::StorageError(
-                "No active transaction to rollback".to_string(),
-            ));
+            return Err(VMError::StorageError {
+                details: "No active transaction to rollback".to_string(),
+            });
         }
 
         if let Some(backend) = &mut self.storage_backend {
             backend.rollback_transaction().map_err(|e| {
-                VMError::StorageError(format!("Failed to rollback transaction: {:?}", e))
+                VMError::StorageError {
+                    details: format!("Failed to rollback transaction: {:?}", e)
+                }
             })?;
         }
 

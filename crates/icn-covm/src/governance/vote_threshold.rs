@@ -1,9 +1,9 @@
 use crate::governance::traits::GovernanceOpHandler;
 use crate::storage::traits::Storage;
-use crate::vm::{VM, VMError};
-use crate::vm::types::Op;
 use crate::vm::execution::ExecutorOps;
 use crate::vm::stack::StackOps;
+use crate::vm::types::Op;
+use crate::vm::{VMError, VM};
 use std::fmt::Debug;
 use std::marker::{Send, Sync};
 
@@ -41,12 +41,15 @@ impl GovernanceOpHandler for VoteThresholdHandler {
                 vm.executor.emit_event("governance", "Vote threshold met");
             } else {
                 vm.stack.push(1.0); // Threshold not met (falsey in VM)
-                vm.executor.emit_event("governance", "Vote threshold not met");
+                vm.executor
+                    .emit_event("governance", "Vote threshold not met");
             }
 
             Ok(())
         } else {
-            Err(VMError::UndefinedOperation("Expected VoteThreshold operation".into()))
+            Err(VMError::UndefinedOperation(
+                "Expected VoteThreshold operation".into(),
+            ))
         }
     }
-} 
+}

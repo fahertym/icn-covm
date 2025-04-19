@@ -95,8 +95,11 @@ impl NetworkNode {
         let local_peer_id = PeerId::from(local_key.public());
 
         // Create the network behavior
-        let behaviour = create_behaviour(&local_key, config.protocol_version.clone()).await
-            .map_err(|e| FederationError::NetworkError(format!("Failed to create network behavior: {}", e)))?;
+        let behaviour = create_behaviour(&local_key, config.protocol_version.clone())
+            .await
+            .map_err(|e| {
+                FederationError::NetworkError(format!("Failed to create network behavior: {}", e))
+            })?;
 
         // Create the transport and swarm
         let swarm = create_swarm(local_key, behaviour)?;
@@ -610,7 +613,10 @@ impl NetworkNode {
 }
 
 /// Create a new Swarm with the provided identity
-fn create_swarm(local_key: identity::Keypair, behaviour: IcnBehaviour) -> Result<Swarm<IcnBehaviour>, FederationError> {
+fn create_swarm(
+    local_key: identity::Keypair,
+    behaviour: IcnBehaviour,
+) -> Result<Swarm<IcnBehaviour>, FederationError> {
     // Create a TCP transport
     let transport = {
         let tcp = tcp::tokio::Transport::new(tcp::Config::default().nodelay(true));
@@ -630,6 +636,11 @@ fn create_swarm(local_key: identity::Keypair, behaviour: IcnBehaviour) -> Result
     // Create a Swarm to manage peers and events
     let config = libp2p::swarm::Config::with_tokio_executor()
         .with_idle_connection_timeout(Duration::from_secs(60));
-    
-    Ok(Swarm::new(transport, behaviour, local_key.public().to_peer_id(), config))
+
+    Ok(Swarm::new(
+        transport,
+        behaviour,
+        local_key.public().to_peer_id(),
+        config,
+    ))
 }

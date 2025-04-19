@@ -22,13 +22,13 @@ use std::fmt;
 pub struct TypedCallFrame {
     /// Local memory for this function call
     pub memory: HashMap<String, TypedValue>,
-    
+
     /// Parameters passed to this function
     pub params: HashMap<String, TypedValue>,
-    
+
     /// Return value if set
     pub return_value: Option<TypedValue>,
-    
+
     /// Name of the function being called
     pub function_name: String,
 }
@@ -48,7 +48,11 @@ pub trait MemoryScope {
     fn get_function(&self, name: &str) -> Result<(Vec<String>, Vec<Op>), VMError>;
 
     /// Push a new call frame onto the call stack
-    fn push_call_frame(&mut self, function_name: &str, params: HashMap<String, TypedValue>) -> usize;
+    fn push_call_frame(
+        &mut self,
+        function_name: &str,
+        params: HashMap<String, TypedValue>,
+    ) -> usize;
 
     /// Pop the current call frame
     fn pop_call_frame(&mut self) -> Option<TypedCallFrame>;
@@ -154,22 +158,25 @@ impl MemoryScope for VMMemory {
         // First check current call frame
         if let Some(frame_idx) = self.call_stack.last() {
             let frame = &self.call_frames[*frame_idx];
-            
+
             // Check local memory first
             if let Some(value) = frame.memory.get(name) {
                 return Ok(value.clone());
             }
-            
+
             // Check params
             if let Some(value) = frame.params.get(name) {
                 return Ok(value.clone());
             }
         }
-        
+
         // Check global memory
-        self.memory.get(name).cloned().ok_or_else(|| VMError::UndefinedVariable {
-            name: name.to_string(),
-        })
+        self.memory
+            .get(name)
+            .cloned()
+            .ok_or_else(|| VMError::UndefinedVariable {
+                name: name.to_string(),
+            })
     }
 
     /// Define a function in memory
@@ -188,7 +195,11 @@ impl MemoryScope for VMMemory {
     }
 
     /// Push a new call frame onto the call stack
-    fn push_call_frame(&mut self, function_name: &str, params: HashMap<String, TypedValue>) -> usize {
+    fn push_call_frame(
+        &mut self,
+        function_name: &str,
+        params: HashMap<String, TypedValue>,
+    ) -> usize {
         let frame = TypedCallFrame {
             memory: HashMap::new(),
             params,
@@ -244,7 +255,7 @@ impl MemoryScope for VMMemory {
     /// Set runtime parameters
     fn set_parameters(&mut self, parameters: HashMap<String, String>) {
         self.parameters = parameters;
-        
+
         // Also convert parameters to typed values in memory
         for (key, value) in &self.parameters {
             // Try to parse as number first
@@ -258,16 +269,20 @@ impl MemoryScope for VMMemory {
                 self.memory.insert(key.clone(), TypedValue::Null);
             } else {
                 // Store as string
-                self.memory.insert(key.clone(), TypedValue::String(value.clone()));
+                self.memory
+                    .insert(key.clone(), TypedValue::String(value.clone()));
             }
         }
     }
 
     /// Get a parameter by name
     fn get_parameter(&self, name: &str) -> Result<String, VMError> {
-        self.parameters.get(name).cloned().ok_or_else(|| VMError::UndefinedParameter {
-            name: name.to_string(),
-        })
+        self.parameters
+            .get(name)
+            .cloned()
+            .ok_or_else(|| VMError::UndefinedParameter {
+                name: name.to_string(),
+            })
     }
 
     /// Get a copy of the current memory map
@@ -275,17 +290,17 @@ impl MemoryScope for VMMemory {
         if let Some(frame_idx) = self.call_stack.last() {
             let frame = &self.call_frames[*frame_idx];
             let mut merged = self.memory.clone();
-            
+
             // Add params
             for (k, v) in &frame.params {
                 merged.insert(k.clone(), v.clone());
             }
-            
+
             // Add local memory (overriding global if needed)
             for (k, v) in &frame.memory {
                 merged.insert(k.clone(), v.clone());
             }
-            
+
             merged
         } else {
             self.memory.clone()
@@ -303,7 +318,7 @@ impl MemoryScope for VMMemory {
         for (k, v) in &mem_map {
             items.push(format!("{}: {}", k, v));
         }
-        
+
         items.sort();
         format!("Memory: {{\n  {}\n}}", items.join(",\n  "))
     }
@@ -365,50 +380,53 @@ mod tests {
     fn test_memory_store_load() {
         let mut memory = VMMemory::new();
         memory.store("x", TypedValue::Number(42.0));
-        
+
         assert_eq!(memory.load("x").unwrap(), TypedValue::Number(42.0));
     }
 
     #[test]
     fn test_memory_typed_values() {
         let mut memory = VMMemory::new();
-        
+
         // Store different types
         memory.store("num", TypedValue::Number(42.0));
         memory.store("bool", TypedValue::Boolean(true));
         memory.store("str", TypedValue::String("hello".to_string()));
         memory.store("null", TypedValue::Null);
-        
+
         // Verify retrieval
         assert_eq!(memory.load("num").unwrap(), TypedValue::Number(42.0));
         assert_eq!(memory.load("bool").unwrap(), TypedValue::Boolean(true));
-        assert_eq!(memory.load("str").unwrap(), TypedValue::String("hello".to_string()));
+        assert_eq!(
+            memory.load("str").unwrap(),
+            TypedValue::String("hello".to_string())
+        );
         assert_eq!(memory.load("null").unwrap(), TypedValue::Null);
     }
 
     #[test]
     fn test_call_frame_scoping() {
         let mut memory = VMMemory::new();
-        
+
         // Set global variable
         memory.store("x", TypedValue::Number(1.0));
-        
+
         // Create a call frame
         let mut params = HashMap::new();
         params.insert("y".to_string(), TypedValue::Number(2.0));
         memory.push_call_frame("test_function", params);
-        
+
         // Set local variable
         memory.store("z", TypedValue::Number(3.0));
-        
+
         // Local scope should have access to all variables
         assert_eq!(memory.load("x").unwrap(), TypedValue::Number(1.0));
         assert_eq!(memory.load("y").unwrap(), TypedValue::Number(2.0));
         assert_eq!(memory.load("z").unwrap(), TypedValue::Number(3.0));
-        
+
         // Return from function
         memory.pop_call_frame();
-        
+
         // Global scope should only have x
         assert_eq!(memory.load("x").unwrap(), TypedValue::Number(1.0));
         assert!(memory.load("y").is_err());

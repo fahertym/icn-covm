@@ -21,7 +21,7 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
             let val_str = parts
                 .next()
                 .ok_or(CompilerError::MissingPushValue(pos.line, pos.column))?;
-            
+
             // Try to parse as different types
             let value = if val_str == "true" {
                 TypedValue::Boolean(true)
@@ -31,7 +31,7 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
                 TypedValue::Null
             } else if val_str.starts_with('"') && val_str.ends_with('"') {
                 // String literal (strip quotes)
-                let str_content = &val_str[1..val_str.len()-1];
+                let str_content = &val_str[1..val_str.len() - 1];
                 TypedValue::String(str_content.to_string())
             } else {
                 // Try to parse as number
@@ -44,7 +44,7 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
                     }
                 }
             };
-            
+
             Ok(Op::Push(value))
         }
         "emit" => {
@@ -364,12 +364,16 @@ pub fn parse_line(line: &str, pos: SourcePosition) -> Result<Op, CompilerError> 
             ))?;
 
             // Extract message parameter from quoted string
-            let rest_of_line = line[line.find(identity_id)
-                .ok_or(CompilerError::InvalidFunctionFormat(
-                    format!("Cannot find identity_id '{}' in line", identity_id),
-                    pos.line,
-                    pos.column,
-                ))? + identity_id.len()..].trim();
+            let rest_of_line =
+                line[line
+                    .find(identity_id)
+                    .ok_or(CompilerError::InvalidFunctionFormat(
+                        format!("Cannot find identity_id '{}' in line", identity_id),
+                        pos.line,
+                        pos.column,
+                    ))?
+                    + identity_id.len()..]
+                    .trim();
 
             // Use a simple parser to extract two quoted strings
             if let Some(quote1_start) = rest_of_line.find('"') {
@@ -805,18 +809,18 @@ mod tests {
         // Number
         let op = parse_line("push 42.5", SourcePosition::new(1, 1)).unwrap();
         assert_eq!(op, Op::Push(TypedValue::Number(42.5)));
-        
+
         // Boolean
         let op = parse_line("push true", SourcePosition::new(1, 1)).unwrap();
         assert_eq!(op, Op::Push(TypedValue::Boolean(true)));
-        
+
         let op = parse_line("push false", SourcePosition::new(1, 1)).unwrap();
         assert_eq!(op, Op::Push(TypedValue::Boolean(false)));
-        
+
         // String
         let op = parse_line("push \"hello\"", SourcePosition::new(1, 1)).unwrap();
         assert_eq!(op, Op::Push(TypedValue::String("hello".to_string())));
-        
+
         // Null
         let op = parse_line("push null", SourcePosition::new(1, 1)).unwrap();
         assert_eq!(op, Op::Push(TypedValue::Null));

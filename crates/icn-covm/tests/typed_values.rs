@@ -23,14 +23,14 @@ fn test_push_and_emit_mixed_types() {
         emit "Null: "
         emit
     "#;
-    
+
     let program = parse_dsl_with_stdlib(dsl).unwrap();
     let mut vm = VM::new();
-    
+
     vm.execute(&program).unwrap();
-    
+
     let output = vm.get_output();
-    
+
     // Check that all values were emitted correctly
     assert!(output.contains("Number: 42"));
     assert!(output.contains("String: hello"));
@@ -77,14 +77,14 @@ fn test_if_with_boolean_control() {
             push "Number 0.0 is not truthy"
             emit
     "#;
-    
+
     let program = parse_dsl_with_stdlib(dsl).unwrap();
     let mut vm = VM::new();
-    
+
     vm.execute(&program).unwrap();
-    
+
     let output = vm.get_output();
-    
+
     // Check that conditions were evaluated correctly
     assert!(output.contains("Condition was true"));
     assert!(output.contains("Condition was false"));
@@ -113,14 +113,14 @@ fn test_add_type_error_string_plus_number() {
         add
         emit
     "#;
-    
+
     let program = parse_dsl_with_stdlib(dsl).unwrap();
     let mut vm = VM::new();
-    
+
     vm.execute(&program).unwrap();
-    
+
     let output = vm.get_output();
-    
+
     // Check that the operations worked correctly
     assert!(output.contains("Count: 42"));
     assert!(output.contains("42 is the answer"));
@@ -147,15 +147,15 @@ fn test_stack_order_mixed_types() {
         emit
         emit
     "#;
-    
+
     let program = parse_dsl_with_stdlib(dsl).unwrap();
     let mut vm = VM::new();
-    
+
     vm.execute(&program).unwrap();
-    
+
     let output = vm.get_output();
     let lines: Vec<&str> = output.lines().collect();
-    
+
     // Check the emission order matches stack operations
     assert_eq!(lines.len(), 5);
     assert_eq!(lines[0], "two");
@@ -194,26 +194,29 @@ fn test_memory_store_and_retrieve_typed() {
         load null_val
         emit
     "#;
-    
+
     let program = parse_dsl_with_stdlib(dsl).unwrap();
     let mut vm = VM::new();
-    
+
     vm.execute(&program).unwrap();
-    
+
     let output = vm.get_output();
     let lines: Vec<&str> = output.lines().collect();
-    
+
     // Check that values were stored and retrieved correctly
     assert_eq!(lines.len(), 4);
     assert_eq!(lines[0], "42");
     assert_eq!(lines[1], "hello");
     assert_eq!(lines[2], "true");
     assert_eq!(lines[3], "null");
-    
+
     // Check the memory map
     let memory = vm.get_memory_map();
     assert_eq!(memory.get("number_val"), Some(&TypedValue::Number(42.0)));
-    assert_eq!(memory.get("string_val"), Some(&TypedValue::String("hello".to_string())));
+    assert_eq!(
+        memory.get("string_val"),
+        Some(&TypedValue::String("hello".to_string()))
+    );
     assert_eq!(memory.get("bool_val"), Some(&TypedValue::Boolean(true)));
     assert_eq!(memory.get("null_val"), Some(&TypedValue::Null));
 }
@@ -255,21 +258,21 @@ fn test_comparison_operations() {
         eq  # true == 1.0 = true (type coercion)
         emit
     "#;
-    
+
     let program = parse_dsl_with_stdlib(dsl).unwrap();
     let mut vm = VM::new();
-    
+
     vm.execute(&program).unwrap();
-    
+
     let output = vm.get_output();
     let lines: Vec<&str> = output.lines().collect();
-    
+
     // Check that comparisons work correctly
     assert_eq!(lines.len(), 6);
-    assert_eq!(lines[0], "true");  // 10 > 5
-    assert_eq!(lines[1], "true");  // "apple" < "banana"
-    assert_eq!(lines[2], "true");  // false < true
-    assert_eq!(lines[3], "true");  // 42 == 42
-    assert_eq!(lines[4], "true");  // "hello" == "hello"
-    assert_eq!(lines[5], "true");  // true == 1.0
-} 
+    assert_eq!(lines[0], "true"); // 10 > 5
+    assert_eq!(lines[1], "true"); // "apple" < "banana"
+    assert_eq!(lines[2], "true"); // false < true
+    assert_eq!(lines[3], "true"); // 42 == 42
+    assert_eq!(lines[4], "true"); // "hello" == "hello"
+    assert_eq!(lines[5], "true"); // true == 1.0
+}

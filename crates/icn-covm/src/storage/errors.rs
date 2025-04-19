@@ -34,7 +34,7 @@ pub enum StorageError {
         /// Details about the transaction error
         details: String,
     },
-    
+
     /// Conflict when modifying a resource
     ConflictError {
         /// Resource that had a conflict
@@ -42,7 +42,7 @@ pub enum StorageError {
         /// Details about the conflict
         details: String,
     },
-    
+
     /// Backend connection error
     ConnectionError {
         /// Backend identifier
@@ -50,7 +50,7 @@ pub enum StorageError {
         /// Details about the connection error
         details: String,
     },
-    
+
     /// Serialization or deserialization error
     SerializationError {
         /// Type being serialized/deserialized
@@ -58,7 +58,7 @@ pub enum StorageError {
         /// Details about the serialization error
         details: String,
     },
-    
+
     /// Invalid data format
     InvalidDataFormat {
         /// Expected format
@@ -68,7 +68,7 @@ pub enum StorageError {
         /// Additional details
         details: String,
     },
-    
+
     /// Quota or limit exceeded
     QuotaExceeded {
         /// Limit that was exceeded
@@ -78,7 +78,7 @@ pub enum StorageError {
         /// Maximum allowed
         maximum: u64,
     },
-    
+
     /// Operation timeout
     TimeoutError {
         /// Operation that timed out
@@ -86,7 +86,7 @@ pub enum StorageError {
         /// Timeout duration in seconds
         timeout_secs: u64,
     },
-    
+
     /// Resource locked by another operation
     ResourceLocked {
         /// Resource that is locked
@@ -94,7 +94,7 @@ pub enum StorageError {
         /// Details about the lock
         details: String,
     },
-    
+
     /// Backend-specific validation error
     ValidationError {
         /// Validation rule that failed
@@ -102,13 +102,13 @@ pub enum StorageError {
         /// Details about the validation error
         details: String,
     },
-    
+
     /// Time error
     TimeError {
         /// Details about the time error
         details: String,
     },
-    
+
     /// IO error during storage operation
     IoError {
         /// Details about the operation that failed
@@ -116,7 +116,7 @@ pub enum StorageError {
         /// Error message
         details: String,
     },
-    
+
     /// IO error during storage operation (backwards compatibility alias for IoError)
     #[deprecated(since = "0.5.0", note = "Use IoError instead")]
     IOError {
@@ -125,7 +125,7 @@ pub enum StorageError {
         /// Error message
         details: String,
     },
-    
+
     /// Migration or schema version error
     SchemaVersionError {
         /// Current schema version
@@ -135,19 +135,19 @@ pub enum StorageError {
         /// Details about the version error
         details: String,
     },
-    
+
     /// Other or unknown error
     Other {
         /// Details about the error
         details: String,
     },
-    
+
     /// Resource not found error
     ResourceNotFound(String),
-    
+
     /// Insufficient balance for operation
     InsufficientBalance(String),
-    
+
     /// Version conflict during update
     VersionConflict {
         /// Current version
@@ -165,8 +165,16 @@ impl fmt::Display for StorageError {
             Self::AuthenticationError { details } => {
                 write!(f, "Authentication error: {}", details)
             }
-            Self::PermissionDenied { user_id, action, key } => {
-                write!(f, "Permission denied for user '{}' to perform '{}' on '{}'", user_id, action, key)
+            Self::PermissionDenied {
+                user_id,
+                action,
+                key,
+            } => {
+                write!(
+                    f,
+                    "Permission denied for user '{}' to perform '{}' on '{}'",
+                    user_id, action, key
+                )
             }
             Self::NotFound { key } => {
                 write!(f, "Key not found: {}", key)
@@ -183,14 +191,37 @@ impl fmt::Display for StorageError {
             Self::SerializationError { data_type, details } => {
                 write!(f, "Serialization error for {}: {}", data_type, details)
             }
-            Self::InvalidDataFormat { expected, received, details } => {
-                write!(f, "Invalid data format: expected {}, received {}: {}", expected, received, details)
+            Self::InvalidDataFormat {
+                expected,
+                received,
+                details,
+            } => {
+                write!(
+                    f,
+                    "Invalid data format: expected {}, received {}: {}",
+                    expected, received, details
+                )
             }
-            Self::QuotaExceeded { limit_type, current, maximum } => {
-                write!(f, "{} quota exceeded: {} of {} used", limit_type, current, maximum)
+            Self::QuotaExceeded {
+                limit_type,
+                current,
+                maximum,
+            } => {
+                write!(
+                    f,
+                    "{} quota exceeded: {} of {} used",
+                    limit_type, current, maximum
+                )
             }
-            Self::TimeoutError { operation, timeout_secs } => {
-                write!(f, "Operation '{}' timed out after {} seconds", operation, timeout_secs)
+            Self::TimeoutError {
+                operation,
+                timeout_secs,
+            } => {
+                write!(
+                    f,
+                    "Operation '{}' timed out after {} seconds",
+                    operation, timeout_secs
+                )
             }
             Self::ResourceLocked { resource, details } => {
                 write!(f, "Resource '{}' is locked: {}", resource, details)
@@ -201,23 +232,34 @@ impl fmt::Display for StorageError {
             Self::TimeError { details } => {
                 write!(f, "Time error: {}", details)
             }
-            Self::SchemaVersionError { current_version, required_version, details } => {
-                write!(f, "Schema version error: current {}, required {}: {}", 
-                    current_version, required_version, details)
+            Self::SchemaVersionError {
+                current_version,
+                required_version,
+                details,
+            } => {
+                write!(
+                    f,
+                    "Schema version error: current {}, required {}: {}",
+                    current_version, required_version, details
+                )
             }
             Self::Other { details } => {
                 write!(f, "Storage error: {}", details)
             }
-            Self::IoError { operation: _operation, details } => {
+            Self::IoError {
+                operation: _operation,
+                details,
+            } => {
                 write!(f, "IO error: {} ({})", details, _operation)
             }
             #[allow(deprecated)]
             Self::IOError { operation, details } => {
                 // Just delegate to IoError to avoid duplicated code
-                Self::IoError { 
-                    operation: operation.clone(), 
-                    details: details.clone() 
-                }.fmt(f)
+                Self::IoError {
+                    operation: operation.clone(),
+                    details: details.clone(),
+                }
+                .fmt(f)
             }
             Self::ResourceNotFound(key) => {
                 write!(f, "Resource not found: {}", key)
@@ -225,8 +267,16 @@ impl fmt::Display for StorageError {
             Self::InsufficientBalance(reason) => {
                 write!(f, "Insufficient balance: {}", reason)
             }
-            Self::VersionConflict { current, expected, resource } => {
-                write!(f, "Version conflict: current {}, expected {}: {}", current, expected, resource)
+            Self::VersionConflict {
+                current,
+                expected,
+                resource,
+            } => {
+                write!(
+                    f,
+                    "Version conflict: current {}, expected {}: {}",
+                    current, expected, resource
+                )
             }
         }
     }
@@ -263,7 +313,10 @@ impl From<std::time::SystemTimeError> for StorageError {
 /// Backwards compatibility methods for StorageError
 impl StorageError {
     /// Create a QuotaExceeded error with legacy field names
-    #[deprecated(since = "0.5.0", note = "Use QuotaExceeded with limit_type, current, maximum fields")]
+    #[deprecated(
+        since = "0.5.0",
+        note = "Use QuotaExceeded with limit_type, current, maximum fields"
+    )]
     pub fn quota_exceeded(account_id: String, requested: u64, available: u64) -> Self {
         Self::QuotaExceeded {
             limit_type: format!("Account '{}'", account_id),

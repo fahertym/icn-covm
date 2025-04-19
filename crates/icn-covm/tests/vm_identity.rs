@@ -104,7 +104,8 @@ fn test_identity_verification() {
         signature: "mock signature".to_string(),
     }];
 
-    vm.execute(&ops).expect("Failed to execute identity verification");
+    vm.execute(&ops)
+        .expect("Failed to execute identity verification");
     assert_eq!(vm.top(), Some(1.0)); // Should be true (1.0)
 
     // Test with non-existent identity
@@ -114,7 +115,8 @@ fn test_identity_verification() {
         signature: "mock signature".to_string(),
     }];
 
-    vm.execute(&ops).expect("Failed to execute identity verification");
+    vm.execute(&ops)
+        .expect("Failed to execute identity verification");
     assert_eq!(vm.top(), Some(0.0)); // Should be false (0.0)
 }
 
@@ -130,7 +132,8 @@ fn test_membership_check() {
         namespace: "coops/test_coop".to_string(),
     }];
 
-    vm.execute(&ops).expect("Failed to execute membership check");
+    vm.execute(&ops)
+        .expect("Failed to execute membership check");
     assert_eq!(vm.top(), Some(1.0)); // Should be true (1.0)
 
     // Test with a namespace where the member doesn't belong
@@ -139,7 +142,8 @@ fn test_membership_check() {
         namespace: "coops/other_coop".to_string(),
     }];
 
-    vm.execute(&ops).expect("Failed to execute membership check");
+    vm.execute(&ops)
+        .expect("Failed to execute membership check");
     assert_eq!(vm.top(), Some(0.0)); // Should be false (0.0)
 
     // Test with non-existent identity
@@ -148,7 +152,8 @@ fn test_membership_check() {
         namespace: "coops/test_coop".to_string(),
     }];
 
-    vm.execute(&ops).expect("Failed to execute membership check");
+    vm.execute(&ops)
+        .expect("Failed to execute membership check");
     assert_eq!(vm.top(), Some(0.0)); // Should be false (0.0)
 }
 
@@ -164,7 +169,8 @@ fn test_delegation_check() {
         delegate_id: "member1".to_string(),
     }];
 
-    vm.execute(&ops).expect("Failed to execute delegation check");
+    vm.execute(&ops)
+        .expect("Failed to execute delegation check");
     assert_eq!(vm.top(), Some(1.0)); // Should be true (1.0)
 
     // Test with invalid delegation
@@ -173,7 +179,8 @@ fn test_delegation_check() {
         delegate_id: "member2".to_string(),
     }];
 
-    vm.execute(&ops).expect("Failed to execute delegation check");
+    vm.execute(&ops)
+        .expect("Failed to execute delegation check");
     assert_eq!(vm.top(), Some(0.0)); // Should be false (0.0)
 
     // Test with non-existent identity
@@ -182,7 +189,8 @@ fn test_delegation_check() {
         delegate_id: "member1".to_string(),
     }];
 
-    vm.execute(&ops).expect("Failed to execute delegation check");
+    vm.execute(&ops)
+        .expect("Failed to execute delegation check");
     assert_eq!(vm.top(), Some(0.0)); // Should be false (0.0)
 }
 
@@ -265,7 +273,8 @@ fn test_identity_dsl_execution() {
     "#;
 
     let ops = parse_dsl(source).expect("Failed to parse DSL");
-    vm.execute(&ops).expect("Failed to execute identity DSL execution");
+    vm.execute(&ops)
+        .expect("Failed to execute identity DSL execution");
 
     // If all 3 operations returned true (1.0), the sum should be 3.0
     assert_eq!(vm.top(), Some(3.0));
@@ -418,7 +427,8 @@ fn test_edge_cases() {
     "#;
 
     let ops = parse_dsl(source).expect("Failed to parse DSL");
-    vm.execute(&ops).expect("Failed to execute missing membership test");
+    vm.execute(&ops)
+        .expect("Failed to execute missing membership test");
     assert_eq!(vm.top(), Some(0.0));
 }
 
@@ -466,7 +476,8 @@ fn test_identity_operations() {
     }];
 
     // Execute and check result
-    vm.execute(&ops).expect("Failed to execute identity verification");
+    vm.execute(&ops)
+        .expect("Failed to execute identity verification");
     assert_eq!(vm.top(), Some(1.0));
 
     // Test membership check
@@ -475,7 +486,8 @@ fn test_identity_operations() {
         namespace: "coops/test_coop".to_string(),
     }];
 
-    vm.execute(&ops).expect("Failed to execute membership check");
+    vm.execute(&ops)
+        .expect("Failed to execute membership check");
     assert_eq!(vm.top(), Some(1.0));
 
     // Test delegation check
@@ -484,7 +496,8 @@ fn test_identity_operations() {
         delegate_id: "user1".to_string(),
     }];
 
-    vm.execute(&ops).expect("Failed to execute delegation check");
+    vm.execute(&ops)
+        .expect("Failed to execute delegation check");
     assert_eq!(vm.top(), Some(1.0));
 
     // Test DSL parsing
@@ -504,7 +517,8 @@ fn test_identity_operations() {
     "#;
 
     let ops = parse_dsl(source).expect("Failed to parse DSL");
-    vm.execute(&ops).expect("Failed to execute identity DSL execution");
+    vm.execute(&ops)
+        .expect("Failed to execute identity DSL execution");
 
     // Should be 3.0 if all three operations returned true (1.0)
     assert_eq!(vm.top(), Some(3.0));
@@ -513,20 +527,28 @@ fn test_identity_operations() {
 #[test]
 fn test_identity_creation() {
     let mut vm = VM::new();
-    
+
     // Test creating an identity
     let source = r#"
         CreateIdentity "alice" "member"
         StoreP "test_identity_created" true
     "#;
-    
+
     let ops = parse_dsl(source).expect("Failed to parse DSL");
-    assert!(vm.execute(&ops).is_ok(), "Failed to execute identity creation");
-    
+    assert!(
+        vm.execute(&ops).is_ok(),
+        "Failed to execute identity creation"
+    );
+
     // Check if the identity was created properly
-    let storage = vm.storage_backend.as_ref()
+    let storage = vm
+        .storage_backend
+        .as_ref()
         .expect("Storage backend should be available");
-    
+
     let result = storage.get(None, "default", "test_identity_created");
-    assert!(result.is_ok(), "Should have stored test_identity_created flag");
+    assert!(
+        result.is_ok(),
+        "Should have stored test_identity_created flag"
+    );
 }

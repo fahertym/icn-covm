@@ -16,11 +16,11 @@
 //! - `LoopControl`: Loop control flow signals
 //! - `VMEvent`: Event structure for tracking VM activity
 
+use crate::typed::TypedValue;
 use chrono::Duration;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
-use crate::typed::TypedValue;
 
 /// Operation types for the virtual machine
 ///

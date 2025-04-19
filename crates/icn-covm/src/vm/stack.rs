@@ -60,16 +60,16 @@ pub trait StackOps {
 
     /// Check if the stack is empty
     fn is_empty(&self) -> bool;
-    
+
     /// Pop a number from the stack, with type checking
     fn pop_number(&mut self, op_name: &str) -> Result<f64, VMError>;
-    
+
     /// Pop a boolean from the stack, with type checking
     fn pop_bool(&mut self, op_name: &str) -> Result<bool, VMError>;
-    
+
     /// Pop a string from the stack, with type checking
     fn pop_string(&mut self, op_name: &str) -> Result<String, VMError>;
-    
+
     /// Peek the type of the top value on the stack
     fn peek_type(&self) -> Option<&TypedValue>;
 }
@@ -151,10 +151,10 @@ impl StackOps for VMStack {
         if self.stack.len() < depth {
             return Err(VMError::StackUnderflow);
         }
-        
+
         let top_value = self.stack.last().unwrap();
         let mut all_equal = true;
-        
+
         for i in 1..depth {
             let index = self.stack.len() - 1 - i;
             if self.stack[index] != *top_value {
@@ -162,7 +162,7 @@ impl StackOps for VMStack {
                 break;
             }
         }
-        
+
         Ok(all_equal)
     }
 
@@ -189,7 +189,7 @@ impl StackOps for VMStack {
     fn is_empty(&self) -> bool {
         self.stack.is_empty()
     }
-    
+
     /// Pop a number from the stack, with type checking
     fn pop_number(&mut self, op_name: &str) -> Result<f64, VMError> {
         let value = self.pop(op_name)?;
@@ -199,7 +199,7 @@ impl StackOps for VMStack {
             operation: op_name.to_string(),
         })
     }
-    
+
     /// Pop a boolean from the stack, with type checking
     fn pop_bool(&mut self, op_name: &str) -> Result<bool, VMError> {
         let value = self.pop(op_name)?;
@@ -209,7 +209,7 @@ impl StackOps for VMStack {
             operation: op_name.to_string(),
         })
     }
-    
+
     /// Pop a string from the stack, with type checking
     fn pop_string(&mut self, op_name: &str) -> Result<String, VMError> {
         let value = self.pop(op_name)?;
@@ -219,7 +219,7 @@ impl StackOps for VMStack {
             operation: op_name.to_string(),
         })
     }
-    
+
     /// Peek the type of the top value on the stack
     fn peek_type(&self) -> Option<&TypedValue> {
         self.stack.last()
@@ -229,70 +229,75 @@ impl StackOps for VMStack {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_push_and_pop() {
         let mut stack = VMStack::new();
         stack.push(TypedValue::Number(10.0));
         stack.push(TypedValue::Number(20.0));
-        
+
         assert_eq!(stack.len(), 2);
         assert_eq!(stack.pop("test").unwrap(), TypedValue::Number(20.0));
         assert_eq!(stack.pop("test").unwrap(), TypedValue::Number(10.0));
         assert!(stack.is_empty());
     }
-    
+
     #[test]
     fn test_pop_two() {
         let mut stack = VMStack::new();
         stack.push(TypedValue::Number(10.0));
         stack.push(TypedValue::Number(20.0));
-        
+
         let (a, b) = stack.pop_two("test").unwrap();
         assert_eq!(a, TypedValue::Number(10.0));
         assert_eq!(b, TypedValue::Number(20.0));
         assert!(stack.is_empty());
     }
-    
+
     #[test]
     fn test_typed_stack_operations() {
         let mut stack = VMStack::new();
-        
+
         // Push different types
         stack.push(TypedValue::Number(10.0));
         stack.push(TypedValue::Boolean(true));
         stack.push(TypedValue::String("hello".to_string()));
-        
+
         // Check type-specific pops
         assert_eq!(stack.pop_string("test").unwrap(), "hello");
         assert_eq!(stack.pop_bool("test").unwrap(), true);
         assert_eq!(stack.pop_number("test").unwrap(), 10.0);
-        
+
         // Test type mismatch error
         stack.push(TypedValue::String("not a number".to_string()));
         let err = stack.pop_number("test").unwrap_err();
         match err {
-            VMError::TypeMismatch { expected, found, .. } => {
+            VMError::TypeMismatch {
+                expected, found, ..
+            } => {
                 assert_eq!(expected, "Number");
                 assert_eq!(found, "String");
             }
             _ => panic!("Expected TypeMismatch error"),
         }
     }
-    
+
     #[test]
     fn test_dup_and_swap() {
         let mut stack = VMStack::new();
         stack.push(TypedValue::Number(10.0));
-        
+
         stack.dup("test").unwrap();
         assert_eq!(stack.len(), 2);
         assert_eq!(stack.top().unwrap(), &TypedValue::Number(10.0));
-        
+
         stack.push(TypedValue::String("hello".to_string()));
         stack.swap("test").unwrap();
-        
+
         assert_eq!(stack.pop("test").unwrap(), TypedValue::Number(10.0));
-        assert_eq!(stack.pop("test").unwrap(), TypedValue::String("hello".to_string()));
+        assert_eq!(
+            stack.pop("test").unwrap(),
+            TypedValue::String("hello".to_string())
+        );
     }
 }

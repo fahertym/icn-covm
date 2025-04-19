@@ -14,16 +14,16 @@
 //! This crate is intended to be used in contexts where multiple parties
 //! need to cooperatively manage resources using programmatic governance.
 
-pub mod vm;
+pub mod bytecode;
 pub mod compiler;
+pub mod federation;
+pub mod governance;
+pub mod identity;
 pub mod storage;
 pub mod typed;
-pub mod governance;
-pub mod federation;
-pub mod identity;
-pub mod bytecode;
+pub mod vm;
 
 // Re-export key types for convenience
-pub use vm::VM;
-pub use vm::types::Op;
 pub use typed::TypedValue;
+pub use vm::types::Op;
+pub use vm::VM;

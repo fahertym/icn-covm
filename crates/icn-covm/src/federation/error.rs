@@ -1,59 +1,59 @@
+use crate::storage::errors::StorageError;
 use std::error::Error;
 use std::fmt;
 use std::io;
-use crate::storage::errors::StorageError;
 
 /// Error types specific to federation operations
 #[derive(Debug)]
 pub enum FederationError {
     /// General network error
     NetworkError(String),
-    
+
     /// Network transport error
     TransportError(String),
-    
+
     /// Peer connection error
     ConnectionError(String),
-    
+
     /// Protocol error
     ProtocolError(String),
-    
+
     /// Message serialization/deserialization error
     SerializationError(String),
-    
+
     /// Authentication error
     AuthenticationError(String),
-    
+
     /// Storage operation error
     StorageError(StorageError),
-    
+
     /// Resource not found
     NotFoundError(String),
 
     /// Configuration error
     ConfigurationError(String),
-    
+
     /// Clock error (for timestamp handling)
     ClockError(String),
-    
+
     /// Permission denied
     PermissionDenied(String),
-    
+
     /// Proposal validation error
     ProposalValidationError(String),
-    
+
     /// Vote validation error
     VoteValidationError(String),
-    
+
     /// Operation timeout
     TimeoutError(String),
-    
+
     /// Generic IO errors
     IoError(io::Error),
-    
+
     /// Invalid argument
     InvalidArgumentError(String),
-    
+
     /// Other/unknown error
     Other(String),
 }

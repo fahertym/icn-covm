@@ -5,7 +5,7 @@ use icn_covm::bytecode::{BytecodeCompiler, BytecodeInterpreter};
 use icn_covm::cli::federation::{federation_command, handle_federation_command};
 use icn_covm::cli::proposal::{handle_proposal_command, proposal_command};
 use icn_covm::cli::proposal_demo::run_proposal_demo;
-use icn_covm::compiler::{parse_dsl, parse_dsl_with_stdlib, LifecycleConfig, CompilerError};
+use icn_covm::compiler::{parse_dsl, parse_dsl_with_stdlib, CompilerError, LifecycleConfig};
 use icn_covm::events::LogFormat;
 use icn_covm::federation::messages::{ProposalScope, ProposalStatus, VotingModel};
 use icn_covm::federation::{NetworkNode, NodeConfig};
@@ -15,7 +15,7 @@ use icn_covm::storage::implementations::file_storage::FileStorage;
 use icn_covm::storage::implementations::in_memory::InMemoryStorage;
 use icn_covm::storage::traits::StorageBackend;
 use icn_covm::storage::utils::now_with_default;
-use icn_covm::vm::{VMError, VM, MemoryScope, StackOps};
+use icn_covm::vm::{MemoryScope, StackOps, VMError, VM};
 
 use clap::{Arg, ArgAction, Command};
 use log::{debug, error, info, warn};
@@ -367,13 +367,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .map(|values| values.map(|s| s.to_string()).collect::<Vec<String>>())
                 .unwrap_or_default()
                 .iter()
-                .filter_map(|addr| {
-                    match addr.parse::<libp2p::Multiaddr>() {
-                        Ok(addr) => Some(addr),
-                        Err(e) => {
-                            println!("Warning: failed to parse multiaddr {}: {}", addr, e);
-                            None
-                        }
+                .filter_map(|addr| match addr.parse::<libp2p::Multiaddr>() {
+                    Ok(addr) => Some(addr),
+                    Err(e) => {
+                        println!("Warning: failed to parse multiaddr {}: {}", addr, e);
+                        None
                     }
                 })
                 .collect();
@@ -510,7 +508,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
         Some(("dag-trace", _)) => {
             let storage = setup_storage(default_storage_backend, default_storage_path)?;
-            let auth_context = get_or_create_auth_context(default_storage_backend, default_storage_path)?;
+            let auth_context =
+                get_or_create_auth_context(default_storage_backend, default_storage_path)?;
             let mut vm = VM::with_storage_backend(storage);
             vm.set_auth_context(auth_context);
             if let Some(dag) = &vm.dag {
@@ -721,7 +720,7 @@ fn run_program(
             .set_tracing(trace)
             .set_explanation(explain)
             .set_verbose_storage_trace(verbose_storage_trace);
-        
+
         vm.set_auth_context(auth_context);
         vm.set_namespace("demo");
         vm.set_storage_backend(storage);
@@ -729,7 +728,9 @@ fn run_program(
         let mut interpreter = BytecodeInterpreter::new(vm, program);
 
         // Set parameters
-        interpreter.get_vm_mut().set_parameters(parameters.clone())?;
+        interpreter
+            .get_vm_mut()
+            .set_parameters(parameters.clone())?;
 
         // Execute
         let start = Instant::now();
@@ -758,13 +759,13 @@ fn run_program(
     } else {
         // AST execution with FileStorage
         let mut vm: VM<InMemoryStorage> = VM::new();
-        
+
         // Set the new flags
         vm.set_simulation_mode(simulate);
         vm.set_tracing(trace);
         vm.set_explanation(explain);
         vm.set_verbose_storage_trace(verbose_storage_trace);
-        
+
         vm.set_auth_context(auth_context);
         vm.set_namespace("demo");
         vm.set_storage_backend(storage);
@@ -785,7 +786,7 @@ fn run_program(
 
             // Print final stack state
             println!("Final stack: {:?}", vm.get_stack());
-            
+
             // Print final memory state
             println!("Final memory:");
             let memory_map = vm.get_memory_map();
@@ -1004,7 +1005,7 @@ fn run_interactive(
     if use_bytecode {
         println!("Bytecode execution is enabled");
     }
-    
+
     // Print execution mode information
     if simulate {
         println!("Running in SIMULATION mode (no persistent storage changes)");
@@ -1015,7 +1016,7 @@ fn run_interactive(
     if explain {
         println!("Explanation enabled (will describe each operation)");
     }
-    
+
     // Setup auth context and storage based on selected backend
     let auth_context = create_demo_auth_context()?;
 
@@ -1024,27 +1025,27 @@ fn run_interactive(
 
     // AST execution with FileStorage
     let mut vm: VM<InMemoryStorage> = VM::new();
-    
+
     // Set the new flags
     vm.set_simulation_mode(simulate);
     vm.set_tracing(trace);
     vm.set_explanation(explain);
     vm.set_verbose_storage_trace(verbose_storage_trace);
-    
+
     vm.set_auth_context(auth_context);
     vm.set_namespace("demo");
     vm.set_storage_backend(storage);
 
     // Set parameters
     vm.set_parameters(parameters)?;
-    
+
     use std::io::{self, Write};
-    
+
     println!("ICN Cooperative VM Interactive Shell (type 'exit' to quit, 'help' for commands)");
-    
+
     // Create an editor for interactive input
     let mut rl = rustyline::DefaultEditor::new().map_err(|e| AppError::Other(e.to_string()))?;
-    
+
     loop {
         // Read a line of input
         let line = match rl.readline("> ") {
@@ -1061,18 +1062,18 @@ fn run_interactive(
                 return Err(AppError::Other(format!("Error reading input: {}", e)));
             }
         };
-        
+
         // Add the line to the editor history
         if let Err(e) = rl.add_history_entry(&line) {
             return Err(AppError::Other(format!("Error adding to history: {}", e)));
         }
-        
+
         // Process the line
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
         }
-        
+
         match trimmed {
             "exit" | "quit" => {
                 println!("Exiting REPL");
@@ -1089,7 +1090,7 @@ fn run_interactive(
                 println!("  mode bytecode - Switch to bytecode execution mode");
                 println!("  trace on/off - Toggle tracing mode");
                 println!("  explain on/off - Toggle explanation mode");
-                println!("  simulate on/off - Toggle simulation mode"); 
+                println!("  simulate on/off - Toggle simulation mode");
                 println!("  storage-trace on/off - Toggle verbose storage tracing");
                 println!("  save <file>  - Save current program to a file");
                 println!("  load <file>  - Load program from a file");
@@ -1220,7 +1221,7 @@ fn run_interactive(
                                 println!("Compiled to bytecode:");
                                 println!("{}", program.dump());
                             }
-                            
+
                             // Configure a new VM with our flags
                             let mut base_vm = VM::<InMemoryStorage>::new();
                             base_vm.set_simulation_mode(vm.is_simulation_mode());
@@ -1533,9 +1534,7 @@ async fn broadcast_proposal(
         created_at: now_with_default() as i64,
         scope,
         voting_model,
-        expires_at: expires_in.map(|seconds| {
-            (now_with_default() as i64) + (seconds as i64)
-        }),
+        expires_at: expires_in.map(|seconds| (now_with_default() as i64) + (seconds as i64)),
         status: ProposalStatus::Open,
     };
 
@@ -1749,12 +1748,16 @@ async fn execute_proposal(
         protocol_version: "1.0.0".to_string(),
     };
 
-    let mut network_node = NetworkNode::new(node_config).await
+    let mut network_node = NetworkNode::new(node_config)
+        .await
         .map_err(|e| AppError::Federation(format!("Failed to create network node: {}", e)))?;
-    
+
     // Start the network node
     if let Err(e) = network_node.start().await {
-        return Err(AppError::Federation(format!("Failed to start network node: {}", e)));
+        return Err(AppError::Federation(format!(
+            "Failed to start network node: {}",
+            e
+        )));
     }
 
     // Get the proposal
@@ -1763,7 +1766,10 @@ async fn execute_proposal(
         Ok(proposal) => proposal,
         Err(e) => {
             println!("Error loading proposal: {}", e);
-            return Err(AppError::Federation(format!("Failed to load proposal: {}", e)));
+            return Err(AppError::Federation(format!(
+                "Failed to load proposal: {}",
+                e
+            )));
         }
     };
 

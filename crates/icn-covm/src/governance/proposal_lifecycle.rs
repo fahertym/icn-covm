@@ -555,7 +555,8 @@ mod tests {
         assert_eq!(proposal.history.len(), 3);
         assert_eq!(proposal.history[2].1, ProposalState::Voting);
         assert!(proposal.expires_at.is_some());
-        let expires_at = proposal.expires_at
+        let expires_at = proposal
+            .expires_at
             .expect("Expiry time should be set after start_voting");
         assert!(
             expires_at > expected_expiry_min && expires_at < expected_expiry_max,

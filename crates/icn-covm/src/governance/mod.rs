@@ -20,21 +20,21 @@ pub use comments::{CommentVersion, ProposalComment};
 pub use proposal::{Proposal, ProposalStatus};
 pub use proposal_lifecycle::{Comment, ExecutionStatus, ProposalLifecycle, ProposalState};
 
-pub mod traits;
-mod ranked_vote;
 mod liquid_delegate;
 mod quorum_threshold;
+mod ranked_vote;
+pub mod traits;
 mod vote_threshold;
 
-use crate::vm::{VM, VMError};
+use crate::governance::traits::GovernanceOpHandler;
+use crate::storage::traits::Storage;
 use crate::vm::types::Op;
+use crate::vm::{VMError, VM};
 use std::fmt::Debug;
 use std::marker::{Send, Sync};
-use crate::storage::traits::Storage;
-use crate::governance::traits::GovernanceOpHandler;
 
 /// Try to handle a governance operation
-/// 
+///
 /// Returns Some(()) if the operation was handled, None otherwise
 pub fn try_handle_governance_op<S>(vm: &mut VM<S>, op: &Op) -> Result<Option<()>, VMError>
 where

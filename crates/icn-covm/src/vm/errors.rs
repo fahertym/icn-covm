@@ -15,12 +15,11 @@
 //! - Enable proper error propagation in the VM
 //! - Support clean error reporting to users
 
-use thiserror::Error;
 use crate::storage::errors::StorageError;
 use crate::typed::TypedValueError;
-use std::fmt;
-use std::io;
 use serde::{Deserialize, Serialize};
+use std::io;
+use thiserror::Error;
 
 /// Error variants that can occur during VM execution
 #[derive(Error, Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -31,10 +30,7 @@ pub enum VMError {
 
     /// Invalid signature detected during operation
     #[error("Invalid signature for identity {identity_id}: {reason}")]
-    InvalidSignature {
-        identity_id: String,
-        reason: String,
-    },
+    InvalidSignature { identity_id: String, reason: String },
 
     /// Undefined operation encountered
     #[error("Undefined operation: {0}")]
@@ -113,7 +109,9 @@ pub enum VMError {
     ContextMismatch(String),
 
     /// Error when a memory operation exceeds limits
-    #[error("Memory limit exceeded: attempted {attempted_allocation} bytes, max allowed {max_allowed}")]
+    #[error(
+        "Memory limit exceeded: attempted {attempted_allocation} bytes, max allowed {max_allowed}"
+    )]
     MemoryLimitExceeded {
         attempted_allocation: usize,
         max_allowed: usize,
@@ -135,8 +133,8 @@ pub enum VMError {
     TimeError(String),
 
     /// IO error during VM operation
-    #[error("IO error: {0}")]
-    IoError(io::Error),
+    #[error("IO error: {details}")]
+    IoError { details: String },
 
     /// An operation that is valid but not permitted by current policy
     #[error("Policy violation: {0}")]
@@ -144,44 +142,40 @@ pub enum VMError {
 
     /// Generic storage error
     #[error("Storage error: {details}")]
-    StorageError {
-        details: String,
-    },
-    
+    StorageError { details: String },
+
     /// Other/unknown error
     #[error("VM error: {0}")]
     Other(String),
-    
+
     /// Operation not implemented
     #[error("Operation not implemented: {0}")]
     NotImplemented(String),
-    
+
     /// Error when an assertion fails
     #[error("Assertion failed: {message}")]
-    AssertionFailed {
-        message: String,
-    },
-    
+    AssertionFailed { message: String },
+
     /// Alternative name for StorageUnavailable (for backward compatibility)
     #[error("Storage backend not available")]
     StorageNotAvailable,
-    
+
     /// Error when a variable is not found
     #[error("Variable not found: {0}")]
     VariableNotFound(String),
-    
+
     /// Error when a function is not found
     #[error("Function not found: {0}")]
     FunctionNotFound(String),
-    
+
     /// Error when a parameter is not found
     #[error("Parameter not found: {0}")]
     ParameterNotFound(String),
-    
+
     /// Error when identity context is not available
     #[error("Identity context not available")]
     IdentityContextUnavailable,
-    
+
     /// Error when permission is denied
     #[error("Permission denied for {user} to {action} on {resource}")]
     PermissionDenied {
@@ -200,23 +194,15 @@ pub enum VMError {
 
     /// Error when an invalid operation is attempted
     #[error("Invalid operation: {operation}")]
-    InvalidOperation {
-        operation: String,
-    },
+    InvalidOperation { operation: String },
 
     /// Error when a resource is not found
     #[error("Resource {resource} not found in namespace {namespace}")]
-    ResourceNotFound {
-        resource: String,
-        namespace: String,
-    },
+    ResourceNotFound { resource: String, namespace: String },
 
     /// Error when a resource already exists
     #[error("Resource {resource} already exists in namespace {namespace}")]
-    ResourceAlreadyExists {
-        resource: String,
-        namespace: String,
-    },
+    ResourceAlreadyExists { resource: String, namespace: String },
 
     /// Error when there are insufficient funds for an operation
     #[error("Insufficient balance for account {account} in resource {resource}: required {required}, available {available}")]
@@ -229,40 +215,27 @@ pub enum VMError {
 
     /// Error when an invalid amount is provided
     #[error("Invalid amount: {amount}")]
-    InvalidAmount {
-        amount: f64,
-    },
+    InvalidAmount { amount: f64 },
 
     /// Error when an identity is not found
     #[error("Identity not found: {identity_id}")]
-    IdentityNotFound {
-        identity_id: String,
-    },
+    IdentityNotFound { identity_id: String },
 
     /// Error when an identity is invalid
     #[error("Invalid identity: {reason}")]
-    InvalidIdentity {
-        reason: String,
-    },
+    InvalidIdentity { reason: String },
 
     /// Error when a storage version is not found
     #[error("Version {version} not found for key {key}")]
-    VersionNotFound {
-        key: String,
-        version: usize,
-    },
+    VersionNotFound { key: String, version: usize },
 
     /// Error when configuration is invalid
     #[error("Configuration error: {details}")]
-    ConfigurationError {
-        details: String,
-    },
+    ConfigurationError { details: String },
 
     /// Error when an invalid format is provided
     #[error("Invalid format: {reason}")]
-    InvalidFormat {
-        reason: String,
-    },
+    InvalidFormat { reason: String },
 
     /// Error when no storage backend is available
     #[error("No storage backend available")]
@@ -270,127 +243,127 @@ pub enum VMError {
 
     /// Error when serializing/deserializing data
     #[error("Serialization error: {details}")]
-    SerializationError {
-        details: String,
-    },
+    SerializationError { details: String },
 
     /// Error from TypedValue operations
     #[error("TypedValue error: {0}")]
+    #[serde(skip)]
     TypedValueError(TypedValueError),
 
     /// Error when an undefined variable is accessed
     #[error("Undefined variable: {name}")]
-    UndefinedVariable {
-        name: String,
-    },
+    UndefinedVariable { name: String },
 
     /// Error when an undefined function is called
     #[error("Undefined function: {name}")]
-    UndefinedFunction {
-        name: String,
-    },
+    UndefinedFunction { name: String },
 
     /// Error when an undefined parameter is accessed
     #[error("Undefined parameter: {name}")]
-    UndefinedParameter {
-        name: String,
-    },
+    UndefinedParameter { name: String },
 }
 
 impl From<StorageError> for VMError {
     fn from(err: StorageError) -> Self {
         match err {
-            StorageError::AuthenticationError { details } => {
-                VMError::InvalidSignature {
-                    identity_id: "unknown".to_string(),
-                    reason: details,
-                }
-            }
-            StorageError::PermissionDenied { user_id, action, key } => {
-                VMError::PermissionDenied {
-                    user: user_id,
-                    action,
-                    resource: key,
-                }
-            }
-            StorageError::NotFound { key } => {
-                VMError::ResourceNotFound {
-                    resource: key,
-                    namespace: "unknown".to_string(),
-                }
-            }
-            StorageError::ResourceNotFound(resource) => {
-                VMError::ResourceNotFound {
-                    resource,
-                    namespace: "unknown".to_string(),
-                }
-            }
-            StorageError::TransactionError { details } => {
-                VMError::TransactionError(details)
-            }
-            StorageError::InsufficientBalance(details) => {
-                VMError::StorageError {
-                    details: format!("Insufficient balance: {}", details)
-                }
-            }
-            StorageError::ValidationError { rule, details } => {
-                VMError::ValidationError(format!("Validation failed for rule '{}': {}", rule, details))
-            }
-            StorageError::IoError { operation, details } | StorageError::IOError { operation, details } => {
-                VMError::StorageError {
-                    details: format!("IO error during '{}': {}", operation, details)
-                }
-            }
-            StorageError::TimeError { details } => {
-                VMError::TimeError(details)
-            }
-            StorageError::ConflictError { resource, details } => {
-                VMError::StorageError {
-                    details: format!("Conflict error on resource '{}': {}", resource, details)
-                }
-            }
-            StorageError::ConnectionError { backend, details } => {
-                VMError::StorageError {
-                    details: format!("Connection error to backend '{}': {}", backend, details)
-                }
-            }
+            StorageError::AuthenticationError { details } => VMError::InvalidSignature {
+                identity_id: "unknown".to_string(),
+                reason: details,
+            },
+            StorageError::PermissionDenied {
+                user_id,
+                action,
+                key,
+            } => VMError::PermissionDenied {
+                user: user_id,
+                action,
+                resource: key,
+            },
+            StorageError::NotFound { key } => VMError::ResourceNotFound {
+                resource: key,
+                namespace: "unknown".to_string(),
+            },
+            StorageError::ResourceNotFound(resource) => VMError::ResourceNotFound {
+                resource,
+                namespace: "unknown".to_string(),
+            },
+            StorageError::TransactionError { details } => VMError::TransactionError(details),
+            StorageError::InsufficientBalance(details) => VMError::StorageError {
+                details: format!("Insufficient balance: {}", details),
+            },
+            StorageError::ValidationError { rule, details } => VMError::ValidationError(format!(
+                "Validation failed for rule '{}': {}",
+                rule, details
+            )),
+            StorageError::IoError { operation, details } => VMError::StorageError {
+                details: format!("IO error during '{}': {}", operation, details),
+            },
+            #[allow(deprecated)]
+            StorageError::IOError { operation, details } => VMError::StorageError {
+                details: format!("IO error during '{}': {}", operation, details),
+            },
+            StorageError::TimeError { details } => VMError::TimeError(details),
+            StorageError::ConflictError { resource, details } => VMError::StorageError {
+                details: format!("Conflict error on resource '{}': {}", resource, details),
+            },
+            StorageError::ConnectionError { backend, details } => VMError::StorageError {
+                details: format!("Connection error to backend '{}': {}", backend, details),
+            },
             StorageError::SerializationError { data_type, details } => {
                 VMError::SerializationError {
-                    details: format!("Serialization error for {}: {}", data_type, details)
+                    details: format!("Serialization error for {}: {}", data_type, details),
                 }
             }
-            StorageError::VersionConflict { current, expected, resource } => {
-                VMError::StorageError {
-                    details: format!("Version conflict on '{}': current {}, expected {}", 
-                        resource, current, expected)
-                }
-            }
-            StorageError::ResourceLocked { resource, details } => {
-                VMError::StorageError {
-                    details: format!("Resource '{}' is locked: {}", resource, details)
-                }
-            }
-            StorageError::SchemaVersionError { current_version, required_version, details } => {
-                VMError::StorageError {
-                    details: format!("Schema version error: current {}, required {}: {}", 
-                        current_version, required_version, details)
-                }
-            }
-            StorageError::TimeoutError { operation, timeout_secs } => {
-                VMError::TimeoutError(format!("Operation '{}' timed out after {} seconds", 
-                    operation, timeout_secs))
-            }
-            StorageError::QuotaExceeded { limit_type, current, maximum } => {
-                VMError::StorageError {
-                    details: format!("{} quota exceeded: {} of {} used", limit_type, current, maximum)
-                }
-            }
-            StorageError::InvalidDataFormat { expected, received, details } => {
-                VMError::InvalidFormat {
-                    reason: format!("Invalid data format: expected {}, received {}: {}", 
-                        expected, received, details)
-                }
-            }
+            StorageError::VersionConflict {
+                current,
+                expected,
+                resource,
+            } => VMError::StorageError {
+                details: format!(
+                    "Version conflict on '{}': current {}, expected {}",
+                    resource, current, expected
+                ),
+            },
+            StorageError::ResourceLocked { resource, details } => VMError::StorageError {
+                details: format!("Resource '{}' is locked: {}", resource, details),
+            },
+            StorageError::SchemaVersionError {
+                current_version,
+                required_version,
+                details,
+            } => VMError::StorageError {
+                details: format!(
+                    "Schema version error: current {}, required {}: {}",
+                    current_version, required_version, details
+                ),
+            },
+            StorageError::TimeoutError {
+                operation,
+                timeout_secs,
+            } => VMError::TimeoutError(format!(
+                "Operation '{}' timed out after {} seconds",
+                operation, timeout_secs
+            )),
+            StorageError::QuotaExceeded {
+                limit_type,
+                current,
+                maximum,
+            } => VMError::StorageError {
+                details: format!(
+                    "{} quota exceeded: {} of {} used",
+                    limit_type, current, maximum
+                ),
+            },
+            StorageError::InvalidDataFormat {
+                expected,
+                received,
+                details,
+            } => VMError::InvalidFormat {
+                reason: format!(
+                    "Invalid data format: expected {}, received {}: {}",
+                    expected, received, details
+                ),
+            },
             StorageError::Other { details } => VMError::Other(details),
         }
     }
@@ -398,7 +371,7 @@ impl From<StorageError> for VMError {
 
 impl From<io::Error> for VMError {
     fn from(err: io::Error) -> Self {
-        VMError::IoError(err)
+        VMError::IoError { details: err.to_string() }
     }
 }
 
