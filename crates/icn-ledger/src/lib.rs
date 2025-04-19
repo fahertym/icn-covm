@@ -210,4 +210,52 @@ impl DagLedger {
         
         Ok(())
     }
+    
+    /// Find the node ID for a proposal created event
+    pub fn find_proposal_node_id(&self, proposal_id: &str) -> Option<String> {
+        let nodes = self.nodes.lock().unwrap();
+        nodes.iter().find_map(|node| match &node.data {
+            NodeData::ProposalCreated { proposal_id: id, .. } if id == proposal_id => Some(node.id.clone()),
+            _ => None,
+        })
+    }
+
+    /// Find all vote nodes for a specific proposal
+    pub fn find_vote_nodes_for(&self, proposal_id: &str) -> Vec<DagNode> {
+        let nodes = self.nodes.lock().unwrap();
+        nodes.iter()
+            .filter(|node| match &node.data {
+                NodeData::VoteCast { proposal_id: id, .. } if id == proposal_id => true,
+                _ => false,
+            })
+            .cloned()
+            .collect()
+    }
+    
+    /// Trace a node and all its parents recursively
+    pub fn trace(&self, node_id: &str) -> Vec<DagNode> {
+        let mut result = Vec::new();
+        let mut visited = std::collections::HashSet::new();
+        self.trace_recursive(node_id, &mut result, &mut visited);
+        result
+    }
+    
+    /// Recursive helper for the trace method
+    fn trace_recursive(&self, node_id: &str, result: &mut Vec<DagNode>, visited: &mut std::collections::HashSet<String>) {
+        if visited.contains(node_id) {
+            return;
+        }
+        
+        visited.insert(node_id.to_string());
+        
+        if let Some(node) = self.find_by_id(node_id) {
+            // Add this node to the result
+            result.push(node.clone());
+            
+            // Recursively trace all parents
+            for parent_id in &node.parent_ids {
+                self.trace_recursive(parent_id, result, visited);
+            }
+        }
+    }
 } 

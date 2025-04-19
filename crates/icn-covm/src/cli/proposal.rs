@@ -331,9 +331,14 @@ where
                 _ => -1.0, // Invalid vote
             };
 
+            // Find the proposal node to create the parent reference
+            let parent_ids = ledger.find_proposal_node_id(proposal_id)
+                .map(|id| vec![id])
+                .unwrap_or_default();
+
             let node = icn_ledger::DagNode {
                 id: String::new(), // Will be computed by the ledger
-                parent_ids: vec![],
+                parent_ids,
                 timestamp: chrono::Utc::now().timestamp() as u64,
                 data: icn_ledger::NodeData::VoteCast {
                     proposal_id: proposal_id.to_string(),
@@ -451,9 +456,15 @@ where
 
         // Log to DAG if available
         if let Some(ledger) = &mut self.dag {
+            // Collect parent IDs from vote nodes
+            let vote_nodes = ledger.find_vote_nodes_for(proposal_id);
+            let parent_ids: Vec<String> = vote_nodes.iter()
+                .map(|node| node.id.clone())
+                .collect();
+
             let node = icn_ledger::DagNode {
                 id: String::new(), // Will be computed by the ledger
-                parent_ids: vec![],
+                parent_ids,
                 timestamp: chrono::Utc::now().timestamp() as u64,
                 data: icn_ledger::NodeData::ProposalExecuted {
                     proposal_id: proposal_id.to_string(),
@@ -1011,12 +1022,23 @@ pub fn proposal_command() -> Command {
         )
         .subcommand(
             Command::new("simulate")
-                .about("Simulate the execution of a proposal without making persistent changes")
+                .about("Simulate execution of a proposal without actually executing it")
                 .arg(
                     Arg::new("id")
                         .long("id")
                         .value_name("PROPOSAL_ID")
                         .help("ID of the proposal to simulate")
+                        .required(true)
+                )
+        )
+        .subcommand(
+            Command::new("dag-trace")
+                .about("Trace a proposal's DAG path")
+                .arg(
+                    Arg::new("id")
+                        .long("id")
+                        .value_name("PROPOSAL_ID")
+                        .help("ID of the proposal to trace")
                         .required(true)
                 )
         )
@@ -1727,11 +1749,44 @@ where
                 .ok_or("Proposal ID is required")?;
             return handle_simulate_command(vm, proposal_id);
         }
+        Some(("dag-trace", trace_matches)) => {
+            let proposal_id = trace_matches
+                .get_one::<String>("id")
+                .ok_or("Proposal ID is required")?;
+            return handle_dag_trace_command(vm, proposal_id);
+        }
         Some(("summary", summary_matches)) => {
             let proposal_id = summary_matches
                 .get_one::<String>("id")
                 .ok_or("Proposal ID is required")?;
             return handle_summary_command(vm, proposal_id);
+        }
+        Some(("execute", execute_matches)) => {
+            println!("Executing proposal logic...");
+            let proposal_id = execute_matches
+                .get_one::<String>("id")
+                .ok_or("Proposal ID is required")?
+                .clone();
+            return handle_execute_command(vm, &proposal_id, auth_context);
+        }
+        Some(("view-comments", view_comments_matches)) => {
+            let proposal_id = view_comments_matches
+                .get_one::<String>("id")
+                .ok_or("Proposal ID is required")?
+                .clone();
+            let threaded = view_comments_matches.get_flag("threaded");
+
+            return handle_view_comments_command(vm, &proposal_id, threaded, auth_context);
+        }
+        Some(("export", export_matches)) => {
+            println!("Handling proposal export...");
+            let proposal_id = export_matches
+                .get_one::<String>("id")
+                .ok_or("Proposal ID is required")?
+                .clone();
+            let output_path = export_matches.get_one::<String>("output").cloned();
+
+            return handle_export_command(vm, &proposal_id, output_path, auth_context);
         }
         Some(("comment-react", react_matches)) => {
             let comment_id = react_matches
@@ -1814,33 +1869,6 @@ where
                 .ok_or("Proposal ID is required")?;
 
             return handle_comment_history_command(vm, comment_id, proposal_id, Some(auth_context));
-        }
-        Some(("execute", execute_matches)) => {
-            println!("Executing proposal logic...");
-            let proposal_id = execute_matches
-                .get_one::<String>("id")
-                .ok_or("Proposal ID is required")?
-                .clone();
-            return handle_execute_command(vm, &proposal_id, auth_context);
-        }
-        Some(("view-comments", view_comments_matches)) => {
-            let proposal_id = view_comments_matches
-                .get_one::<String>("id")
-                .ok_or("Proposal ID is required")?
-                .clone();
-            let threaded = view_comments_matches.get_flag("threaded");
-
-            return handle_view_comments_command(vm, &proposal_id, threaded, auth_context);
-        }
-        Some(("export", export_matches)) => {
-            println!("Handling proposal export...");
-            let proposal_id = export_matches
-                .get_one::<String>("id")
-                .ok_or("Proposal ID is required")?
-                .clone();
-            let output_path = export_matches.get_one::<String>("output").cloned();
-
-            return handle_export_command(vm, &proposal_id, output_path, auth_context);
         }
         _ => unreachable!("Subcommand should be required"),
     }
@@ -2316,7 +2344,7 @@ fn print_thread(
     // Find and sort replies to this comment
     let mut replies: Vec<&comments::ProposalComment> = comments
         .values()
-        .filter(|c| c.reply_to.as_deref() == Some(&comment.id))
+        .filter(|c| c.reply_to.as_ref() == Some(&comment.id))
         .collect();
 
     replies.sort_by_key(|c| c.timestamp);
@@ -3100,5 +3128,81 @@ where
         println!("   This is a reply to comment {}", parent_comment_id);
     }
 
+    Ok(())
+}
+
+/// Handle the dag-trace command to visualize the DAG path of a proposal
+pub fn handle_dag_trace_command<S>(
+    vm: &VM<S>,
+    proposal_id: &str,
+) -> Result<(), Box<dyn Error>>
+where
+    S: Storage + Send + Sync + Clone + Debug + 'static,
+{
+    if let Some(ledger) = &vm.dag {
+        if let Some(start_id) = ledger.find_proposal_node_id(proposal_id) {
+            let trace = ledger.trace(&start_id);
+            
+            println!("📜 DAG Trace for proposal '{}':", proposal_id);
+            println!("Number of nodes in trace: {}", trace.len());
+            
+            if trace.is_empty() {
+                println!("No related nodes found.");
+                return Ok(());
+            }
+            
+            // Pretty format time
+            let format_time = |timestamp: u64| -> String {
+                let dt = chrono::DateTime::<chrono::Utc>::from_timestamp(timestamp as i64, 0)
+                    .unwrap_or_else(|| chrono::Utc::now());
+                dt.format("%Y-%m-%d %H:%M:%S UTC").to_string()
+            };
+            
+            // Print the nodes in reverse chronological order (newest first)
+            for node in trace.iter().rev() {
+                match &node.data {
+                    icn_ledger::NodeData::ProposalCreated { proposal_id, title } => {
+                        println!("📝 Proposal Created [{}]", node.id);
+                        println!("   ID: {}", proposal_id);
+                        println!("   Title: {}", title);
+                        println!("   Time: {}", format_time(node.timestamp));
+                        println!("   Parents: {}", node.parent_ids.join(", "));
+                    },
+                    icn_ledger::NodeData::VoteCast { proposal_id, voter, vote } => {
+                        let vote_str = match *vote as i32 {
+                            1 => "YES",
+                            0 => "NO",
+                            _ => "ABSTAIN",
+                        };
+                        println!("🗳️ Vote Cast [{}]", node.id);
+                        println!("   Proposal: {}", proposal_id);
+                        println!("   Voter: {}", voter);
+                        println!("   Vote: {}", vote_str);
+                        println!("   Time: {}", format_time(node.timestamp));
+                        println!("   Parents: {}", node.parent_ids.join(", "));
+                    },
+                    icn_ledger::NodeData::ProposalExecuted { proposal_id, success } => {
+                        println!("⚙️ Proposal Executed [{}]", node.id);
+                        println!("   ID: {}", proposal_id);
+                        println!("   Success: {}", success);
+                        println!("   Time: {}", format_time(node.timestamp));
+                        println!("   Parents: {}", node.parent_ids.join(", "));
+                    },
+                    _ => {
+                        println!("📄 Other Node [{}]", node.id);
+                        println!("   Type: {:?}", node.data);
+                        println!("   Time: {}", format_time(node.timestamp));
+                        println!("   Parents: {}", node.parent_ids.join(", "));
+                    }
+                }
+                println!();
+            }
+        } else {
+            println!("❌ No proposal node found for ID '{}'", proposal_id);
+        }
+    } else {
+        println!("❌ DAG ledger not available in this VM instance");
+    }
+    
     Ok(())
 }
