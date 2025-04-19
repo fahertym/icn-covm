@@ -248,7 +248,15 @@ pub enum VMError {
     /// Error from TypedValue operations
     #[error("TypedValue error: {0}")]
     #[serde(skip)]
-    TypedValueError(TypedValueError),
+    TypedValueError(String),
+
+    /// Type error in VM operations
+    #[error("Type error in {op_name}: expected {expected}, found {found}")]
+    TypeError {
+        expected: String,
+        found: String,
+        op_name: String,
+    },
 
     /// Error when an undefined variable is accessed
     #[error("Undefined variable: {name}")]
@@ -389,6 +397,6 @@ impl From<serde_json::Error> for VMError {
 
 impl From<TypedValueError> for VMError {
     fn from(err: TypedValueError) -> Self {
-        VMError::TypedValueError(err)
+        VMError::TypedValueError(err.to_string())
     }
 }

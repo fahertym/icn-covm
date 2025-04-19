@@ -25,6 +25,7 @@ use crate::storage::traits::Storage;
 use crate::vm::errors::VMError;
 use crate::vm::types::VMEvent;
 use crate::vm::MissingKeyBehavior;
+use crate::typed::TypedValue;
 use std::fmt::Debug;
 use std::marker::{Send, Sync};
 
@@ -123,16 +124,16 @@ where
     fn clear_output(&mut self);
 
     /// Execute arithmetic operations
-    fn execute_arithmetic(&self, a: f64, b: f64, op: &str) -> Result<f64, VMError>;
+    fn execute_arithmetic(&self, a: &TypedValue, b: &TypedValue, op: &str) -> Result<TypedValue, VMError>;
 
     /// Execute comparison operations
-    fn execute_comparison(&self, a: f64, b: f64, op: &str) -> Result<f64, VMError>;
+    fn execute_comparison(&self, a: &TypedValue, b: &TypedValue, op: &str) -> Result<TypedValue, VMError>;
 
     /// Execute logical operations
-    fn execute_logical(&self, a: f64, op: &str) -> Result<f64, VMError>;
+    fn execute_logical(&self, a: &TypedValue, op: &str) -> Result<TypedValue, VMError>;
 
     /// Execute binary logical operations
-    fn execute_binary_logical(&self, a: f64, b: f64, op: &str) -> Result<f64, VMError>;
+    fn execute_binary_logical(&self, a: &TypedValue, b: &TypedValue, op: &str) -> Result<TypedValue, VMError>;
 }
 
 /// Provides execution logic for the virtual machine operations
@@ -731,39 +732,68 @@ where
     }
 
     /// Execute arithmetic operations
-    fn execute_arithmetic(&self, a: f64, b: f64, op: &str) -> Result<f64, VMError> {
-        match op {
-            "add" => Ok(a + b),
-            "sub" => Ok(a - b),
-            "mul" => Ok(a * b),
+    fn execute_arithmetic(&self, a: &TypedValue, b: &TypedValue, op: &str) -> Result<TypedValue, VMError> {
+        // Extract number values or return a type error
+        let a_num = a.as_number().map_err(|_| VMError::TypeError {
+            expected: "number".to_string(),
+            found: a.type_name().to_string(),
+            op_name: "arithmetic".to_string(),
+        })?;
+        
+        let b_num = b.as_number().map_err(|_| VMError::TypeError {
+            expected: "number".to_string(),
+            found: b.type_name().to_string(),
+            op_name: "arithmetic".to_string(),
+        })?;
+        
+        let result = match op {
+            "add" => a_num + b_num,
+            "sub" => a_num - b_num,
+            "mul" => a_num * b_num,
             "div" => {
-                if b == 0.0 {
-                    Err(VMError::DivisionByZero)
+                if b_num == 0.0 {
+                    return Err(VMError::DivisionByZero);
                 } else {
-                    Ok(a / b)
+                    a_num / b_num
                 }
             }
             "mod" => {
-                if b == 0.0 {
-                    Err(VMError::DivisionByZero)
+                if b_num == 0.0 {
+                    return Err(VMError::DivisionByZero);
                 } else {
-                    Ok(a % b)
+                    a_num % b_num
                 }
             }
-            _ => Err(VMError::NotImplemented(format!(
-                "Unknown arithmetic operation: {}",
-                op
-            ))),
-        }
+            _ => {
+                return Err(VMError::NotImplemented(format!(
+                    "Unknown arithmetic operation: {}",
+                    op
+                )))
+            }
+        };
+        
+        Ok(TypedValue::Number(result))
     }
 
     /// Execute comparison operations
-    fn execute_comparison(&self, a: f64, b: f64, op: &str) -> Result<f64, VMError> {
-        // In our VM, 0.0 is falsey and any non-zero value is truthy
+    fn execute_comparison(&self, a: &TypedValue, b: &TypedValue, op: &str) -> Result<TypedValue, VMError> {
+        // Extract number values or return a type error
+        let a_num = a.as_number().map_err(|_| VMError::TypeError {
+            expected: "number".to_string(),
+            found: a.type_name().to_string(),
+            op_name: "comparison".to_string(),
+        })?;
+        
+        let b_num = b.as_number().map_err(|_| VMError::TypeError {
+            expected: "number".to_string(),
+            found: b.type_name().to_string(),
+            op_name: "comparison".to_string(),
+        })?;
+        
         let result = match op {
-            "eq" => (a - b).abs() < f64::EPSILON,
-            "lt" => a < b,
-            "gt" => a > b,
+            "eq" => (a_num - b_num).abs() < f64::EPSILON,
+            "lt" => a_num < b_num,
+            "gt" => a_num > b_num,
             _ => {
                 return Err(VMError::NotImplemented(format!(
                     "Unknown comparison operation: {}",
@@ -771,16 +801,15 @@ where
                 )))
             }
         };
-
-        // Convert boolean to f64 (0.0 for false, 1.0 for true)
-        Ok(if result { 1.0 } else { 0.0 })
+        
+        Ok(TypedValue::Boolean(result))
     }
 
     /// Execute logical operations
-    fn execute_logical(&self, a: f64, op: &str) -> Result<f64, VMError> {
+    fn execute_logical(&self, a: &TypedValue, op: &str) -> Result<TypedValue, VMError> {
         // For NOT operation
         let result = match op {
-            "not" => a == 0.0, // NOT truthy is falsey, NOT falsey is truthy
+            "not" => a.is_falsey(),
             _ => {
                 return Err(VMError::NotImplemented(format!(
                     "Unknown logical operation: {}",
@@ -788,16 +817,16 @@ where
                 )))
             }
         };
-
-        // Convert boolean to f64 (0.0 for false, 1.0 for true)
-        Ok(if result { 1.0 } else { 0.0 })
+        
+        // Convert boolean result to TypedValue
+        Ok(TypedValue::Boolean(result))
     }
 
     /// Execute binary logical operations
-    fn execute_binary_logical(&self, a: f64, b: f64, op: &str) -> Result<f64, VMError> {
+    fn execute_binary_logical(&self, a: &TypedValue, b: &TypedValue, op: &str) -> Result<TypedValue, VMError> {
         // For binary operations (AND, OR)
-        let a_truthy = a != 0.0;
-        let b_truthy = b != 0.0;
+        let a_truthy = !a.is_falsey();
+        let b_truthy = !b.is_falsey();
 
         let result = match op {
             "and" => a_truthy && b_truthy,
@@ -810,8 +839,8 @@ where
             }
         };
 
-        // Convert boolean to f64 (0.0 for false, 1.0 for true)
-        Ok(if result { 1.0 } else { 0.0 })
+        // Convert boolean result to TypedValue
+        Ok(TypedValue::Boolean(result))
     }
 }
 
@@ -830,16 +859,69 @@ mod tests {
     fn test_arithmetic_operations() {
         let exec = VMExecution::<InMemoryStorage>::new();
 
-        assert_eq!(exec.execute_arithmetic(5.0, 3.0, "add").unwrap(), 8.0);
-        assert_eq!(exec.execute_arithmetic(5.0, 3.0, "sub").unwrap(), 2.0);
-        assert_eq!(exec.execute_arithmetic(5.0, 3.0, "mul").unwrap(), 15.0);
-        assert_eq!(exec.execute_arithmetic(6.0, 3.0, "div").unwrap(), 2.0);
-        assert_eq!(exec.execute_arithmetic(7.0, 3.0, "mod").unwrap(), 1.0);
+        assert_eq!(
+            exec.execute_arithmetic(
+                &TypedValue::Number(5.0), 
+                &TypedValue::Number(3.0), 
+                "add"
+            ).unwrap(), 
+            TypedValue::Number(8.0)
+        );
+        
+        assert_eq!(
+            exec.execute_arithmetic(
+                &TypedValue::Number(5.0), 
+                &TypedValue::Number(3.0), 
+                "sub"
+            ).unwrap(), 
+            TypedValue::Number(2.0)
+        );
+        
+        assert_eq!(
+            exec.execute_arithmetic(
+                &TypedValue::Number(5.0), 
+                &TypedValue::Number(3.0), 
+                "mul"
+            ).unwrap(), 
+            TypedValue::Number(15.0)
+        );
+        
+        assert_eq!(
+            exec.execute_arithmetic(
+                &TypedValue::Number(6.0), 
+                &TypedValue::Number(3.0), 
+                "div"
+            ).unwrap(), 
+            TypedValue::Number(2.0)
+        );
+        
+        assert_eq!(
+            exec.execute_arithmetic(
+                &TypedValue::Number(7.0), 
+                &TypedValue::Number(3.0), 
+                "mod"
+            ).unwrap(), 
+            TypedValue::Number(1.0)
+        );
 
         // Test division by zero
         assert!(matches!(
-            exec.execute_arithmetic(5.0, 0.0, "div"),
+            exec.execute_arithmetic(
+                &TypedValue::Number(5.0), 
+                &TypedValue::Number(0.0), 
+                "div"
+            ),
             Err(VMError::DivisionByZero)
+        ));
+        
+        // Test type error
+        assert!(matches!(
+            exec.execute_arithmetic(
+                &TypedValue::String("not a number".to_string()), 
+                &TypedValue::Number(5.0), 
+                "add"
+            ),
+            Err(VMError::TypeError { .. })
         ));
     }
 
@@ -848,37 +930,185 @@ mod tests {
         let exec = VMExecution::<InMemoryStorage>::new();
 
         // Equal
-        assert_eq!(exec.execute_comparison(5.0, 5.0, "eq").unwrap(), 1.0);
-        assert_eq!(exec.execute_comparison(5.0, 3.0, "eq").unwrap(), 0.0);
+        assert_eq!(
+            exec.execute_comparison(
+                &TypedValue::Number(5.0), 
+                &TypedValue::Number(5.0), 
+                "eq"
+            ).unwrap(), 
+            TypedValue::Boolean(true)
+        );
+        
+        assert_eq!(
+            exec.execute_comparison(
+                &TypedValue::Number(5.0), 
+                &TypedValue::Number(3.0), 
+                "eq"
+            ).unwrap(), 
+            TypedValue::Boolean(false)
+        );
 
         // Less than
-        assert_eq!(exec.execute_comparison(3.0, 5.0, "lt").unwrap(), 1.0);
-        assert_eq!(exec.execute_comparison(5.0, 3.0, "lt").unwrap(), 0.0);
+        assert_eq!(
+            exec.execute_comparison(
+                &TypedValue::Number(3.0), 
+                &TypedValue::Number(5.0), 
+                "lt"
+            ).unwrap(), 
+            TypedValue::Boolean(true)
+        );
+        
+        assert_eq!(
+            exec.execute_comparison(
+                &TypedValue::Number(5.0), 
+                &TypedValue::Number(3.0), 
+                "lt"
+            ).unwrap(), 
+            TypedValue::Boolean(false)
+        );
 
         // Greater than
-        assert_eq!(exec.execute_comparison(5.0, 3.0, "gt").unwrap(), 1.0);
-        assert_eq!(exec.execute_comparison(3.0, 5.0, "gt").unwrap(), 0.0);
+        assert_eq!(
+            exec.execute_comparison(
+                &TypedValue::Number(5.0), 
+                &TypedValue::Number(3.0), 
+                "gt"
+            ).unwrap(), 
+            TypedValue::Boolean(true)
+        );
+        
+        assert_eq!(
+            exec.execute_comparison(
+                &TypedValue::Number(3.0), 
+                &TypedValue::Number(5.0), 
+                "gt"
+            ).unwrap(), 
+            TypedValue::Boolean(false)
+        );
     }
 
     #[test]
     fn test_logical_operations() {
         let exec = VMExecution::<InMemoryStorage>::new();
 
-        // NOT
-        assert_eq!(exec.execute_logical(0.0, "not").unwrap(), 1.0);
-        assert_eq!(exec.execute_logical(1.0, "not").unwrap(), 0.0);
+        // NOT with various types
+        assert_eq!(
+            exec.execute_logical(&TypedValue::Number(0.0), "not").unwrap(), 
+            TypedValue::Boolean(true)
+        );
+        
+        assert_eq!(
+            exec.execute_logical(&TypedValue::Number(1.0), "not").unwrap(), 
+            TypedValue::Boolean(false)
+        );
+        
+        assert_eq!(
+            exec.execute_logical(&TypedValue::Boolean(false), "not").unwrap(), 
+            TypedValue::Boolean(true)
+        );
+        
+        assert_eq!(
+            exec.execute_logical(&TypedValue::String("".to_string()), "not").unwrap(), 
+            TypedValue::Boolean(true)
+        );
+        
+        assert_eq!(
+            exec.execute_logical(&TypedValue::String("hello".to_string()), "not").unwrap(), 
+            TypedValue::Boolean(false)
+        );
 
         // AND
-        assert_eq!(exec.execute_binary_logical(0.0, 0.0, "and").unwrap(), 0.0);
-        assert_eq!(exec.execute_binary_logical(1.0, 0.0, "and").unwrap(), 0.0);
-        assert_eq!(exec.execute_binary_logical(0.0, 1.0, "and").unwrap(), 0.0);
-        assert_eq!(exec.execute_binary_logical(1.0, 1.0, "and").unwrap(), 1.0);
+        assert_eq!(
+            exec.execute_binary_logical(
+                &TypedValue::Number(0.0), 
+                &TypedValue::Number(0.0), 
+                "and"
+            ).unwrap(), 
+            TypedValue::Boolean(false)
+        );
+        
+        assert_eq!(
+            exec.execute_binary_logical(
+                &TypedValue::Number(1.0), 
+                &TypedValue::Number(0.0), 
+                "and"
+            ).unwrap(), 
+            TypedValue::Boolean(false)
+        );
+        
+        assert_eq!(
+            exec.execute_binary_logical(
+                &TypedValue::Number(0.0), 
+                &TypedValue::Number(1.0), 
+                "and"
+            ).unwrap(), 
+            TypedValue::Boolean(false)
+        );
+        
+        assert_eq!(
+            exec.execute_binary_logical(
+                &TypedValue::Number(1.0), 
+                &TypedValue::Number(1.0), 
+                "and"
+            ).unwrap(), 
+            TypedValue::Boolean(true)
+        );
 
         // OR
-        assert_eq!(exec.execute_binary_logical(0.0, 0.0, "or").unwrap(), 0.0);
-        assert_eq!(exec.execute_binary_logical(1.0, 0.0, "or").unwrap(), 1.0);
-        assert_eq!(exec.execute_binary_logical(0.0, 1.0, "or").unwrap(), 1.0);
-        assert_eq!(exec.execute_binary_logical(1.0, 1.0, "or").unwrap(), 1.0);
+        assert_eq!(
+            exec.execute_binary_logical(
+                &TypedValue::Number(0.0), 
+                &TypedValue::Number(0.0), 
+                "or"
+            ).unwrap(), 
+            TypedValue::Boolean(false)
+        );
+        
+        assert_eq!(
+            exec.execute_binary_logical(
+                &TypedValue::Number(1.0), 
+                &TypedValue::Number(0.0), 
+                "or"
+            ).unwrap(), 
+            TypedValue::Boolean(true)
+        );
+        
+        assert_eq!(
+            exec.execute_binary_logical(
+                &TypedValue::Number(0.0), 
+                &TypedValue::Number(1.0), 
+                "or"
+            ).unwrap(), 
+            TypedValue::Boolean(true)
+        );
+        
+        assert_eq!(
+            exec.execute_binary_logical(
+                &TypedValue::Number(1.0), 
+                &TypedValue::Number(1.0), 
+                "or"
+            ).unwrap(), 
+            TypedValue::Boolean(true)
+        );
+        
+        // Test with mixed types
+        assert_eq!(
+            exec.execute_binary_logical(
+                &TypedValue::Number(1.0), 
+                &TypedValue::Boolean(true), 
+                "and"
+            ).unwrap(), 
+            TypedValue::Boolean(true)
+        );
+        
+        assert_eq!(
+            exec.execute_binary_logical(
+                &TypedValue::String("hello".to_string()), 
+                &TypedValue::Number(0.0), 
+                "or"
+            ).unwrap(), 
+            TypedValue::Boolean(true)
+        );
     }
 
     #[test]
