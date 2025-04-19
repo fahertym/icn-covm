@@ -251,7 +251,10 @@ pub enum VMError {
     TypedValueError(String),
 
     /// Type error in VM operations
+    /// 
+    /// Deprecated: Use TypeMismatch instead
     #[error("Type error in {op_name}: expected {expected}, found {found}")]
+    #[deprecated(since = "0.2.0", note = "Use TypeMismatch instead")]
     TypeError {
         expected: String,
         found: String,

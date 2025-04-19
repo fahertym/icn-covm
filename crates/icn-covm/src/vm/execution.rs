@@ -734,16 +734,16 @@ where
     /// Execute arithmetic operations
     fn execute_arithmetic(&self, a: &TypedValue, b: &TypedValue, op: &str) -> Result<TypedValue, VMError> {
         // Extract number values or return a type error
-        let a_num = a.as_number().map_err(|_| VMError::TypeError {
+        let a_num = a.as_number().map_err(|_| VMError::TypeMismatch {
             expected: "number".to_string(),
             found: a.type_name().to_string(),
-            op_name: "arithmetic".to_string(),
+            operation: "arithmetic".to_string(),
         })?;
         
-        let b_num = b.as_number().map_err(|_| VMError::TypeError {
+        let b_num = b.as_number().map_err(|_| VMError::TypeMismatch {
             expected: "number".to_string(),
             found: b.type_name().to_string(),
-            op_name: "arithmetic".to_string(),
+            operation: "arithmetic".to_string(),
         })?;
         
         let result = match op {
@@ -778,16 +778,16 @@ where
     /// Execute comparison operations
     fn execute_comparison(&self, a: &TypedValue, b: &TypedValue, op: &str) -> Result<TypedValue, VMError> {
         // Extract number values or return a type error
-        let a_num = a.as_number().map_err(|_| VMError::TypeError {
+        let a_num = a.as_number().map_err(|_| VMError::TypeMismatch {
             expected: "number".to_string(),
             found: a.type_name().to_string(),
-            op_name: "comparison".to_string(),
+            operation: "comparison".to_string(),
         })?;
         
-        let b_num = b.as_number().map_err(|_| VMError::TypeError {
+        let b_num = b.as_number().map_err(|_| VMError::TypeMismatch {
             expected: "number".to_string(),
             found: b.type_name().to_string(),
-            op_name: "comparison".to_string(),
+            operation: "comparison".to_string(),
         })?;
         
         let result = match op {
@@ -921,7 +921,7 @@ mod tests {
                 &TypedValue::Number(5.0), 
                 "add"
             ),
-            Err(VMError::TypeError { .. })
+            Err(VMError::TypeMismatch { .. })
         ));
     }
 
