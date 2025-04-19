@@ -255,6 +255,7 @@ pub enum VMError {
     /// Deprecated: Use TypeMismatch instead
     #[error("Type error in {op_name}: expected {expected}, found {found}")]
     #[deprecated(since = "0.2.0", note = "Use TypeMismatch instead")]
+    #[doc(hidden)]
     TypeError {
         expected: String,
         found: String,
@@ -401,24 +402,28 @@ impl From<serde_json::Error> for VMError {
 impl From<crate::typed::TypedValueError> for VMError {
     fn from(err: crate::typed::TypedValueError) -> Self {
         match err {
-            crate::typed::TypedValueError::TypeMismatch { expected, found, operation } => {
+            crate::typed::TypedValueError::TypeMismatch { expected, found } => {
                 VMError::TypeMismatch {
                     expected,
                     found,
-                    operation,
+                    operation: "unknown".to_string(), // default unless manually injected
                 }
             },
-            crate::typed::TypedValueError::InvalidOperation { operation, details } => {
-                VMError::InvalidOperation {
-                    operation,
-                    details,
+            crate::typed::TypedValueError::InvalidOperationForType { op, types } => {
+                VMError::InvalidOperation { 
+                    operation: format!("{} on {}", op, types) 
                 }
             },
-            crate::typed::TypedValueError::DivisionByZero => VMError::DivisionByZero,
-            crate::typed::TypedValueError::OutOfBounds => VMError::InvalidOperation {
-                operation: "arithmetic".to_string(),
-                details: "Value out of bounds".to_string()
+            crate::typed::TypedValueError::CoercionError { from, to } => {
+                VMError::TypeMismatch {
+                    expected: to,
+                    found: from,
+                    operation: "coercion".to_string(),
+                }
             },
+            crate::typed::TypedValueError::ValueOutOfBounds => {
+                VMError::InvalidAmount { amount: -1.0 } // placeholder for out of bounds
+            }
         }
     }
 }

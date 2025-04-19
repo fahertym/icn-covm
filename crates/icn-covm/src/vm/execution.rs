@@ -25,7 +25,7 @@ use crate::storage::traits::Storage;
 use crate::vm::errors::VMError;
 use crate::vm::types::VMEvent;
 use crate::vm::MissingKeyBehavior;
-use crate::typed::TypedValue;
+use crate::typed::{TypedValue, TypedValueError};
 use std::fmt::Debug;
 use std::marker::{Send, Sync};
 
@@ -465,11 +465,30 @@ where
     ) -> Result<(), VMError> {
         // Default to 1 if no amount is provided, otherwise extract numeric value
         let amount_val = match amount {
-            Some(value) => value.as_number().map_err(|_| VMError::TypeMismatch {
-                expected: "number".to_string(),
-                found: value.type_name().to_string(),
-                operation: "increment_reputation".to_string(),
-            })?.round() as u64,
+            Some(value) => {
+                let num = value.as_number().map_err(|err| match err {
+                    TypedValueError::CoercionError { from, to } => VMError::TypeMismatch {
+                        expected: to,
+                        found: from,
+                        operation: "increment_reputation".to_string(),
+                    },
+                    _ => VMError::TypeMismatch {
+                        expected: "number".to_string(),
+                        found: value.type_name().to_string(),
+                        operation: "increment_reputation".to_string(),
+                    }
+                })?;
+                
+                // Safe conversion: round, then ensure it's positive and in range for u64
+                let rounded = num.round();
+                if rounded < 0.0 {
+                    return Err(VMError::InvalidAmount { amount: rounded });
+                }
+                if rounded > u64::MAX as f64 {
+                    return Err(VMError::InvalidAmount { amount: rounded });
+                }
+                rounded as u64
+            },
             None => 1, // Default to 1 if no amount provided
         };
 
@@ -755,114 +774,206 @@ where
 
     /// Execute arithmetic operations
     fn execute_arithmetic(&self, a: &TypedValue, b: &TypedValue, op: &str) -> Result<TypedValue, VMError> {
-        // Extract number values or return a type error
-        let a_num = a.as_number().map_err(|_| VMError::TypeMismatch {
-            expected: "number".to_string(),
-            found: a.type_name().to_string(),
-            operation: "arithmetic".to_string(),
-        })?;
-        
-        let b_num = b.as_number().map_err(|_| VMError::TypeMismatch {
-            expected: "number".to_string(),
-            found: b.type_name().to_string(),
-            operation: "arithmetic".to_string(),
-        })?;
-        
-        let result = match op {
-            "add" => a_num + b_num,
-            "sub" => a_num - b_num,
-            "mul" => a_num * b_num,
-            "div" => {
-                if b_num == 0.0 {
-                    return Err(VMError::DivisionByZero);
-                } else {
-                    a_num / b_num
+        // Use TypedValue methods directly instead of extracting f64 values
+        match op {
+            "add" => a.add(b).map_err(|err| match err {
+                TypedValueError::CoercionError { from, to } => VMError::TypeMismatch {
+                    expected: to,
+                    found: from,
+                    operation: "add".to_string(),
+                },
+                _ => VMError::TypeMismatch {
+                    expected: "compatible types for addition".to_string(),
+                    found: format!("{} and {}", a.type_name(), b.type_name()),
+                    operation: "add".to_string(),
                 }
-            }
-            "mod" => {
-                if b_num == 0.0 {
-                    return Err(VMError::DivisionByZero);
-                } else {
-                    a_num % b_num
+            }),
+            "sub" => a.sub(b).map_err(|err| match err {
+                TypedValueError::CoercionError { from, to } => VMError::TypeMismatch {
+                    expected: to,
+                    found: from,
+                    operation: "sub".to_string(),
+                },
+                _ => VMError::TypeMismatch {
+                    expected: "compatible types for subtraction".to_string(),
+                    found: format!("{} and {}", a.type_name(), b.type_name()),
+                    operation: "sub".to_string(),
                 }
-            }
+            }),
+            "mul" => a.mul(b).map_err(|err| match err {
+                TypedValueError::CoercionError { from, to } => VMError::TypeMismatch {
+                    expected: to,
+                    found: from,
+                    operation: "mul".to_string(),
+                },
+                TypedValueError::ValueOutOfBounds => VMError::InvalidAmount { 
+                    amount: -1.0 // placeholder for out of bounds
+                },
+                _ => VMError::TypeMismatch {
+                    expected: "compatible types for multiplication".to_string(),
+                    found: format!("{} and {}", a.type_name(), b.type_name()),
+                    operation: "mul".to_string(),
+                }
+            }),
+            "div" => a.div(b).map_err(|err| {
+                if let TypedValueError::InvalidOperationForType { op, types } = err {
+                    if types == "by zero" {
+                        return VMError::DivisionByZero;
+                    }
+                    return VMError::InvalidOperation { 
+                        operation: format!("{} on {}", op, types) 
+                    };
+                }
+                match err {
+                    TypedValueError::CoercionError { from, to } => VMError::TypeMismatch {
+                        expected: to,
+                        found: from,
+                        operation: "div".to_string(),
+                    },
+                    _ => VMError::TypeMismatch {
+                        expected: "compatible types for division".to_string(),
+                        found: format!("{} and {}", a.type_name(), b.type_name()),
+                        operation: "div".to_string(),
+                    }
+                }
+            }),
+            "mod" => a.modulo(b).map_err(|err| {
+                if let TypedValueError::InvalidOperationForType { op, types } = err {
+                    if types == "by zero" {
+                        return VMError::DivisionByZero;
+                    }
+                    return VMError::InvalidOperation { 
+                        operation: format!("{} on {}", op, types) 
+                    };
+                }
+                match err {
+                    TypedValueError::CoercionError { from, to } => VMError::TypeMismatch {
+                        expected: to,
+                        found: from,
+                        operation: "mod".to_string(),
+                    },
+                    _ => VMError::TypeMismatch {
+                        expected: "compatible types for modulo".to_string(),
+                        found: format!("{} and {}", a.type_name(), b.type_name()),
+                        operation: "mod".to_string(),
+                    }
+                }
+            }),
             _ => {
                 return Err(VMError::NotImplemented(format!(
                     "Unknown arithmetic operation: {}",
                     op
                 )))
             }
-        };
-        
-        Ok(TypedValue::Number(result))
+        }
     }
 
     /// Execute comparison operations
     fn execute_comparison(&self, a: &TypedValue, b: &TypedValue, op: &str) -> Result<TypedValue, VMError> {
-        // Extract number values or return a type error
-        let a_num = a.as_number().map_err(|_| VMError::TypeMismatch {
-            expected: "number".to_string(),
-            found: a.type_name().to_string(),
-            operation: "comparison".to_string(),
-        })?;
-        
-        let b_num = b.as_number().map_err(|_| VMError::TypeMismatch {
-            expected: "number".to_string(),
-            found: b.type_name().to_string(),
-            operation: "comparison".to_string(),
-        })?;
-        
-        let result = match op {
-            "eq" => (a_num - b_num).abs() < f64::EPSILON,
-            "lt" => a_num < b_num,
-            "gt" => a_num > b_num,
+        match op {
+            "eq" => a.equals(b).map_err(|err| match err {
+                TypedValueError::CoercionError { from, to } => VMError::TypeMismatch {
+                    expected: to,
+                    found: from,
+                    operation: "equals".to_string(),
+                },
+                _ => VMError::TypeMismatch {
+                    expected: "comparable types".to_string(),
+                    found: format!("{} and {}", a.type_name(), b.type_name()),
+                    operation: "equals".to_string(),
+                }
+            }),
+            "lt" => a.less_than(b).map_err(|err| match err {
+                TypedValueError::CoercionError { from, to } => VMError::TypeMismatch {
+                    expected: to,
+                    found: from,
+                    operation: "less_than".to_string(),
+                },
+                _ => VMError::TypeMismatch {
+                    expected: "comparable types".to_string(),
+                    found: format!("{} and {}", a.type_name(), b.type_name()),
+                    operation: "less_than".to_string(),
+                }
+            }),
+            "gt" => a.greater_than(b).map_err(|err| match err {
+                TypedValueError::CoercionError { from, to } => VMError::TypeMismatch {
+                    expected: to,
+                    found: from,
+                    operation: "greater_than".to_string(),
+                },
+                _ => VMError::TypeMismatch {
+                    expected: "comparable types".to_string(),
+                    found: format!("{} and {}", a.type_name(), b.type_name()),
+                    operation: "greater_than".to_string(),
+                }
+            }),
             _ => {
                 return Err(VMError::NotImplemented(format!(
                     "Unknown comparison operation: {}",
                     op
                 )))
             }
-        };
-        
-        Ok(TypedValue::Boolean(result))
+        }
     }
 
     /// Execute logical operations
     fn execute_logical(&self, a: &TypedValue, op: &str) -> Result<TypedValue, VMError> {
-        // For NOT operation
-        let result = match op {
-            "not" => a.is_falsey(),
+        match op {
+            "not" => a.logical_not().map_err(|err| match err {
+                TypedValueError::CoercionError { from, to } => VMError::TypeMismatch {
+                    expected: to,
+                    found: from,
+                    operation: "not".to_string(),
+                },
+                _ => VMError::TypeMismatch {
+                    expected: "any type that can be coerced to boolean".to_string(),
+                    found: a.type_name().to_string(),
+                    operation: "not".to_string(),
+                }
+            }),
             _ => {
                 return Err(VMError::NotImplemented(format!(
                     "Unknown logical operation: {}",
                     op
                 )))
             }
-        };
-        
-        // Convert boolean result to TypedValue
-        Ok(TypedValue::Boolean(result))
+        }
     }
 
     /// Execute binary logical operations
     fn execute_binary_logical(&self, a: &TypedValue, b: &TypedValue, op: &str) -> Result<TypedValue, VMError> {
-        // For binary operations (AND, OR)
-        let a_truthy = !a.is_falsey();
-        let b_truthy = !b.is_falsey();
-
-        let result = match op {
-            "and" => a_truthy && b_truthy,
-            "or" => a_truthy || b_truthy,
+        match op {
+            "and" => a.logical_and(b).map_err(|err| match err {
+                TypedValueError::CoercionError { from, to } => VMError::TypeMismatch {
+                    expected: to,
+                    found: from,
+                    operation: "and".to_string(),
+                },
+                _ => VMError::TypeMismatch {
+                    expected: "values that can be coerced to boolean".to_string(),
+                    found: format!("{} and {}", a.type_name(), b.type_name()),
+                    operation: "and".to_string(),
+                }
+            }),
+            "or" => a.logical_or(b).map_err(|err| match err {
+                TypedValueError::CoercionError { from, to } => VMError::TypeMismatch {
+                    expected: to,
+                    found: from,
+                    operation: "or".to_string(),
+                },
+                _ => VMError::TypeMismatch {
+                    expected: "values that can be coerced to boolean".to_string(),
+                    found: format!("{} and {}", a.type_name(), b.type_name()),
+                    operation: "or".to_string(),
+                }
+            }),
             _ => {
                 return Err(VMError::NotImplemented(format!(
                     "Unknown binary logical operation: {}",
                     op
                 )))
             }
-        };
-
-        // Convert boolean result to TypedValue
-        Ok(TypedValue::Boolean(result))
+        }
     }
 }
 

@@ -23,6 +23,8 @@
 //!
 //! - **vm.rs**: Orchestrates the components, providing the main execution loop and API.
 //!
+//! - **typed_trace.rs**: Provides utilities for tracing and debugging VM execution.
+//!
 //! ## Benefits of Modular Design
 //!
 //! This modular design provides significant benefits:
@@ -46,7 +48,7 @@
 //!
 //! For more detailed information, see the documentation for each component.
 
-// Re-export main VM types for backward compatibility
+// Module declarations
 pub mod errors;
 pub mod execution;
 pub mod memory;
@@ -56,32 +58,23 @@ pub mod types;
 mod vm;
 pub mod typed_trace;
 
+// Re-export main VM types and components
 pub use errors::VMError;
-pub use execution::VMExecution;
-pub use memory::VMMemory;
-pub use stack::VMStack;
+pub use execution::{ExecutorOps, VMExecution};
+pub use memory::{MemoryScope, VMMemory};
+pub use stack::{StackOps, VMStack};
 pub use types::{CallFrame, LoopControl, Op, VMEvent};
-pub use self::vm::VM;
-pub use self::typed_trace::{TypedFrameTrace, VMTracer, TracedExecution};
-pub use execution::MissingKeyBehavior;
-
-// Re-export the traits for public use
-pub use execution::ExecutorOps;
-pub use memory::MemoryScope;
-pub use stack::StackOps;
-
-// Main VM struct that coordinates components
-pub use self::vm::VM;
+pub use vm::VM;
+pub use typed_trace::{TypedFrameTrace, TypedTraceFrame, VMTracer, TracedExecution};
 
 // Tests are kept in the vm.rs file for now
 #[cfg(test)]
 pub mod tests {
-    pub use crate::vm::vm::tests::*;
+    pub use crate::vm::vm::tests;
 }
 
 pub use self::memory::Memory;
 pub use self::stack::Stack;
-pub use self::typed_trace::{TypedFrameTrace, VMTracer, TracedExecution};
 
 /// Behavior when a key is not found in storage
 #[derive(Debug, Clone, Copy, PartialEq)]

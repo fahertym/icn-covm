@@ -24,6 +24,7 @@ use crate::vm::execution::{ExecutorOps, VMExecution};
 use crate::vm::memory::{MemoryScope, VMMemory};
 use crate::vm::stack::{StackOps, VMStack};
 use crate::vm::types::{LoopControl, Op, VMEvent};
+use crate::vm::typed_trace::VMTracer;
 use icn_ledger::DagLedger;
 
 use std::collections::HashMap;
@@ -75,6 +76,9 @@ where
 
     /// Whether to enable verbose tracing of storage operations
     pub verbose_storage_trace: bool,
+    
+    /// Execution tracer for recording operation history
+    pub tracer: Option<VMTracer>,
 }
 
 impl<S> VM<S>
@@ -93,6 +97,7 @@ where
             explain_enabled: false,
             simulation_mode: false,
             verbose_storage_trace: false,
+            tracer: None,
         }
     }
 
@@ -200,6 +205,7 @@ where
             explain_enabled: self.explain_enabled,
             simulation_mode: self.simulation_mode,
             verbose_storage_trace: self.verbose_storage_trace,
+            tracer: self.tracer.clone(),
         })
     }
 
@@ -274,6 +280,7 @@ where
             explain_enabled: self.explain_enabled,
             simulation_mode: self.simulation_mode,
             verbose_storage_trace: self.verbose_storage_trace,
+            tracer: self.tracer.clone(),
         })
     }
 
@@ -379,12 +386,14 @@ where
                     // Check the result
                     let cond_result = self.stack.pop("If")?;
 
-                    if cond_result != 0.0 {
+                    if cond_result.is_falsey() {
+                        // Condition is false, execute 'else' branch if available
+                        if let Some(else_branch) = else_ {
+                            self.execute_inner(else_branch)?;
+                        }
+                    } else {
                         // Condition is true, execute 'then' branch
                         self.execute_inner(then)?;
-                    } else if let Some(else_branch) = else_ {
-                        // Condition is false, execute 'else' branch if present
-                        self.execute_inner(else_branch)?;
                     }
                 }
                 Op::Loop { count, body } => {
@@ -411,7 +420,7 @@ where
                         self.execute_inner(condition.clone())?;
                         let cond_result = self.stack.pop("While")?;
 
-                        if cond_result == 0.0 {
+                        if cond_result.is_falsey() {
                             // Condition is false, exit loop
                             break;
                         }
@@ -438,11 +447,19 @@ where
                 }
                 Op::Negate => {
                     let value = self.stack.pop("Negate")?;
-                    self.stack.push(-value);
+                    if let TypedValue::Number(num) = value {
+                        self.stack.push(TypedValue::Number(-num));
+                    } else {
+                        return Err(VMError::TypeMismatch {
+                            expected: "number".to_string(),
+                            found: value.type_name().to_string(),
+                            operation: "negate".to_string(),
+                        });
+                    }
                 }
                 Op::AssertTop(expected) => {
                     let actual = self.stack.pop("AssertTop")?;
-                    if (actual - expected).abs() > f64::EPSILON {
+                    if !actual.equals(&expected).unwrap_or(TypedValue::Boolean(false)).as_boolean().unwrap_or(false) {
                         return Err(VMError::AssertionFailed {
                             message: format!("Expected {}, got {}", expected, actual),
                         });
@@ -458,7 +475,7 @@ where
                 }
                 Op::AssertMemory { key, expected } => {
                     let actual = self.memory.load(&key)?;
-                    if (actual - expected).abs() > f64::EPSILON {
+                    if !actual.equals(&expected).unwrap_or(TypedValue::Boolean(false)).as_boolean().unwrap_or(false) {
                         return Err(VMError::AssertionFailed {
                             message: format!(
                                 "Memory '{}': expected {}, got {}",
@@ -518,7 +535,7 @@ where
                 Op::Return => {
                     // If we're in a function, set the return value from the stack
                     if self.memory.in_function_call() {
-                        let return_value = self.stack.top().unwrap_or(0.0);
+                        let return_value = self.stack.top().cloned().unwrap_or(TypedValue::Null);
                         self.memory.set_return_value(return_value)?;
                     }
                     // The actual return is handled in execute_call
@@ -540,7 +557,7 @@ where
 
                     // Check each case
                     for (case_value, case_body) in cases {
-                        if (match_value - case_value).abs() < f64::EPSILON {
+                        if match_value.equals(&case_value).unwrap_or(TypedValue::Boolean(false)) == TypedValue::Boolean(true) {
                             // Found a match, execute the corresponding body
                             self.execute_inner(case_body)?;
                             matched = true;
@@ -588,7 +605,7 @@ where
                     amount,
                     reason,
                 } => {
-                    let amount_value = TypedValue::Number(*amount);
+                    let amount_value = TypedValue::Number(amount);
                     self.executor
                         .execute_mint(&resource, &account, &amount_value, &reason)?;
                 }
@@ -599,7 +616,7 @@ where
                     amount,
                     reason,
                 } => {
-                    let amount_value = TypedValue::Number(*amount);
+                    let amount_value = TypedValue::Number(amount);
                     self.executor
                         .execute_transfer(&resource, &from, &to, &amount_value, &reason)?;
                 }
@@ -609,7 +626,7 @@ where
                     amount,
                     reason,
                 } => {
-                    let amount_value = TypedValue::Number(*amount);
+                    let amount_value = TypedValue::Number(amount);
                     self.executor
                         .execute_burn(&resource, &account, &amount_value, &reason)?;
                 }
@@ -632,9 +649,12 @@ where
                     self.executor.execute_store_p(&key, &value)?;
                 }
                 Op::LoadP(key) => {
-                    let value = self
-                        .executor
-                        .execute_load_p(&key, self.missing_key_behavior)?;
+                    let value = match &self.missing_key_behavior {
+                        MissingKeyBehavior::Default => 
+                            self.executor.execute_load_p(&key, crate::vm::MissingKeyBehavior::Default)?,
+                        MissingKeyBehavior::Error =>
+                            self.executor.execute_load_p(&key, crate::vm::MissingKeyBehavior::Error)?,
+                    };
                     self.log_storage_operation("LoadP", &key, &value);
                     self.stack.push(value);
                 }
@@ -651,6 +671,11 @@ where
                         op
                     )));
                 }
+            }
+            
+            // Record stack after operation for tracing
+            if self.trace_enabled {
+                self.record_stack_after();
             }
         }
 
@@ -727,9 +752,14 @@ where
         self
     }
 
-    /// Enable or disable tracing
+    /// Set tracing mode
     pub fn set_tracing(&mut self, enabled: bool) -> &mut Self {
         self.trace_enabled = enabled;
+        if enabled && self.tracer.is_none() {
+            self.tracer = Some(VMTracer::new(true, 1));
+        } else if !enabled && self.tracer.is_some() {
+            self.tracer = None;
+        }
         self
     }
 
@@ -771,15 +801,31 @@ where
         self.simulation_mode
     }
 
-    /// Log a trace message if tracing is enabled
+    /// Log a trace message for an operation
     fn log_trace(&mut self, op: &Op) {
         if self.trace_enabled {
-            self.executor.emit(&format!("[TRACE] Op: {}", op));
-
-            // Only show stack state if there are items on the stack
-            if !self.stack.is_empty() {
-                self.executor
-                    .emit(&format!("[TRACE] Stack: {:?}", self.stack.get_stack()));
+            println!("TRACE: Op: {:?}", op);
+            println!("TRACE: Stack: {:?}", self.stack.get_stack());
+            
+            // Record in the tracer if it exists
+            if let Some(tracer) = &mut self.tracer {
+                let stack_before = self.stack.get_stack();
+                // We'll record stack_after in the caller after the operation is executed
+                tracer.record_trace_frame(op.clone(), stack_before, vec![]);
+            }
+        }
+    }
+    
+    /// Record the stack after an operation for tracing
+    fn record_stack_after(&mut self) {
+        if self.trace_enabled && self.tracer.is_some() {
+            if let Some(tracer) = &mut self.tracer {
+                if !tracer.external_frames.is_empty() {
+                    let stack_after = self.stack.get_stack();
+                    // Update the last frame with the stack after execution
+                    let last_frame = tracer.external_frames.last_mut().unwrap();
+                    last_frame.stack_after = stack_after;
+                }
             }
         }
     }
@@ -914,7 +960,7 @@ pub mod tests {
 
     #[test]
     fn test_basic_arithmetic() {
-        let mut vm = VM::<InMemoryStorage>::default();
+        let mut vm = VM::<InMemoryStorage>::new();
         
         let program = vec![
             Op::Push(TypedValue::Number(5.0)),
@@ -922,7 +968,7 @@ pub mod tests {
             Op::Add,
         ];
         
-        vm.execute_program(&program).unwrap();
+        vm.execute(&program).unwrap();
         
         // Verify stack
         assert_eq!(vm.stack.top(), Some(&TypedValue::Number(8.0)));
@@ -930,20 +976,19 @@ pub mod tests {
 
     #[test]
     fn test_conditional_branch() {
-        let mut vm = VM::<InMemoryStorage>::default();
+        let mut vm = VM::<InMemoryStorage>::new();
         
         let program = vec![
             Op::Push(TypedValue::Number(10.0)),
             Op::Push(TypedValue::Number(5.0)),
-            Op::IfBlock {
-                condition: vec![Op::Push(TypedValue::Number(1.0)), // true condition
-                ],
-                body: vec![Op::Add],
-                else_body: vec![Op::Sub],
+            Op::If {
+                condition: vec![Op::Push(TypedValue::Number(1.0))], // true condition
+                then: vec![Op::Add],
+                else_: Some(vec![Op::Sub]),
             },
         ];
         
-        vm.execute_program(&program).unwrap();
+        vm.execute(&program).unwrap();
         
         // Stack should have 15.0 (10+5) if condition is true
         assert_eq!(vm.stack.top(), Some(&TypedValue::Number(15.0)));
@@ -951,18 +996,17 @@ pub mod tests {
 
     #[test]
     fn test_loop() {
-        let mut vm = VM::<InMemoryStorage>::default();
+        let mut vm = VM::<InMemoryStorage>::new();
         
         let program = vec![
             Op::Push(TypedValue::Number(0.0)), // Initial counter
             Op::Loop {
-                max_iterations: 5,
+                count: 5,
                 body: vec![Op::Push(TypedValue::Number(1.0)), Op::Add],
-                condition: vec![],
             },
         ];
         
-        vm.execute_program(&program).unwrap();
+        vm.execute(&program).unwrap();
         
         // After 5 iterations of adding 1, we should have 5
         assert_eq!(vm.stack.top(), Some(&TypedValue::Number(5.0)));
@@ -1015,7 +1059,7 @@ pub mod tests {
 
         vm.execute(&program).unwrap();
 
-        assert_eq!(vm.stack.top(), Some(8.0));
+        assert_eq!(vm.stack.top(), Some(&TypedValue::Number(8.0)));
     }
 
     #[test]
@@ -1045,6 +1089,6 @@ pub mod tests {
         vm.execute(&program).unwrap();
 
         // Check that balance query pushed the correct amount to the stack
-        assert_eq!(vm.stack.top(), Some(100.0));
+        assert_eq!(vm.stack.top(), Some(&TypedValue::Number(100.0)));
     }
 }

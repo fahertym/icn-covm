@@ -4,10 +4,9 @@
 //! enabling better visibility into program execution and error diagnosis.
 
 use crate::typed::TypedValue;
-use crate::vm::memory::Memory;
-use crate::vm::stack::Stack;
+use crate::vm::VMStack;
 use crate::vm::types::{Op, VMEvent};
-use std::fmt;
+use crate::vm::stack::StackOps;
 
 /// Represents a single frame in the VM execution trace
 #[derive(Debug, Clone)]
@@ -36,10 +35,10 @@ pub struct TypedFrameTrace {
 
 impl TypedFrameTrace {
     /// Create a new execution trace frame
-    pub fn new(op: &Op, stack: &Stack, pc: usize) -> Self {
+    pub fn new(op: &Op, stack: &VMStack, pc: usize) -> Self {
         Self {
             op: op.clone(),
-            stack_before: stack.as_vec().iter().cloned().collect(),
+            stack_before: stack.get_stack(),
             stack_after: None,
             memory_changes: Vec::new(),
             events_emitted: Vec::new(),
@@ -49,8 +48,8 @@ impl TypedFrameTrace {
     }
     
     /// Record the stack state after execution
-    pub fn record_stack_after(&mut self, stack: &Stack) {
-        self.stack_after = Some(stack.as_vec().iter().cloned().collect());
+    pub fn record_stack_after(&mut self, stack: &VMStack) {
+        self.stack_after = Some(stack.get_stack());
     }
     
     /// Record a memory change
@@ -126,10 +125,9 @@ impl TypedFrameTrace {
             Op::And => "Logical AND of top two values".to_string(),
             Op::Or => "Logical OR of top two values".to_string(),
             Op::Not => "Logical NOT of top value".to_string(),
-            Op::IfBlock { .. } => "Conditional block".to_string(),
+            Op::If { .. } => "Conditional block".to_string(),
             Op::Loop { .. } => "Loop block".to_string(),
             Op::Call(name) => format!("Call function '{}'", name),
-            Op::Emit => "Emit output".to_string(),
             _ => format!("{:?}", self.op),  // Fallback for other ops
         }
     }
@@ -143,7 +141,19 @@ impl TypedFrameTrace {
     }
 }
 
+/// Simplified trace frame for external use
+#[derive(Debug, Clone)]
+pub struct TypedTraceFrame {
+    /// Operation being executed
+    pub op: Op,
+    /// Stack state before execution
+    pub stack_before: Vec<TypedValue>,
+    /// Stack state after execution
+    pub stack_after: Vec<TypedValue>,
+}
+
 /// Execution tracer that records and displays VM execution
+#[derive(Debug, Default)]
 pub struct VMTracer {
     /// Complete execution trace
     pub frames: Vec<TypedFrameTrace>,
@@ -153,6 +163,9 @@ pub struct VMTracer {
     
     /// Verbosity level
     pub verbosity: usize,
+    
+    /// External trace frames (simplified)
+    pub external_frames: Vec<TypedTraceFrame>,
 }
 
 impl VMTracer {
@@ -162,11 +175,12 @@ impl VMTracer {
             frames: Vec::new(),
             enabled,
             verbosity,
+            external_frames: Vec::new(),
         }
     }
     
     /// Start tracing a new operation
-    pub fn trace_op(&mut self, op: &Op, stack: &Stack, pc: usize) -> Option<usize> {
+    pub fn trace_op(&mut self, op: &Op, stack: &VMStack, pc: usize) -> Option<usize> {
         if !self.enabled {
             return None;
         }
@@ -177,7 +191,7 @@ impl VMTracer {
     }
     
     /// Update the stack state after execution
-    pub fn trace_stack_after(&mut self, frame_idx: Option<usize>, stack: &Stack) {
+    pub fn trace_stack_after(&mut self, frame_idx: Option<usize>, stack: &VMStack) {
         if let Some(idx) = frame_idx {
             if let Some(frame) = self.frames.get_mut(idx) {
                 frame.record_stack_after(stack);
@@ -209,6 +223,17 @@ impl VMTracer {
             if let Some(frame) = self.frames.get_mut(idx) {
                 frame.record_error(error);
             }
+        }
+    }
+    
+    /// Record a simplified trace frame for external use
+    pub fn record_trace_frame(&mut self, op: Op, stack_before: Vec<TypedValue>, stack_after: Vec<TypedValue>) {
+        if self.enabled {
+            self.external_frames.push(TypedTraceFrame {
+                op,
+                stack_before,
+                stack_after,
+            });
         }
     }
     
@@ -249,4 +274,7 @@ pub trait TracedExecution {
     
     /// Print the execution trace
     fn print_trace(&self);
+    
+    /// Record a trace frame
+    fn record_frame(&mut self, op: Op, stack_before: Vec<TypedValue>, stack_after: Vec<TypedValue>);
 } 
