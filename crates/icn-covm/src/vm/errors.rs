@@ -398,8 +398,27 @@ impl From<serde_json::Error> for VMError {
     }
 }
 
-impl From<TypedValueError> for VMError {
-    fn from(err: TypedValueError) -> Self {
-        VMError::TypedValueError(err.to_string())
+impl From<crate::typed::TypedValueError> for VMError {
+    fn from(err: crate::typed::TypedValueError) -> Self {
+        match err {
+            crate::typed::TypedValueError::TypeMismatch { expected, found, operation } => {
+                VMError::TypeMismatch {
+                    expected,
+                    found,
+                    operation,
+                }
+            },
+            crate::typed::TypedValueError::InvalidOperation { operation, details } => {
+                VMError::InvalidOperation {
+                    operation,
+                    details,
+                }
+            },
+            crate::typed::TypedValueError::DivisionByZero => VMError::DivisionByZero,
+            crate::typed::TypedValueError::OutOfBounds => VMError::InvalidOperation {
+                operation: "arithmetic".to_string(),
+                details: "Value out of bounds".to_string()
+            },
+        }
     }
 }

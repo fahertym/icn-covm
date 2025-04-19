@@ -463,13 +463,13 @@ where
         identity_id: &str,
         amount: Option<&TypedValue>,
     ) -> Result<(), VMError> {
-        // Default to 1.0 if no amount is provided, otherwise extract numeric value
+        // Default to 1 if no amount is provided, otherwise extract numeric value
         let amount_val = match amount {
             Some(value) => value.as_number().map_err(|_| VMError::TypeMismatch {
                 expected: "number".to_string(),
                 found: value.type_name().to_string(),
                 operation: "increment_reputation".to_string(),
-            })? as u64,
+            })?.round() as u64,
             None => 1, // Default to 1 if no amount provided
         };
 
@@ -516,9 +516,7 @@ where
 
             // Set the new reputation value
             self.storage_operation("set_reputation", |backend, auth, namespace| {
-                // Convert amount_val to f64 for set_reputation
-                let amount_val_f64 = amount_val as f64;
-                let new_value = current_rep + amount_val_f64;
+                let new_value = current_rep + amount_val;
                 backend
                     .set_reputation(auth, namespace, identity_id, new_value)
                     .map(|(_, event_opt)| {

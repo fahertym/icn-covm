@@ -50,15 +50,20 @@
 pub mod errors;
 pub mod execution;
 pub mod memory;
+pub mod ops;
 pub mod stack;
 pub mod types;
+mod vm;
+pub mod typed_trace;
 
 pub use errors::VMError;
 pub use execution::VMExecution;
 pub use memory::VMMemory;
 pub use stack::VMStack;
 pub use types::{CallFrame, LoopControl, Op, VMEvent};
-pub use vm::MissingKeyBehavior;
+pub use self::vm::VM;
+pub use self::typed_trace::{TypedFrameTrace, VMTracer, TracedExecution};
+pub use execution::MissingKeyBehavior;
 
 // Re-export the traits for public use
 pub use execution::ExecutorOps;
@@ -66,11 +71,24 @@ pub use memory::MemoryScope;
 pub use stack::StackOps;
 
 // Main VM struct that coordinates components
-mod vm;
-pub use vm::VM;
+pub use self::vm::VM;
 
 // Tests are kept in the vm.rs file for now
 #[cfg(test)]
-mod tests {
+pub mod tests {
     pub use crate::vm::vm::tests::*;
+}
+
+pub use self::memory::Memory;
+pub use self::stack::Stack;
+pub use self::typed_trace::{TypedFrameTrace, VMTracer, TracedExecution};
+
+/// Behavior when a key is not found in storage
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum MissingKeyBehavior {
+    /// Return a default value (0.0) when a key is not found
+    Default,
+    
+    /// Return an error when a key is not found
+    Error,
 }

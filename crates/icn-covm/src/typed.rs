@@ -241,6 +241,16 @@ impl TypedValue {
         let b = other.as_boolean()?;
         Ok(TypedValue::Boolean(a || b))
     }
+
+    /// Returns a human-readable description of the TypedValue for debugging
+    pub fn describe(&self) -> String {
+        match self {
+            TypedValue::Number(n) => format!("Number({})", n),
+            TypedValue::Boolean(b) => format!("Boolean({})", b),
+            TypedValue::String(s) => format!("String(\"{}\")", s),
+            TypedValue::Null => "Null".into(),
+        }
+    }
 }
 
 impl fmt::Display for TypedValue {

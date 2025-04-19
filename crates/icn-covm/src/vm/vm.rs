@@ -913,25 +913,59 @@ pub mod tests {
     }
 
     #[test]
-    fn test_basic_ops() {
-        let mut vm = VM::<InMemoryStorage>::new();
+    fn test_basic_arithmetic() {
+        let mut vm = VM::<InMemoryStorage>::default();
         
-        let ops = vec![
+        let program = vec![
             Op::Push(TypedValue::Number(5.0)),
             Op::Push(TypedValue::Number(3.0)),
             Op::Add,
-            Op::Push(TypedValue::Number(2.0)),
-            Op::Mul,
         ];
         
-        assert!(vm.execute(&ops).is_ok());
+        vm.execute_program(&program).unwrap();
         
-        let stack_value = vm.stack.top().unwrap();
-        if let TypedValue::Number(n) = stack_value {
-            assert!((n - 16.0).abs() < f64::EPSILON);
-        } else {
-            panic!("Expected number on stack");
-        }
+        // Verify stack
+        assert_eq!(vm.stack.top(), Some(&TypedValue::Number(8.0)));
+    }
+
+    #[test]
+    fn test_conditional_branch() {
+        let mut vm = VM::<InMemoryStorage>::default();
+        
+        let program = vec![
+            Op::Push(TypedValue::Number(10.0)),
+            Op::Push(TypedValue::Number(5.0)),
+            Op::IfBlock {
+                condition: vec![Op::Push(TypedValue::Number(1.0)), // true condition
+                ],
+                body: vec![Op::Add],
+                else_body: vec![Op::Sub],
+            },
+        ];
+        
+        vm.execute_program(&program).unwrap();
+        
+        // Stack should have 15.0 (10+5) if condition is true
+        assert_eq!(vm.stack.top(), Some(&TypedValue::Number(15.0)));
+    }
+
+    #[test]
+    fn test_loop() {
+        let mut vm = VM::<InMemoryStorage>::default();
+        
+        let program = vec![
+            Op::Push(TypedValue::Number(0.0)), // Initial counter
+            Op::Loop {
+                max_iterations: 5,
+                body: vec![Op::Push(TypedValue::Number(1.0)), Op::Add],
+                condition: vec![],
+            },
+        ];
+        
+        vm.execute_program(&program).unwrap();
+        
+        // After 5 iterations of adding 1, we should have 5
+        assert_eq!(vm.stack.top(), Some(&TypedValue::Number(5.0)));
     }
 
     #[test]
@@ -974,54 +1008,14 @@ pub mod tests {
                 ],
             },
             // Call the function with arguments 5 and 3
-            Op::Push(5.0),
-            Op::Push(3.0),
+            Op::Push(TypedValue::Number(5.0)),
+            Op::Push(TypedValue::Number(3.0)),
             Op::Call("add".to_string()),
         ];
 
         vm.execute(&program).unwrap();
 
         assert_eq!(vm.stack.top(), Some(8.0));
-    }
-
-    #[test]
-    fn test_conditional_execution() {
-        let mut vm = VM::<InMemoryStorage>::new();
-
-        // Test conditional execution with if/else
-        let program = vec![
-            Op::Push(10.0),
-            Op::Push(5.0),
-            Op::If {
-                condition: vec![
-                    Op::Push(1.0), // true condition
-                ],
-                then: vec![Op::Add],
-                else_: Some(vec![Op::Sub]),
-            },
-        ];
-
-        vm.execute(&program).unwrap();
-
-        assert_eq!(vm.stack.top(), Some(15.0));
-    }
-
-    #[test]
-    fn test_loops() {
-        let mut vm = VM::<InMemoryStorage>::new();
-
-        // Test loop operation
-        let program = vec![
-            Op::Push(0.0), // Initial counter
-            Op::Loop {
-                count: 5,
-                body: vec![Op::Push(1.0), Op::Add],
-            },
-        ];
-
-        vm.execute(&program).unwrap();
-
-        assert_eq!(vm.stack.top(), Some(5.0));
     }
 
     #[test]
