@@ -28,6 +28,9 @@ target/
 .cargo/
 full_project_dump.txt
 
+# Legacy src directory (use crates/icn-covm/src instead)
+/src/
+
 # Binary directory
 /src/bin/
 

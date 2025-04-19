@@ -35,17 +35,16 @@
         ]
       },
       {
-        "when": "modifying: src/vm.rs",
+        "when": "modifying: crates/icn-covm/src/vm/vm.rs",
         "do": [
-          "remind: Did you write or update unit tests for this logic?",
-          "remind: Does this change affect VM state, recursion, or memory?"
+          "remind: This is the main execution entrypoint of the VM.",
+          "remind: Does this change affect recursion, stack scope, or TypedValue support?"
         ]
       },
       {
-        "when": "modifying: src/main.rs",
+        "when": "modifying: crates/icn-covm/src/main.rs",
         "do": [
-          "remind: Should CLI behavior or input/output handling be tested?",
-          "remind: Should user feedback be logged or emitted?"
+          "remind: Does this CLI entrypoint change require test updates or user documentation?"
         ]
       },
       {
