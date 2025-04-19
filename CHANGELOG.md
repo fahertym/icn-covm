@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Created comprehensive documentation in `docs/governance_templates.md`
   - Added usage examples in `docs/examples/template_example.md`
   - Integrated with proposal CLI for seamless template application
+- Added automatic DagLedger persistence to disk when a path is configured
+- Added `--dag-path` option to proposal command to specify where to store DAG events
+- Updated VM to use new DagLedger implementation that manages path internally
 
 ### Changed
 

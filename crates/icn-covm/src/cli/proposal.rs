@@ -30,8 +30,7 @@ use crate::vm::Op;
 use crate::vm::VMError;
 use crate::vm::VM;
 use chrono::{DateTime, Duration, Utc};
-use clap::ArgMatches;
-use clap::{arg, value_parser, Arg, ArgAction, Command};
+use clap::{arg, value_parser, Arg, ArgAction, ArgMatches, Command, Subcommand};
 use hex;
 use serde::{Deserialize, Serialize};
 use serde_json;
@@ -571,9 +570,16 @@ pub struct ProposalComment {
 /// A configured `Command` object ready to be used in a CLI application
 pub fn proposal_command() -> Command {
     Command::new("proposal")
-        .about("Manage governance proposal lifecycle")
+        .about("Governance proposal operations")
         .subcommand_required(true)
         .arg_required_else_help(true)
+        .arg(
+            Arg::new("dag-path")
+                .long("dag-path")
+                .value_name("PATH")
+                .help("Path to the DAG ledger file for storing governance events")
+                .global(true)
+        )
         .subcommand(
             Command::new("create")
                 .about("Create a new governance proposal")
@@ -1243,6 +1249,12 @@ where
     S: Storage + Send + Sync + Clone + Debug + 'static,
 {
     let user_did = auth_context.identity_did(); // Get DID from auth_context parameter
+
+    // Check for DAG path option
+    if let Some(dag_path) = matches.get_one::<String>("dag-path") {
+        vm.set_dag_path(PathBuf::from(dag_path));
+        println!("📒 Using DAG ledger at: {}", dag_path);
+    }
 
     match matches.subcommand() {
         Some(("create", sub_matches)) => {
@@ -2972,7 +2984,12 @@ mod tests {
     use crate::storage::implementations::in_memory::InMemoryStorage;
 
     fn setup_test_vm() -> VM<InMemoryStorage> {
-        VM::with_storage_backend(InMemoryStorage::default())
+        let mut vm = VM::new();
+        let auth = setup_test_auth();
+        vm.set_auth_context(auth);
+        vm.set_namespace("test_ns");
+        vm.set_storage_backend(InMemoryStorage::new());
+        vm
     }
 
     fn setup_test_auth() -> AuthContext {

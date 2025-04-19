@@ -31,6 +31,7 @@ use icn_ledger::{DagLedger, DagNode, NodeData};
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::marker::{Send, Sync};
+use std::path::PathBuf;
 
 /// Defines behavior when a key is not found in storage operations
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -86,6 +87,27 @@ where
         let mut vm = Self::new();
         vm.set_storage_backend(backend);
         vm
+    }
+
+    /// Initialize the DAG ledger with a path
+    pub fn with_dag_path(mut self, path: PathBuf) -> Self {
+        self.dag = Some(DagLedger::with_path(path));
+        self
+    }
+
+    /// Set the DAG ledger path
+    pub fn set_dag_path(&mut self, path: PathBuf) -> &mut Self {
+        if let Some(dag) = &mut self.dag {
+            dag.set_path(path);
+        } else {
+            self.dag = Some(DagLedger::with_path(path));
+        }
+        self
+    }
+
+    /// Get the DAG ledger
+    pub fn get_dag(&self) -> Option<&DagLedger> {
+        self.dag.as_ref()
     }
 
     /// Set the storage backend
