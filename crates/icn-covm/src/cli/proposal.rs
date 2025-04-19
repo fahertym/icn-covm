@@ -36,7 +36,7 @@ use serde::{Deserialize, Serialize};
 use serde_json;
 use sha2::{Digest, Sha256};
 use std::boxed::Box;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt::Debug;
 use std::fs;
@@ -46,6 +46,8 @@ use std::str::FromStr;
 use std::time::Duration as StdDuration;
 use uuid;
 use regex::Regex;
+use icn_ledger;
+use icn_ledger::{DagLedger, DagNode, NodeData};
 
 /// Extension trait that provides proposal storage operations for VM
 ///
@@ -226,18 +228,22 @@ where
         // Commit the transaction
         self.commit_fork_transaction()?;
 
+        // Get the namespace for the DAG node - do this outside the borrow block
+        let dag_namespace = self.get_namespace().unwrap_or("default").to_string();
+        
         // Log to DAG if available
         if let Some(ledger) = &mut self.dag {
             let node = icn_ledger::DagNode {
                 id: String::new(), // Will be computed by the ledger
                 parent_ids: vec![],
                 timestamp: chrono::Utc::now().timestamp() as u64,
+                namespace: dag_namespace,
                 data: icn_ledger::NodeData::ProposalCreated {
                     proposal_id: proposal_id.clone(),
                     title,
                 },
             };
-            let node_id = ledger.append(node);
+            let node_id = ledger.append(node).unwrap();
             println!("🧾 DAG: Proposal {} recorded as node {}", proposal_id, node_id);
         }
 
@@ -321,6 +327,9 @@ where
         // Commit the transaction
         self.commit_fork_transaction()?;
 
+        // Get the namespace for the DAG node - do this outside the borrow block
+        let dag_namespace = self.get_namespace().unwrap_or("default").to_string();
+        
         // Log to DAG if available
         if let Some(ledger) = &mut self.dag {
             // Convert vote value to a numeric value for the DAG
@@ -340,13 +349,14 @@ where
                 id: String::new(), // Will be computed by the ledger
                 parent_ids,
                 timestamp: chrono::Utc::now().timestamp() as u64,
+                namespace: dag_namespace,
                 data: icn_ledger::NodeData::VoteCast {
                     proposal_id: proposal_id.to_string(),
                     voter: voter_id.to_string(),
                     vote: vote_numeric,
                 },
             };
-            let node_id = ledger.append(node);
+            let node_id = ledger.append(node).unwrap();
             println!("🗳️ DAG: Vote recorded as node {}", node_id);
         }
 
@@ -454,6 +464,9 @@ where
         // Commit the transaction
         self.commit_fork_transaction()?;
 
+        // Get the namespace for the DAG node - do this outside the borrow block
+        let dag_namespace = self.get_namespace().unwrap_or("default").to_string();
+        
         // Log to DAG if available
         if let Some(ledger) = &mut self.dag {
             // Collect parent IDs from vote nodes
@@ -466,12 +479,13 @@ where
                 id: String::new(), // Will be computed by the ledger
                 parent_ids,
                 timestamp: chrono::Utc::now().timestamp() as u64,
+                namespace: dag_namespace,
                 data: icn_ledger::NodeData::ProposalExecuted {
                     proposal_id: proposal_id.to_string(),
                     success,
                 },
             };
-            let node_id = ledger.append(node);
+            let node_id = ledger.append(node).unwrap();
             println!("⚙️ DAG: Execution recorded as node {}", node_id);
         }
         
@@ -576,6 +590,11 @@ pub struct ProposalComment {
 /// - execute: Execute the logic of a passed proposal
 /// - view-comments: View all comments for a proposal
 /// - export: Export a complete proposal and its lifecycle data to a JSON file
+/// - dag-export-all: Export all DAG nodes to a file
+/// - dag-import: Import DAG nodes from a file
+/// - dag-export-selected: Export selected DAG nodes and their ancestor nodes to a file
+/// - dag-diff: Show differences between two DAG files
+/// - dag-summary: Show a summary of the DAG contents
 ///
 /// # Returns
 /// A configured `Command` object ready to be used in a CLI application
@@ -589,6 +608,14 @@ pub fn proposal_command() -> Command {
                 .long("dag-path")
                 .value_name("PATH")
                 .help("Path to the DAG ledger file for storing governance events")
+                .global(true)
+        )
+        .arg(
+            Arg::new("namespace")
+                .long("namespace")
+                .value_name("NAMESPACE")
+                .help("Namespace to use for the DAG ledger operations")
+                .default_value("default")
                 .global(true)
         )
         .subcommand(
@@ -1098,6 +1125,87 @@ pub fn proposal_command() -> Command {
                         .help("File path for the exported JSON (default: proposal_<id>.json)")
                 )
         )
+        .subcommand(
+            Command::new("dag-export-all")
+                .about("Export all DAG nodes to a file")
+                .arg(
+                    Arg::new("output")
+                        .long("output")
+                        .value_name("FILE_PATH")
+                        .help("File path for the exported JSONL")
+                        .required(true)
+                )
+        )
+        .subcommand(
+            Command::new("dag-import")
+                .about("Import DAG nodes from a file")
+                .arg(
+                    Arg::new("input")
+                        .long("input")
+                        .value_name("FILE_PATH")
+                        .help("File path to import JSONL from")
+                        .required(true)
+                )
+        )
+        .subcommand(
+            Command::new("dag-export-selected")
+                .about("Export selected DAG nodes and their ancestor nodes to a file")
+                .arg(
+                    Arg::new("ids")
+                        .long("ids")
+                        .value_name("NODE_IDS")
+                        .help("Comma-separated list of node IDs to export")
+                        .required_unless_present("proposal-id")
+                )
+                .arg(
+                    Arg::new("proposal-id")
+                        .long("proposal-id")
+                        .value_name("PROPOSAL_ID")
+                        .help("Export all nodes related to this proposal")
+                        .required_unless_present("ids")
+                )
+                .arg(
+                    Arg::new("output")
+                        .long("output")
+                        .value_name("FILE_PATH")
+                        .help("File path for the exported JSONL")
+                        .required(true)
+                )
+        )
+        .subcommand(
+            Command::new("dag-diff")
+                .about("Show differences between two DAG files")
+                .arg(
+                    Arg::new("base")
+                        .long("base")
+                        .value_name("FILE_PATH")
+                        .help("Path to the base DAG file")
+                        .required(true)
+                )
+                .arg(
+                    Arg::new("other")
+                        .long("other")
+                        .value_name("FILE_PATH")
+                        .help("Path to the other DAG file to compare against")
+                        .required(true)
+                )
+                .arg(
+                    Arg::new("output")
+                        .long("output")
+                        .value_name("FILE_PATH")
+                        .help("Optional path to export the diff as a JSONL file")
+                )
+        )
+        .subcommand(
+            Command::new("dag-summary")
+                .about("Show a summary of the DAG contents")
+                .arg(
+                    Arg::new("file")
+                        .long("file")
+                        .value_name("FILE_PATH")
+                        .help("Optional path to a DAG file to summarize (defaults to current DAG)")
+                )
+        )
 }
 
 /// Loads a proposal by ID from storage
@@ -1276,6 +1384,12 @@ where
     if let Some(dag_path) = matches.get_one::<String>("dag-path") {
         vm.set_dag_path(PathBuf::from(dag_path));
         println!("📒 Using DAG ledger at: {}", dag_path);
+    }
+    
+    // Set namespace if provided
+    if let Some(namespace) = matches.get_one::<String>("namespace") {
+        vm.set_namespace(namespace);
+        println!("🏷️ Using namespace: {}", namespace);
     }
 
     match matches.subcommand() {
@@ -1869,6 +1983,51 @@ where
                 .ok_or("Proposal ID is required")?;
 
             return handle_comment_history_command(vm, comment_id, proposal_id, Some(auth_context));
+        }
+        Some(("dag-export-all", export_matches)) => {
+            let output_path = export_matches
+                .get_one::<String>("output")
+                .ok_or("Output path is required")?;
+            return handle_dag_export_all_command(vm, output_path);
+        }
+        Some(("dag-import", import_matches)) => {
+            let input_path = import_matches
+                .get_one::<String>("input")
+                .ok_or("Input path is required")?;
+            return handle_dag_import_command(vm, input_path);
+        }
+        Some(("dag-export-selected", export_selected_matches)) => {
+            let output_path = export_selected_matches
+                .get_one::<String>("output")
+                .ok_or("Output path is required")?;
+                
+            // Export by proposal ID or by specific node IDs
+            if let Some(proposal_id) = export_selected_matches.get_one::<String>("proposal-id") {
+                return handle_dag_export_proposal_command(vm, proposal_id, output_path);
+            } else if let Some(ids_str) = export_selected_matches.get_one::<String>("ids") {
+                let ids: Vec<String> = ids_str.split(',')
+                    .map(|s| s.trim().to_string())
+                    .collect();
+                return handle_dag_export_selected_command(vm, &ids, output_path);
+            } else {
+                return Err("Either proposal-id or ids must be specified".into());
+            }
+        }
+        Some(("dag-diff", diff_matches)) => {
+            let base_path = diff_matches
+                .get_one::<String>("base")
+                .ok_or("Base DAG file path is required")?;
+            let other_path = diff_matches
+                .get_one::<String>("other")
+                .ok_or("Other DAG file path is required")?;
+            let output_path = diff_matches.get_one::<String>("output");
+            
+            return handle_dag_diff_command(vm, base_path, other_path, output_path);
+        }
+        Some(("dag-summary", summary_matches)) => {
+            let file_path = summary_matches.get_one::<String>("file");
+            
+            return handle_dag_summary_command(vm, file_path);
         }
         _ => unreachable!("Subcommand should be required"),
     }
@@ -3141,68 +3300,318 @@ where
 {
     if let Some(ledger) = &vm.dag {
         if let Some(start_id) = ledger.find_proposal_node_id(proposal_id) {
-            let trace = ledger.trace(&start_id);
-            
-            println!("📜 DAG Trace for proposal '{}':", proposal_id);
-            println!("Number of nodes in trace: {}", trace.len());
-            
-            if trace.is_empty() {
-                println!("No related nodes found.");
-                return Ok(());
-            }
-            
-            // Pretty format time
-            let format_time = |timestamp: u64| -> String {
-                let dt = chrono::DateTime::<chrono::Utc>::from_timestamp(timestamp as i64, 0)
-                    .unwrap_or_else(|| chrono::Utc::now());
-                dt.format("%Y-%m-%d %H:%M:%S UTC").to_string()
-            };
-            
-            // Print the nodes in reverse chronological order (newest first)
-            for node in trace.iter().rev() {
-                match &node.data {
-                    icn_ledger::NodeData::ProposalCreated { proposal_id, title } => {
-                        println!("📝 Proposal Created [{}]", node.id);
-                        println!("   ID: {}", proposal_id);
-                        println!("   Title: {}", title);
-                        println!("   Time: {}", format_time(node.timestamp));
-                        println!("   Parents: {}", node.parent_ids.join(", "));
-                    },
-                    icn_ledger::NodeData::VoteCast { proposal_id, voter, vote } => {
-                        let vote_str = match *vote as i32 {
-                            1 => "YES",
-                            0 => "NO",
-                            _ => "ABSTAIN",
-                        };
-                        println!("🗳️ Vote Cast [{}]", node.id);
-                        println!("   Proposal: {}", proposal_id);
-                        println!("   Voter: {}", voter);
-                        println!("   Vote: {}", vote_str);
-                        println!("   Time: {}", format_time(node.timestamp));
-                        println!("   Parents: {}", node.parent_ids.join(", "));
-                    },
-                    icn_ledger::NodeData::ProposalExecuted { proposal_id, success } => {
-                        println!("⚙️ Proposal Executed [{}]", node.id);
-                        println!("   ID: {}", proposal_id);
-                        println!("   Success: {}", success);
-                        println!("   Time: {}", format_time(node.timestamp));
-                        println!("   Parents: {}", node.parent_ids.join(", "));
-                    },
-                    _ => {
-                        println!("📄 Other Node [{}]", node.id);
-                        println!("   Type: {:?}", node.data);
-                        println!("   Time: {}", format_time(node.timestamp));
-                        println!("   Parents: {}", node.parent_ids.join(", "));
-                    }
+            // Find the node by ID first
+            if let Some(start_node) = ledger.find_by_id(&start_id) {
+                // Now trace the actual node
+                let trace_result = ledger.trace(start_node)?;
+                
+                println!("📜 DAG Trace for proposal '{}':", proposal_id);
+                println!("Number of nodes in trace: {}", trace_result.lines().count());
+                
+                if trace_result.is_empty() {
+                    println!("No related nodes found.");
+                    return Ok(());
                 }
-                println!();
+                
+                // Format and print each node
+                let nodes: Vec<&icn_ledger::DagNode> = ledger.find_proposal_related_nodes(proposal_id).iter()
+                    .map(|node| ledger.find_by_id(&node.id).unwrap())
+                    .collect();
+                
+                // Print the nodes in reverse chronological order (newest first)
+                for node in nodes.iter().rev() {
+                    match &node.data {
+                        icn_ledger::NodeData::ProposalCreated { proposal_id, title } => {
+                            println!("📝 Proposal Created [{}]", node.id);
+                            println!("   ID: {}", proposal_id);
+                            println!("   Title: {}", title);
+                            println!("   Time: {}", format_time(node.timestamp));
+                            println!("   Parents: {}", node.parent_ids.join(", "));
+                        },
+                        icn_ledger::NodeData::VoteCast { proposal_id, voter, vote } => {
+                            let vote_str = match vote.round() as i32 {
+                                1 => "YES",
+                                0 => "NO",
+                                _ => "ABSTAIN",
+                            };
+                            println!("🗳️ Vote Cast [{}]", node.id);
+                            println!("   Proposal: {}", proposal_id);
+                            println!("   Voter: {}", voter);
+                            println!("   Vote: {}", vote_str);
+                            println!("   Time: {}", format_time(node.timestamp));
+                            println!("   Parents: {}", node.parent_ids.join(", "));
+                        },
+                        icn_ledger::NodeData::ProposalExecuted { proposal_id, success } => {
+                            println!("⚙️ Proposal Executed [{}]", node.id);
+                            println!("   ID: {}", proposal_id);
+                            println!("   Success: {}", success);
+                            println!("   Time: {}", format_time(node.timestamp));
+                            println!("   Parents: {}", node.parent_ids.join(", "));
+                        },
+                        _ => {
+                            println!("📄 Other Node [{}]", node.id);
+                            println!("   Type: {:?}", node.data);
+                            println!("   Time: {}", format_time(node.timestamp));
+                            println!("   Parents: {}", node.parent_ids.join(", "));
+                        }
+                    }
+                    println!();
+                }
+            } else {
+                println!("❌ Couldn't find proposal node for ID: {}", proposal_id);
             }
         } else {
-            println!("❌ No proposal node found for ID '{}'", proposal_id);
+            println!("❌ No proposal with ID '{}' found in the DAG", proposal_id);
         }
+        return Ok(());
     } else {
         println!("❌ DAG ledger not available in this VM instance");
+        return Err("DAG ledger not available".into());
+    }
+}
+
+/// Handle the dag-export-all command to export all DAG nodes to a file
+pub fn handle_dag_export_all_command<S>(
+    vm: &VM<S>,
+    output_path: &str,
+) -> Result<(), Box<dyn Error>>
+where
+    S: Storage + Send + Sync + Clone + Debug + 'static,
+{
+    if let Some(ledger) = &vm.dag {
+        let path = PathBuf::from(output_path);
+        
+        // Make sure the parent directory exists
+        if let Some(parent) = path.parent() {
+            if !parent.exists() {
+                std::fs::create_dir_all(parent)?;
+            }
+        }
+        
+        // Set the path for export and then export the nodes
+        let mut ledger_clone = ledger.clone();
+        ledger_clone.set_path(path);
+        ledger_clone.export_to_file()?;
+        
+        // Count the nodes
+        let nodes = ledger.nodes();
+        
+        println!("📤 Exported {} DAG nodes to {}", nodes.len(), output_path);
+        println!("   Export complete and ready for federation sync");
+        
+        return Ok(());
+    } else {
+        println!("❌ DAG ledger not available in this VM instance");
+        return Err("DAG ledger not available".into());
+    }
+}
+
+/// Handle the dag-import command to import DAG nodes from a file
+pub fn handle_dag_import_command<S>(
+    vm: &mut VM<S>,
+    input_path: &str,
+) -> Result<(), Box<dyn Error>>
+where
+    S: Storage + Send + Sync + Clone + Debug + 'static,
+{
+    if let Some(ledger) = &mut vm.dag {
+        // Load DAG nodes from the file
+        let path = PathBuf::from(input_path);
+        if !path.exists() {
+            return Err(format!("File not found: {}", input_path).into());
+        }
+        
+        // Import the nodes
+        let added = ledger.import_from_file(&path)?;
+        
+        println!("📥 Imported {} new DAG node(s) from {}", added, input_path);
+        
+        Ok(())
+    } else {
+        Err("DAG ledger is not initialized".into())
+    }
+}
+
+/// Handle the dag-export-selected command to export selected DAG nodes and their ancestors
+pub fn handle_dag_export_selected_command<S>(
+    vm: &VM<S>,
+    node_ids: &[String],
+    output_path: &str,
+) -> Result<(), Box<dyn Error>>
+where
+    S: Storage + Send + Sync + Clone + Debug + 'static,
+{
+    if let Some(ledger) = &vm.dag {
+        let path = PathBuf::from(output_path);
+        
+        // Make sure the parent directory exists
+        if let Some(parent) = path.parent() {
+            if !parent.exists() {
+                std::fs::create_dir_all(parent)?;
+            }
+        }
+        
+        // Export the selected nodes
+        let count = ledger.export_selected_to_file(node_ids, &path)?;
+        
+        println!("📤 Exported {} DAG nodes to {}", count, output_path);
+        println!("   Including all ancestor nodes of the selected nodes");
+        
+        return Ok(());
+    } else {
+        println!("❌ DAG ledger not available in this VM instance");
+        return Err("DAG ledger not available".into());
+    }
+}
+
+/// Handle the dag-export-proposal command to export all nodes related to a proposal
+pub fn handle_dag_export_proposal_command<S>(
+    vm: &VM<S>,
+    proposal_id: &str,
+    output_path: &str,
+) -> Result<(), Box<dyn Error>>
+where
+    S: Storage + Send + Sync + Clone + Debug + 'static,
+{
+    if let Some(ledger) = &vm.dag {
+        let path = PathBuf::from(output_path);
+        
+        // Make sure the parent directory exists
+        if let Some(parent) = path.parent() {
+            if !parent.exists() {
+                std::fs::create_dir_all(parent)?;
+            }
+        }
+        
+        // Find all nodes related to this proposal
+        let nodes = ledger.find_proposal_related_nodes(proposal_id);
+        
+        if nodes.is_empty() {
+            println!("❌ No DAG nodes found for proposal '{}'", proposal_id);
+            return Ok(());
+        }
+        
+        // Get the node IDs for export
+        let node_ids: Vec<String> = nodes.iter()
+            .map(|node| node.id.clone())
+            .collect();
+            
+        // Export the selected nodes
+        let count = ledger.export_selected_to_file(&node_ids, &path)?;
+        
+        println!("📤 Exported {} DAG nodes to {}", count, output_path);
+        println!("   Including all nodes related to proposal '{}'", proposal_id);
+        
+        return Ok(());
+    } else {
+        println!("❌ DAG ledger not available in this VM instance");
+        return Err("DAG ledger not available".into());
+    }
+}
+
+/// Handle the dag-diff command to show differences between two DAG files
+pub fn handle_dag_diff_command<S>(
+    vm: &VM<S>,
+    base_path: &str,
+    other_path: &str,
+    output_path: Option<&String>,
+) -> Result<(), Box<dyn Error>>
+where
+    S: Storage + Send + Sync + Clone + Debug + 'static,
+{
+    // Create a temporary ledger from the base path
+    let base_ledger = icn_ledger::DagLedger::load_from_file(Path::new(base_path))?;
+    
+    // Compute the diff with the other file
+    let diff = base_ledger.diff_with_file(Path::new(other_path))?;
+    
+    // Print a summary of the differences
+    println!("📊 DAG Diff Summary:");
+    println!("   Base: {} ({})", base_path, base_ledger.all_node_ids().len());
+    println!("   Other: {} ({} nodes)", other_path, 
+             base_ledger.all_node_ids().len() - diff.added.len() + diff.removed.len());
+    println!("   Common nodes: {}", diff.common.len());
+    println!("   Added nodes: {}", diff.added.len());
+    println!("   Removed nodes: {}", diff.removed.len());
+    
+    // If requested, export the diff to a file
+    if let Some(out_path) = output_path {
+        let path = PathBuf::from(out_path);
+        base_ledger.export_diff_to_file(&diff, &path)?;
+        println!("📤 Exported {} added nodes to {}", diff.added.len(), out_path);
+    }
+    
+    return Ok(());
+}
+
+/// Handle the dag-summary command to show a summary of the DAG contents
+pub fn handle_dag_summary_command<S>(
+    vm: &VM<S>,
+    file_path: Option<&String>,
+) -> Result<(), Box<dyn Error>>
+where
+    S: Storage + Send + Sync + Clone + Debug + 'static,
+{
+    let nodes = if let Some(path) = file_path {
+        // Load nodes from the specified file
+        let ledger = DagLedger::load_from_file(&PathBuf::from(path))?;
+        ledger.trace_all_nodes()
+    } else if let Some(ledger) = &vm.dag {
+        // Use the VM's DAG
+        ledger.trace_all_nodes()
+    } else {
+        return Err("DAG ledger is not initialized".into());
+    };
+
+    // Display a summary of the DAG contents
+    println!("📑 DAG Summary:");
+    println!("   Total nodes: {}", nodes.len());
+    
+    // Display node counts by type
+    let mut node_summary = HashMap::new();
+    for node in &nodes {
+        let type_name = match &node.data {
+            icn_ledger::NodeData::ProposalCreated { .. } => "ProposalCreated".to_string(),
+            icn_ledger::NodeData::VoteCast { .. } => "VoteCast".to_string(),
+            icn_ledger::NodeData::ProposalExecuted { .. } => "ProposalExecuted".to_string(),
+            icn_ledger::NodeData::TokenMinted { .. } => "TokenMinted".to_string(),
+        };
+        *node_summary.entry(type_name).or_insert(0) += 1;
+    }
+    
+    for (node_type, count) in node_summary {
+        println!("   {}: {}", node_type, count);
+    }
+    
+    // Find some interesting statistics
+    let proposals: HashSet<String> = nodes.iter()
+        .filter_map(|node| match &node.data {
+            icn_ledger::NodeData::ProposalCreated { proposal_id, .. } => Some(proposal_id.clone()),
+            _ => None,
+        })
+        .collect();
+    
+    // Count votes
+    let votes_count = nodes.iter()
+        .filter(|node| matches!(&node.data, icn_ledger::NodeData::VoteCast { .. }))
+        .count();
+    
+    if !proposals.is_empty() {
+        println!("\n📊 Statistics:");
+        println!("   Number of proposals: {}", proposals.len());
+        println!("   Number of votes: {}", votes_count);
+        
+        if votes_count > 0 && !proposals.is_empty() {
+            println!("   Average votes per proposal: {:.2}", votes_count as f64 / proposals.len() as f64);
+        }
     }
     
     Ok(())
+}
+
+/// Format a DateTime for display
+fn format_time(timestamp: u64) -> String {
+    let dt = chrono::DateTime::<Utc>::from_timestamp(timestamp as i64, 0)
+        .unwrap_or_else(|| Utc::now());
+    dt.format("%Y-%m-%d %H:%M:%S UTC").to_string()
 }
