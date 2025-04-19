@@ -3,7 +3,7 @@ use crate::federation::{
     error::FederationError,
     events::NetworkEvent,
     messages::{FederatedProposal, FederatedVote, NetworkMessage, NodeAnnouncement},
-    storage::FederationStorage,
+    storage::{FederationStorage, MessageDirection},
 };
 
 use futures::{channel::mpsc, stream::StreamExt, SinkExt};
@@ -17,6 +17,7 @@ use libp2p::identify;
 use libp2p::kad;
 use libp2p::mdns;
 use libp2p::ping;
+use libp2p::request_response;
 
 use log::{debug, error, info, warn};
 use std::{
@@ -326,6 +327,10 @@ impl NetworkNode {
             IcnBehaviourEvent::Identify(identify_event) => {
                 self.handle_identify_event(*identify_event).await
             }
+            
+            IcnBehaviourEvent::Federation(fed_event) => {
+                self.handle_federation_event(fed_event).await
+            }
         }
     }
 
@@ -521,6 +526,119 @@ impl NetworkNode {
         Ok(())
     }
 
+    /// Handle events from the federation protocol
+    async fn handle_federation_event(
+        &mut self,
+        event: request_response::Event<FederationRequest, FederationResponse>,
+    ) -> Result<(), FederationError> {
+        use libp2p::request_response::{InboundFailure, OutboundFailure};
+        
+        match event {
+            request_response::Event::Message { peer, message } => {
+                match message {
+                    request_response::Message::Request { request, channel, .. } => {
+                        debug!("Received federation request from {}", peer);
+                        
+                        // Log the received message
+                        {
+                            let mut cache = self.federation_storage.cache.lock().unwrap();
+                            let entry = crate::federation::storage::MessageLogEntry {
+                                timestamp: std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_secs(),
+                                direction: crate::federation::storage::MessageDirection::Incoming,
+                                peer_id: peer.to_string(),
+                                message: request.message.clone(),
+                            };
+                            cache.message_log.push(entry);
+                        }
+                        
+                        // Process the message based on its type
+                        let result = match request.message {
+                            NetworkMessage::NodeAnnouncement(node_announcement) => {
+                                info!("Received node announcement from {}: {}", peer, node_announcement.node_id);
+                                Ok(())
+                            }
+                            NetworkMessage::Ping(ping) => {
+                                debug!("Received ping from {}: nonce={}", peer, ping.nonce);
+                                // Send pong response
+                                Ok(())
+                            }
+                            NetworkMessage::Pong(pong) => {
+                                debug!("Received pong from {}: nonce={}", peer, pong.nonce);
+                                Ok(())
+                            }
+                            NetworkMessage::ProposalBroadcast(proposal) => {
+                                self.handle_proposal_broadcast(proposal, Some(peer)).await
+                            }
+                            NetworkMessage::VoteSubmission(vote) => {
+                                self.handle_vote_submission(vote, Some(peer)).await
+                            }
+                        };
+                        
+                        // Create and send response
+                        let response = match result {
+                            Ok(()) => crate::federation::behaviour::FederationResponse {
+                                status: "success".to_string(),
+                                message: None,
+                            },
+                            Err(e) => crate::federation::behaviour::FederationResponse {
+                                status: "error".to_string(),
+                                message: Some(e.to_string()),
+                            },
+                        };
+                        
+                        if let Err(e) = channel.respond(response) {
+                            warn!("Failed to send response: {}", e);
+                        }
+                    }
+                    request_response::Message::Response { .. } => {
+                        // Handle received response
+                        debug!("Received federation response from {}", peer);
+                    }
+                }
+            }
+            request_response::Event::OutboundFailure { peer, request_id, error } => {
+                warn!("Outbound federation request to {} failed: {:?}", peer, error);
+                
+                // Handle specific failure types
+                match error {
+                    OutboundFailure::Timeout => {
+                        warn!("Request to {} timed out", peer);
+                    }
+                    OutboundFailure::ConnectionClosed => {
+                        warn!("Connection to {} closed before response received", peer);
+                    }
+                    _ => {
+                        warn!("Other outbound failure: {:?}", error);
+                    }
+                }
+            }
+            request_response::Event::InboundFailure { peer, error, .. } => {
+                warn!("Inbound federation request from {} failed: {:?}", peer, error);
+                
+                // Handle specific failure types
+                match error {
+                    InboundFailure::Timeout => {
+                        warn!("Processing request from {} timed out", peer);
+                    }
+                    InboundFailure::ConnectionClosed => {
+                        warn!("Connection to {} closed during request processing", peer);
+                    }
+                    _ => {
+                        warn!("Other inbound failure: {:?}", error);
+                    }
+                }
+            }
+            request_response::Event::ResponseSent { .. } => {
+                debug!("Response sent successfully");
+            }
+        }
+        
+        Ok(())
+    }
+
     /// Get a reference to the federation storage
     pub fn federation_storage(&self) -> Arc<FederationStorage> {
         self.federation_storage.clone()
@@ -534,7 +652,7 @@ impl NetworkNode {
         info!("Broadcasting proposal: {}", proposal.proposal_id);
 
         // Create the proposal broadcast message
-        let _message = NetworkMessage::ProposalBroadcast(proposal);
+        let message = NetworkMessage::ProposalBroadcast(proposal);
 
         // Get all connected peers
         let peer_ids = {
@@ -542,11 +660,31 @@ impl NetworkNode {
             peers.iter().cloned().collect::<Vec<_>>()
         };
 
+        // Create the federation request
+        let request = crate::federation::behaviour::FederationRequest {
+            message: message.clone(),
+        };
+
         // Broadcast to all peers
-        for peer_id in peer_ids {
+        for peer_id in &peer_ids {
             debug!("Sending proposal to peer: {}", peer_id);
-            // In a real implementation, we would use a proper broadcast mechanism
-            // For now, we're just simulating by sending to each peer individually
+            
+            // Send using request-response protocol
+            let request_id = self.swarm.behaviour_mut().federation.send_request(peer_id, request.clone());
+            debug!("Sent proposal to {}, request_id: {:?}", peer_id, request_id);
+
+            // Log the outgoing message
+            let mut cache = self.federation_storage.cache.lock().unwrap();
+            let entry = crate::federation::storage::MessageLogEntry {
+                timestamp: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+                direction: MessageDirection::Outgoing,
+                peer_id: peer_id.to_string(),
+                message: message.clone(),
+            };
+            cache.message_log.push(entry);
         }
 
         // Emit an event to notify listeners
@@ -562,10 +700,42 @@ impl NetworkNode {
         info!("Submitting vote from {}", vote.voter);
 
         // Create the vote submission message
-        let _message = NetworkMessage::VoteSubmission(vote);
+        let message = NetworkMessage::VoteSubmission(vote);
 
-        // In a real implementation, we would send this to peers who have the proposal
-        // For now, we just emit an event
+        // Get all connected peers
+        let peer_ids = {
+            let peers = self.known_peers.lock().await;
+            peers.iter().cloned().collect::<Vec<_>>()
+        };
+
+        // Create the federation request
+        let request = crate::federation::behaviour::FederationRequest {
+            message: message.clone(),
+        };
+
+        // Broadcast to all peers
+        for peer_id in &peer_ids {
+            debug!("Sending vote to peer: {}", peer_id);
+            
+            // Send using request-response protocol
+            let request_id = self.swarm.behaviour_mut().federation.send_request(peer_id, request.clone());
+            debug!("Sent vote to {}, request_id: {:?}", peer_id, request_id);
+            
+            // Log the outgoing message
+            let mut cache = self.federation_storage.cache.lock().unwrap();
+            let entry = crate::federation::storage::MessageLogEntry {
+                timestamp: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+                direction: MessageDirection::Outgoing,
+                peer_id: peer_id.to_string(),
+                message: message.clone(),
+            };
+            cache.message_log.push(entry);
+        }
+
+        // Emit an event to notify listeners
         self.event_sender
             .try_send(NetworkEvent::VoteSubmitted)
             .map_err(|e| FederationError::NetworkError(format!("Failed to emit event: {}", e)))?;
@@ -577,12 +747,32 @@ impl NetworkNode {
     async fn handle_proposal_broadcast(
         &mut self,
         proposal: FederatedProposal,
+        from_peer: Option<PeerId>,
     ) -> Result<(), FederationError> {
         info!("Received proposal broadcast: {}", proposal.proposal_id);
 
         // Store the proposal
         // In a real implementation, we would have access to the storage backend
         // For now, just add it to the in-memory cache
+        {
+            let mut cache = self.federation_storage.cache.lock().unwrap();
+            cache.proposals.insert(proposal.proposal_id.clone(), proposal.clone());
+            
+            // Log the incoming message if we know which peer sent it
+            if let Some(peer_id) = from_peer {
+                let message = NetworkMessage::ProposalBroadcast(proposal);
+                let entry = crate::federation::storage::MessageLogEntry {
+                    timestamp: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs(),
+                    direction: MessageDirection::Incoming,
+                    peer_id: peer_id.to_string(),
+                    message,
+                };
+                cache.message_log.push(entry);
+            }
+        }
 
         // Emit an event to notify listeners
         self.event_sender
@@ -593,12 +783,45 @@ impl NetworkNode {
     }
 
     /// Handle vote submission message
-    async fn handle_vote_submission(&mut self, vote: FederatedVote) -> Result<(), FederationError> {
+    async fn handle_vote_submission(
+        &mut self, 
+        vote: FederatedVote,
+        from_peer: Option<PeerId>,
+    ) -> Result<(), FederationError> {
         info!("Received vote from {}", vote.voter);
 
         // Store the vote
         // In a real implementation, we would have access to the storage backend
-        // For now, just log that we received it
+        {
+            let mut cache = self.federation_storage.cache.lock().unwrap();
+            let votes = cache
+                .votes
+                .entry(vote.proposal_id.clone())
+                .or_insert_with(Vec::new);
+            
+            // Check if this vote is already recorded
+            let is_duplicate = votes.iter().any(|v| v.voter == vote.voter);
+            
+            // Add vote if it's not a duplicate
+            if !is_duplicate {
+                votes.push(vote.clone());
+            }
+            
+            // Log the incoming message if we know which peer sent it
+            if let Some(peer_id) = from_peer {
+                let message = NetworkMessage::VoteSubmission(vote);
+                let entry = crate::federation::storage::MessageLogEntry {
+                    timestamp: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs(),
+                    direction: MessageDirection::Incoming,
+                    peer_id: peer_id.to_string(),
+                    message,
+                };
+                cache.message_log.push(entry);
+            }
+        }
 
         // Emit an event to notify listeners
         self.event_sender

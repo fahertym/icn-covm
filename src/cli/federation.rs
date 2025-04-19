@@ -10,6 +10,7 @@ use crate::storage::traits::{Storage, StorageExtensions};
 use crate::vm::VM;
 
 use clap::{Arg, ArgAction, ArgMatches, Command};
+use colored::Colorize;
 use libp2p::Multiaddr;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
@@ -166,6 +167,31 @@ pub fn federation_command() -> Command {
                         .help("Filter by status: open, closed, executed, rejected, expired"),
                 ),
         )
+        .subcommand(
+            Command::new("messages")
+                .about("View federation message history")
+                .arg(
+                    Arg::new("proposal")
+                        .long("proposal")
+                        .value_name("PROPOSAL_ID")
+                        .help("Filter messages for a specific proposal ID"),
+                )
+                .arg(
+                    Arg::new("limit")
+                        .long("limit")
+                        .value_name("COUNT")
+                        .help("Maximum number of messages to display")
+                        .value_parser(clap::value_parser!(usize))
+                        .default_value("20"),
+                )
+                .arg(
+                    Arg::new("direction")
+                        .long("direction")
+                        .value_name("DIRECTION")
+                        .help("Filter by message direction: incoming, outgoing, or all")
+                        .default_value("all"),
+                )
+        )
 }
 
 /// Handle federation commands
@@ -310,6 +336,20 @@ where
                 .get_one::<String>("status")
                 .map(|s| s.to_string());
             list_federated_proposals(vm, status_filter, auth_context)
+        }
+        Some(("messages", sub_matches)) => {
+            let proposal_id = sub_matches.get_one::<String>("proposal");
+            let limit = sub_matches
+                .get_one::<usize>("limit")
+                .copied()
+                .unwrap_or(20);
+            let direction = sub_matches
+                .get_one::<String>("direction")
+                .map(|s| s.as_str())
+                .unwrap_or("all");
+
+            view_message_history(vm, proposal_id, limit, direction, auth_context)?;
+            Ok(())
         }
         _ => Err("Unknown federation subcommand".into()),
     }
@@ -873,5 +913,88 @@ where
         }
     }
 
+    Ok(())
+}
+
+/// Display message history
+fn view_message_history<S>(
+    vm: &mut VM<S>,
+    proposal_id: Option<&String>,
+    limit: usize,
+    direction_filter: &str,
+    auth_context: &AuthContext,
+) -> Result<(), Box<dyn Error>>
+where
+    S: Storage + StorageExtensions + Send + Sync + Clone + Debug + 'static,
+{
+    use crate::federation::storage::{MessageDirection, MessageLogEntry};
+    use colored::Colorize;
+    
+    // Get the federation storage
+    let federation_storage = vm.federation_storage.clone();
+    let store = vm.storage.clone();
+    
+    // Get message history
+    let messages: Vec<MessageLogEntry> = if let Some(pid) = proposal_id {
+        // Get messages related to a specific proposal
+        federation_storage.get_proposal_message_history(&store, pid, auth_context)?
+    } else {
+        // Get all recent messages
+        federation_storage.get_message_history(&store, limit * 2, auth_context)?
+    };
+    
+    // Filter by direction if needed
+    let filtered_messages: Vec<MessageLogEntry> = messages
+        .into_iter()
+        .filter(|entry| {
+            match (direction_filter, &entry.direction) {
+                ("incoming", MessageDirection::Incoming) => true,
+                ("outgoing", MessageDirection::Outgoing) => true,
+                ("all", _) => true,
+                _ => false,
+            }
+        })
+        .collect();
+    
+    // Take only the requested number of most recent messages
+    let messages_to_display = if filtered_messages.len() > limit {
+        filtered_messages[filtered_messages.len() - limit..].to_vec()
+    } else {
+        filtered_messages
+    };
+    
+    if messages_to_display.is_empty() {
+        println!("No messages found matching the criteria");
+        return Ok(());
+    }
+    
+    println!("{:<20} {:<10} {:<20} {}", "Timestamp", "Direction", "Peer", "Message Type");
+    println!("{}", "-".repeat(80));
+    
+    for entry in messages_to_display {
+        let timestamp = chrono::DateTime::<chrono::Utc>::from_timestamp(entry.timestamp as i64, 0)
+            .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+            .unwrap_or_else(|| entry.timestamp.to_string());
+        
+        let direction = match entry.direction {
+            MessageDirection::Incoming => "INCOMING".green(),
+            MessageDirection::Outgoing => "OUTGOING".blue(),
+        };
+        
+        let message_type = match entry.message {
+            crate::federation::messages::NetworkMessage::NodeAnnouncement(_) => "Node Announcement",
+            crate::federation::messages::NetworkMessage::Ping(_) => "Ping",
+            crate::federation::messages::NetworkMessage::Pong(_) => "Pong",
+            crate::federation::messages::NetworkMessage::ProposalBroadcast(ref p) => {
+                format!("Proposal: {}", p.proposal_id)
+            }
+            crate::federation::messages::NetworkMessage::VoteSubmission(ref v) => {
+                format!("Vote: {} on {}", v.voter, v.proposal_id)
+            }
+        };
+        
+        println!("{:<20} {:<10} {:<20} {}", timestamp, direction, &entry.peer_id[0..8], message_type);
+    }
+    
     Ok(())
 }

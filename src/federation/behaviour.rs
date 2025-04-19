@@ -1,6 +1,101 @@
-use libp2p::{identify, kad, mdns, ping};
+use libp2p::{identify, kad, mdns, ping, request_response::{self, ProtocolName}};
 use libp2p_swarm_derive::NetworkBehaviour;
 use std::time::Duration;
+use crate::federation::messages::NetworkMessage;
+use serde::{Serialize, Deserialize};
+use std::io;
+
+// Define the name for our protocol
+#[derive(Debug, Clone)]
+pub struct FederationProtocol;
+
+impl ProtocolName for FederationProtocol {
+    fn protocol_name(&self) -> &[u8] {
+        b"/icn-federation/1.0.0"
+    }
+}
+
+// Define the request and response types for our federation protocol
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FederationRequest {
+    pub message: NetworkMessage,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FederationResponse {
+    pub status: String,
+    pub message: Option<String>,
+}
+
+// Codec for serializing request and response
+#[derive(Debug, Clone)]
+pub struct FederationCodec;
+
+impl request_response::Codec for FederationCodec {
+    type Protocol = FederationProtocol;
+    type Request = FederationRequest;
+    type Response = FederationResponse;
+
+    fn read_request<T>(
+        &mut self,
+        _: &FederationProtocol,
+        mut io: &mut T,
+    ) -> io::Result<Self::Request>
+    where
+        T: libp2p::futures::AsyncRead + Unpin + Send,
+    {
+        let mut vec = Vec::new();
+        libp2p::futures::AsyncReadExt::read_to_end(&mut io, &mut vec).await.map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        match serde_json::from_slice(&vec) {
+            Ok(req) => Ok(req),
+            Err(e) => Err(io::Error::new(io::ErrorKind::InvalidData, e)),
+        }
+    }
+
+    fn read_response<T>(
+        &mut self,
+        _: &FederationProtocol,
+        mut io: &mut T,
+    ) -> io::Result<Self::Response>
+    where
+        T: libp2p::futures::AsyncRead + Unpin + Send,
+    {
+        let mut vec = Vec::new();
+        libp2p::futures::AsyncReadExt::read_to_end(&mut io, &mut vec).await.map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        match serde_json::from_slice(&vec) {
+            Ok(res) => Ok(res),
+            Err(e) => Err(io::Error::new(io::ErrorKind::InvalidData, e)),
+        }
+    }
+
+    fn write_request<T>(
+        &mut self,
+        _: &FederationProtocol,
+        io: &mut T,
+        req: Self::Request,
+    ) -> io::Result<()>
+    where
+        T: libp2p::futures::AsyncWrite + Unpin + Send,
+    {
+        let vec = serde_json::to_vec(&req)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        libp2p::futures::AsyncWriteExt::write_all(io, &vec).await.map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+    }
+
+    fn write_response<T>(
+        &mut self,
+        _: &FederationProtocol,
+        io: &mut T,
+        res: Self::Response,
+    ) -> io::Result<()>
+    where
+        T: libp2p::futures::AsyncWrite + Unpin + Send,
+    {
+        let vec = serde_json::to_vec(&res)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        libp2p::futures::AsyncWriteExt::write_all(io, &vec).await.map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+    }
+}
 
 /// Combines all the network protocols used by the federation into a single type.
 #[derive(NetworkBehaviour)]
@@ -17,6 +112,9 @@ pub struct IcnBehaviour {
 
     /// Identify protocol for sharing metadata about nodes
     pub identify: identify::Behaviour,
+    
+    /// Federation message protocol
+    pub federation: request_response::Behaviour<FederationCodec>,
 }
 
 /// Events that can be emitted by the network behavior
@@ -33,6 +131,9 @@ pub enum IcnBehaviourEvent {
 
     /// Events from the identify protocol
     Identify(Box<identify::Event>),
+    
+    /// Events from the federation protocol
+    Federation(request_response::Event<FederationRequest, FederationResponse>),
 }
 
 impl From<ping::Event> for IcnBehaviourEvent {
@@ -56,6 +157,12 @@ impl From<mdns::Event> for IcnBehaviourEvent {
 impl From<identify::Event> for IcnBehaviourEvent {
     fn from(event: identify::Event) -> Self {
         IcnBehaviourEvent::Identify(Box::new(event))
+    }
+}
+
+impl From<request_response::Event<FederationRequest, FederationResponse>> for IcnBehaviourEvent {
+    fn from(event: request_response::Event<FederationRequest, FederationResponse>) -> Self {
+        IcnBehaviourEvent::Federation(event)
     }
 }
 
@@ -97,12 +204,23 @@ pub async fn create_behaviour(
         format!("/icn/{}", protocol_version),
         local_key.public(),
     ));
+    
+    // Set up the federation protocol
+    let federation_config = request_response::Config::default()
+        .with_request_timeout(Duration::from_secs(30))
+        .with_max_concurrent_responses(100);
+        
+    let federation = request_response::Behaviour::new(
+        FederationCodec {},
+        std::iter::once((FederationProtocol {}, federation_config)),
+    );
 
     Ok(IcnBehaviour {
         ping,
         kademlia,
         mdns,
         identify,
+        federation,
     })
 }
 
@@ -121,6 +239,10 @@ impl IcnBehaviour {
     }
 
     fn on_identify(&mut self, _event: identify::Event) {
+        // Pass the event to the upper layer
+    }
+    
+    fn on_federation(&mut self, _event: request_response::Event<FederationRequest, FederationResponse>) {
         // Pass the event to the upper layer
     }
 }

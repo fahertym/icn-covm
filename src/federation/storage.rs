@@ -1,5 +1,5 @@
 use crate::federation::messages::{
-    FederatedProposal, FederatedVote, ProposalScope, ProposalStatus, VotingModel,
+    FederatedProposal, FederatedVote, ProposalScope, ProposalStatus, VotingModel, NetworkMessage,
 };
 use crate::identity::Identity;
 use crate::storage::auth::AuthContext;
@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use crate::federation::error::FederationError;
 use crate::storage::utils;
+use libp2p::PeerId;
 
 // Storage namespace constants
 pub const FEDERATION_NAMESPACE: &str = "federation";
@@ -21,6 +22,32 @@ pub const VOTES_NAMESPACE: &str = "votes";
 pub const FEDERATION_PROPOSAL_PREFIX: &str = "federation/proposals/";
 pub const FEDERATION_VOTES_PREFIX: &str = "federation/votes/";
 pub const FEDERATION_SYNC_PREFIX: &str = "federation/sync/";
+pub const FEDERATION_MESSAGE_LOG_PREFIX: &str = "federation/messages/";
+
+/// Log entry for network messages
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MessageLogEntry {
+    /// Timestamp when the message was sent or received
+    pub timestamp: u64,
+    
+    /// Whether this message was outgoing (sent) or incoming (received)
+    pub direction: MessageDirection,
+    
+    /// PeerID of the remote node
+    pub peer_id: String,
+    
+    /// Message details
+    pub message: NetworkMessage,
+}
+
+/// Direction of a message (sent or received)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum MessageDirection {
+    /// Message was sent by the local node
+    Outgoing,
+    /// Message was received from a remote node
+    Incoming,
+}
 
 /// In-memory cache for active proposals and votes
 #[derive(Default)]
@@ -30,6 +57,9 @@ pub struct FederationCache {
 
     /// Map of proposal ID to a vector of votes
     pub votes: HashMap<String, Vec<FederatedVote>>,
+    
+    /// Vector of message log entries
+    pub message_log: Vec<MessageLogEntry>,
 }
 
 /// Result of a federation vote tally
@@ -465,6 +495,143 @@ impl FederationStorage {
                     .collect()
             }
         }
+    }
+
+    /// Log a message that was sent or received
+    pub fn log_message<S: StorageExtensions + Send + Sync>(
+        &self,
+        store: &S,
+        peer_id: &PeerId,
+        direction: MessageDirection,
+        message: &NetworkMessage,
+        auth_context: &AuthContext,
+    ) -> StorageResult<()> {
+        // Create log entry
+        let entry = MessageLogEntry {
+            timestamp: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            direction,
+            peer_id: peer_id.to_string(),
+            message: message.clone(),
+        };
+
+        // Update in-memory cache
+        {
+            let mut cache = self.cache.lock().unwrap();
+            cache.message_log.push(entry.clone());
+            
+            // Trim the in-memory log if it gets too large
+            if cache.message_log.len() > 1000 {
+                cache.message_log = cache.message_log.split_off(500);
+            }
+        }
+
+        // Save to persistent storage
+        let log_key = format!(
+            "{}{}-{}",
+            FEDERATION_MESSAGE_LOG_PREFIX,
+            entry.timestamp,
+            utils::generate_short_random_id()
+        );
+        let value = utils::serialize_to_json(&entry)?;
+        store.put(&log_key, value, auth_context)?;
+
+        Ok(())
+    }
+
+    /// Get the recent message history
+    pub fn get_message_history<S: StorageExtensions + Send + Sync>(
+        &self,
+        store: &S,
+        limit: usize,
+        auth_context: &AuthContext,
+    ) -> StorageResult<Vec<MessageLogEntry>> {
+        // Try to get from in-memory cache first
+        {
+            let cache = self.cache.lock().unwrap();
+            if !cache.message_log.is_empty() {
+                // Return the most recent entries
+                let start = if cache.message_log.len() > limit {
+                    cache.message_log.len() - limit
+                } else {
+                    0
+                };
+                return Ok(cache.message_log[start..].to_vec());
+            }
+        }
+
+        // Otherwise fetch from storage
+        let mut entries = Vec::new();
+        let prefix = FEDERATION_MESSAGE_LOG_PREFIX;
+        
+        // Read entries from storage
+        let keys = store.list_keys_with_prefix(prefix, auth_context)?;
+        
+        // Sort keys to get chronological order (timestamps are part of keys)
+        let mut sorted_keys = keys;
+        sorted_keys.sort();
+        
+        // Take the most recent entries according to the limit
+        let start = if sorted_keys.len() > limit {
+            sorted_keys.len() - limit
+        } else {
+            0
+        };
+        
+        for key in &sorted_keys[start..] {
+            if let Ok(data) = store.get(key, auth_context) {
+                if let Ok(entry) = utils::deserialize_from_json::<MessageLogEntry>(&data) {
+                    entries.push(entry);
+                }
+            }
+        }
+        
+        // Update in-memory cache
+        {
+            let mut cache = self.cache.lock().unwrap();
+            for entry in &entries {
+                if !cache.message_log.iter().any(|e| e.timestamp == entry.timestamp) {
+                    cache.message_log.push(entry.clone());
+                }
+            }
+            
+            // Sort by timestamp
+            cache.message_log.sort_by_key(|e| e.timestamp);
+            
+            // Trim if needed
+            if cache.message_log.len() > 1000 {
+                cache.message_log = cache.message_log.split_off(cache.message_log.len() - 1000);
+            }
+        }
+        
+        Ok(entries)
+    }
+
+    /// Get message history related to a specific proposal
+    pub fn get_proposal_message_history<S: StorageExtensions + Send + Sync>(
+        &self,
+        store: &S,
+        proposal_id: &str,
+        auth_context: &AuthContext,
+    ) -> StorageResult<Vec<MessageLogEntry>> {
+        // Get all message history
+        let all_messages = self.get_message_history(store, 1000, auth_context)?;
+        
+        // Filter for messages related to this proposal
+        let proposal_messages = all_messages
+            .into_iter()
+            .filter(|entry| {
+                match &entry.message {
+                    NetworkMessage::ProposalBroadcast(proposal) => proposal.proposal_id == proposal_id,
+                    NetworkMessage::VoteSubmission(vote) => vote.proposal_id == proposal_id,
+                    _ => false,
+                }
+            })
+            .collect();
+            
+        Ok(proposal_messages)
     }
 }
 
