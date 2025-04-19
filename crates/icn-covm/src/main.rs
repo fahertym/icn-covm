@@ -199,6 +199,30 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         .help("Capabilities this node offers to the network (can be used multiple times)")
                         .action(ArgAction::Append),
                 )
+                .arg(
+                    Arg::new("simulate")
+                        .long("simulate")
+                        .help("Run the program without modifying persistent storage")
+                        .action(ArgAction::SetTrue),
+                )
+                .arg(
+                    Arg::new("trace")
+                        .long("trace")
+                        .help("Print each operation and stack state as it executes")
+                        .action(ArgAction::SetTrue),
+                )
+                .arg(
+                    Arg::new("explain")
+                        .long("explain")
+                        .help("Annotate output with high-level descriptions of what each op does")
+                        .action(ArgAction::SetTrue),
+                )
+                .arg(
+                    Arg::new("verbose-storage-trace")
+                        .long("verbose-storage-trace")
+                        .help("Enable detailed tracing of storage operations (keys and values)")
+                        .action(ArgAction::SetTrue),
+                )
         )
         .subcommand(
             Command::new("identity")
@@ -363,6 +387,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .cloned()
                 .collect::<Vec<String>>();
 
+            let simulate = run_matches.get_flag("simulate");
+            let trace = run_matches.get_flag("trace");
+            let explain = run_matches.get_flag("explain");
+            let verbose_storage_trace = run_matches.get_flag("verbose-storage-trace");
+
             if run_matches.get_flag("benchmark") {
                 run_benchmark(
                     program_path,
@@ -373,7 +402,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     storage_path,
                 )
             } else if run_matches.get_flag("interactive") {
-                run_interactive(verbose, params, use_bytecode, storage_backend, storage_path)
+                run_interactive(
+                    verbose,
+                    params,
+                    use_bytecode,
+                    storage_backend,
+                    storage_path,
+                    simulate,
+                    trace,
+                    explain,
+                    verbose_storage_trace,
+                )
             } else if enable_federation {
                 // Run with federation enabled
                 run_with_federation(
@@ -388,6 +427,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     bootstrap_nodes,
                     node_name,
                     capabilities,
+                    simulate,
+                    trace,
+                    explain,
+                    verbose_storage_trace,
                 )
                 .await
             } else {
@@ -400,6 +443,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     use_bytecode,
                     storage_backend,
                     storage_path,
+                    simulate,
+                    trace,
+                    explain,
+                    verbose_storage_trace,
                 )
             }
         }
@@ -514,6 +561,10 @@ async fn run_with_federation(
     bootstrap_nodes: Vec<libp2p::Multiaddr>,
     node_name: String,
     capabilities: Vec<String>,
+    simulate: bool,
+    trace: bool,
+    explain: bool,
+    verbose_storage_trace: bool,
 ) -> Result<(), AppError> {
     info!("Starting ICN-COVM with federation enabled");
     debug!("Federation port: {}", federation_port);
@@ -561,6 +612,10 @@ async fn run_with_federation(
             use_bytecode,
             storage_backend,
             storage_path,
+            simulate,
+            trace,
+            explain,
+            verbose_storage_trace,
         )?;
     } else {
         info!("No program specified, running in network-only mode");
@@ -582,6 +637,10 @@ fn run_program(
     use_bytecode: bool,
     storage_backend: &str,
     storage_path: &str,
+    simulate: bool,
+    trace: bool,
+    explain: bool,
+    verbose_storage_trace: bool,
 ) -> Result<(), AppError> {
     let path = Path::new(program_path);
 
@@ -628,6 +687,19 @@ fn run_program(
         println!("Program loaded with {} operations", ops.len());
     }
 
+    // Print execution mode information
+    if verbose || simulate || trace || explain {
+        if simulate {
+            println!("Running in SIMULATION mode (no persistent storage changes)");
+        }
+        if trace {
+            println!("Tracing enabled (will show operations and stack state)");
+        }
+        if explain {
+            println!("Explanation enabled (will describe each operation)");
+        }
+    }
+
     // Setup auth context and storage based on selected backend
     let auth_context = create_demo_auth_context()?;
 
@@ -644,12 +716,17 @@ fn run_program(
         }
 
         // Create bytecode interpreter with proper auth context and storage
-        let mut vm: VM<InMemoryStorage> = VM::new();
+        let mut vm: VM<InMemoryStorage> = VM::new()
+            .set_simulation_mode(simulate)
+            .set_tracing(trace)
+            .set_explanation(explain)
+            .set_verbose_storage_trace(verbose_storage_trace);
+        
         vm.set_auth_context(auth_context);
         vm.set_namespace("demo");
         vm.set_storage_backend(storage);
 
-        let mut interpreter = BytecodeInterpreter::new(VM::<InMemoryStorage>::new(), program);
+        let mut interpreter = BytecodeInterpreter::new(vm, program);
 
         // Set parameters
         interpreter.get_vm_mut().set_parameters(parameters.clone())?;
@@ -668,19 +745,26 @@ fn run_program(
         }
 
         if verbose {
-            println!("Final stack: {:?}", interpreter.get_vm().stack);
+            println!("Final stack: {:?}", interpreter.get_vm().get_stack());
 
-            let memory_map = vm.memory.get_memory_map();
+            let memory_map = interpreter.get_vm().get_memory_map();
             for (key, value) in memory_map {
                 println!("  {}: {}", key, value);
             }
-            if vm.memory.get_memory_map().is_empty() {
+            if interpreter.get_vm().get_memory_map().is_empty() {
                 println!("  (empty)");
             }
         }
     } else {
         // AST execution with FileStorage
         let mut vm: VM<InMemoryStorage> = VM::new();
+        
+        // Set the new flags
+        vm.set_simulation_mode(simulate);
+        vm.set_tracing(trace);
+        vm.set_explanation(explain);
+        vm.set_verbose_storage_trace(verbose_storage_trace);
+        
         vm.set_auth_context(auth_context);
         vm.set_namespace("demo");
         vm.set_storage_backend(storage);
@@ -700,11 +784,15 @@ fn run_program(
             println!("Program execution completed successfully");
 
             // Print final stack state
-            let memory_map = vm.memory.get_memory_map();
+            println!("Final stack: {:?}", vm.get_stack());
+            
+            // Print final memory state
+            println!("Final memory:");
+            let memory_map = vm.get_memory_map();
             for (key, value) in memory_map {
                 println!("  {}: {}", key, value);
             }
-            if vm.memory.get_memory_map().is_empty() {
+            if vm.get_memory_map().is_empty() {
                 println!("  (empty)");
             }
         }
@@ -907,27 +995,57 @@ fn run_interactive(
     use_bytecode: bool,
     storage_backend: &str,
     storage_path: &str,
+    simulate: bool,
+    trace: bool,
+    explain: bool,
+    verbose_storage_trace: bool,
 ) -> Result<(), AppError> {
-    use std::io::{self, Write};
+    println!("Starting interactive REPL mode");
+    if use_bytecode {
+        println!("Bytecode execution is enabled");
+    }
+    
+    // Print execution mode information
+    if simulate {
+        println!("Running in SIMULATION mode (no persistent storage changes)");
+    }
+    if trace {
+        println!("Tracing enabled (will show operations and stack state)");
+    }
+    if explain {
+        println!("Explanation enabled (will describe each operation)");
+    }
+    
+    // Setup auth context and storage based on selected backend
+    let auth_context = create_demo_auth_context()?;
 
-    println!("ICN Cooperative VM Interactive Shell (type 'exit' to quit, 'help' for commands)");
+    // Select the appropriate storage backend
+    let storage = create_storage_backend(storage_backend, storage_path)?;
 
+    // AST execution with FileStorage
     let mut vm: VM<InMemoryStorage> = VM::new();
-
-    // Set up auth context and namespace
-    let (auth_context, _storage) = setup_storage_for_demo();
+    
+    // Set the new flags
+    vm.set_simulation_mode(simulate);
+    vm.set_tracing(trace);
+    vm.set_explanation(explain);
+    vm.set_verbose_storage_trace(verbose_storage_trace);
+    
     vm.set_auth_context(auth_context);
     vm.set_namespace("demo");
+    vm.set_storage_backend(storage);
 
+    // Set parameters
     vm.set_parameters(parameters)?;
-
+    
+    use std::io::{self, Write};
+    
+    println!("ICN Cooperative VM Interactive Shell (type 'exit' to quit, 'help' for commands)");
+    
     // Create an editor for interactive input
     let mut rl = rustyline::DefaultEditor::new().map_err(|e| AppError::Other(e.to_string()))?;
-
+    
     loop {
-        print!("> ");
-        io::stdout().flush()?;
-
         // Read a line of input
         let line = match rl.readline("> ") {
             Ok(line) => line,
@@ -943,18 +1061,18 @@ fn run_interactive(
                 return Err(AppError::Other(format!("Error reading input: {}", e)));
             }
         };
-
+        
         // Add the line to the editor history
         if let Err(e) = rl.add_history_entry(&line) {
             return Err(AppError::Other(format!("Error adding to history: {}", e)));
         }
-
+        
         // Process the line
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
         }
-
+        
         match trimmed {
             "exit" | "quit" => {
                 println!("Exiting REPL");
@@ -969,6 +1087,10 @@ fn run_interactive(
                 println!("  reset        - Reset the VM");
                 println!("  mode ast     - Switch to AST interpreter mode");
                 println!("  mode bytecode - Switch to bytecode execution mode");
+                println!("  trace on/off - Toggle tracing mode");
+                println!("  explain on/off - Toggle explanation mode");
+                println!("  simulate on/off - Toggle simulation mode"); 
+                println!("  storage-trace on/off - Toggle verbose storage tracing");
                 println!("  save <file>  - Save current program to a file");
                 println!("  load <file>  - Load program from a file");
                 println!();
@@ -996,7 +1118,44 @@ fn run_interactive(
             }
             "reset" => {
                 vm = VM::<InMemoryStorage>::new();
+                vm.set_simulation_mode(simulate);
+                vm.set_tracing(trace);
+                vm.set_explanation(explain);
+                vm.set_auth_context(auth_context.clone());
+                vm.set_namespace("demo");
                 println!("VM reset");
+            }
+            "trace on" => {
+                vm.set_tracing(true);
+                println!("Tracing enabled");
+            }
+            "trace off" => {
+                vm.set_tracing(false);
+                println!("Tracing disabled");
+            }
+            "explain on" => {
+                vm.set_explanation(true);
+                println!("Explanation enabled");
+            }
+            "explain off" => {
+                vm.set_explanation(false);
+                println!("Explanation disabled");
+            }
+            "simulate on" => {
+                vm.set_simulation_mode(true);
+                println!("Simulation mode enabled (no persistent storage changes)");
+            }
+            "simulate off" => {
+                vm.set_simulation_mode(false);
+                println!("Simulation mode disabled (storage changes will be committed)");
+            }
+            "storage-trace on" => {
+                vm.set_verbose_storage_trace(true);
+                println!("Verbose storage tracing enabled");
+            }
+            "storage-trace off" => {
+                vm.set_verbose_storage_trace(false);
+                println!("Verbose storage tracing disabled");
             }
             "mode ast" => {
                 return run_interactive(
@@ -1008,6 +1167,10 @@ fn run_interactive(
                     false,
                     storage_backend,
                     storage_path,
+                    vm.is_simulation_mode(),
+                    vm.is_tracing(),
+                    vm.is_explaining(),
+                    verbose_storage_trace,
                 );
             }
             "mode bytecode" => {
@@ -1020,6 +1183,10 @@ fn run_interactive(
                     true,
                     storage_backend,
                     storage_path,
+                    vm.is_simulation_mode(),
+                    vm.is_tracing(),
+                    vm.is_explaining(),
+                    verbose_storage_trace,
                 );
             }
             _ if trimmed.starts_with("save ") => {
@@ -1053,8 +1220,16 @@ fn run_interactive(
                                 println!("Compiled to bytecode:");
                                 println!("{}", program.dump());
                             }
+                            
+                            // Configure a new VM with our flags
+                            let mut base_vm = VM::<InMemoryStorage>::new();
+                            base_vm.set_simulation_mode(vm.is_simulation_mode());
+                            base_vm.set_tracing(vm.is_tracing());
+                            base_vm.set_explanation(vm.is_explaining());
+                            base_vm.set_auth_context(auth_context.clone());
+                            base_vm.set_namespace("demo");
 
-                            let mut interpreter = BytecodeInterpreter::new(VM::<InMemoryStorage>::new(), program);
+                            let mut interpreter = BytecodeInterpreter::new(base_vm, program);
 
                             // Execute with bytecode
                             let bytecode_start = Instant::now();

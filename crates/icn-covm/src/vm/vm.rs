@@ -16,11 +16,11 @@
 //! - Provides a solid foundation for extending VM capabilities
 //! - Facilitates both AST interpretation and bytecode execution
 
-use crate::events::Event;
 use crate::identity::Identity;
 use crate::storage::auth::AuthContext;
 use crate::storage::errors::StorageResult;
 use crate::storage::traits::Storage;
+use crate::typed::TypedValue;
 use crate::vm::errors::VMError;
 use crate::vm::execution::{ExecutorOps, VMExecution};
 use crate::vm::memory::{MemoryScope, VMMemory};
@@ -65,6 +65,18 @@ where
 
     /// DAG ledger for recording proposal lifecycle events
     pub dag: Option<DagLedger>,
+
+    /// Whether to trace execution (print ops and stack)
+    pub trace_enabled: bool,
+
+    /// Whether to explain operations in plain English
+    pub explain_enabled: bool,
+
+    /// Whether to simulate execution (don't modify persistent storage)
+    pub simulation_mode: bool,
+    
+    /// Whether to enable verbose tracing of storage operations
+    pub verbose_storage_trace: bool,
 }
 
 impl<S> VM<S>
@@ -79,6 +91,10 @@ where
             executor: VMExecution::new(),
             missing_key_behavior: MissingKeyBehavior::Default,
             dag: Some(DagLedger::new()),
+            trace_enabled: false,
+            explain_enabled: false,
+            simulation_mode: false,
+            verbose_storage_trace: false,
         }
     }
 
@@ -182,6 +198,10 @@ where
             executor: forked_executor,
             missing_key_behavior: self.missing_key_behavior,
             dag: self.dag.clone(),
+            trace_enabled: self.trace_enabled,
+            explain_enabled: self.explain_enabled,
+            simulation_mode: self.simulation_mode,
+            verbose_storage_trace: self.verbose_storage_trace,
         })
     }
 
@@ -239,6 +259,10 @@ where
             executor: VMExecution::new(), // Can't clone the executor directly due to generics
             missing_key_behavior: self.missing_key_behavior,
             dag: self.dag.clone(),
+            trace_enabled: self.trace_enabled,
+            explain_enabled: self.explain_enabled,
+            simulation_mode: self.simulation_mode,
+            verbose_storage_trace: self.verbose_storage_trace,
         })
     }
 
@@ -253,6 +277,38 @@ where
         let mut loop_control = LoopControl::None;
 
         for op in ops {
+            // Log trace information before executing the operation
+            self.log_trace(&op);
+            
+            // Log explanation before executing the operation
+            self.log_explanation(&op);
+            
+            // Check for simulation mode with storage operations
+            match &op {
+                Op::StoreP(_) | Op::LoadP(_) | Op::LoadVersionP { .. } | 
+                Op::ListVersionsP(_) | Op::DiffVersionsP { .. } |
+                Op::CreateResource(_) | Op::Mint { .. } | Op::Transfer { .. } | 
+                Op::Burn { .. } | Op::Balance { .. } if self.simulation_mode => {
+                    // In simulation mode, log the operation but don't execute storage modifications
+                    self.executor.emit(&format!("[SIMULATION] Would execute: {}", op));
+                    
+                    // For operations that would push a value to the stack, push a placeholder
+                    match &op {
+                        Op::LoadP(_) | Op::LoadVersionP { .. } | Op::Balance { .. } => {
+                            // Push a simulated value (0.0 for numbers)
+                            // In a real implementation, you might want to be smarter about the type
+                            self.stack.push(TypedValue::Number(0.0));
+                        },
+                        _ => {}
+                    }
+                    
+                    // Skip to the next operation
+                    continue;
+                },
+                _ => {}
+            }
+            
+            // Execute the operation (existing match statement)
             match op {
                 Op::Push(value) => {
                     self.stack.push(value);
@@ -589,11 +645,13 @@ where
 
                 Op::StoreP(key) => {
                     let value = self.stack.pop("StoreP")?;
+                    self.log_storage_operation("StoreP", &key, value);
                     self.executor.execute_store_p(&key, value)?;
                 }
 
                 Op::LoadP(key) => {
                     let value = self.executor.execute_load_p(&key, self.missing_key_behavior)?;
+                    self.log_storage_operation("LoadP", &key, value);
                     self.stack.push(value);
                 }
 
@@ -656,6 +714,147 @@ where
     /// Get the current events
     pub fn get_events(&self) -> &[VMEvent] {
         self.executor.get_events()
+    }
+
+    /// Create a new VM with tracing enabled
+    pub fn with_tracing(mut self) -> Self {
+        self.trace_enabled = true;
+        self
+    }
+
+    /// Enable explanation of operations
+    pub fn with_explanation(mut self) -> Self {
+        self.explain_enabled = true;
+        self
+    }
+
+    /// Enable simulation mode (no persistent storage modifications)
+    pub fn in_simulation_mode(mut self) -> Self {
+        self.simulation_mode = true;
+        self
+    }
+    
+    /// Enable verbose storage tracing
+    pub fn with_verbose_storage_trace(mut self) -> Self {
+        self.verbose_storage_trace = true;
+        self
+    }
+
+    /// Enable or disable tracing
+    pub fn set_tracing(&mut self, enabled: bool) -> &mut Self {
+        self.trace_enabled = enabled;
+        self
+    }
+
+    /// Enable or disable explanation
+    pub fn set_explanation(&mut self, enabled: bool) -> &mut Self {
+        self.explain_enabled = enabled;
+        self
+    }
+
+    /// Enable or disable simulation mode
+    pub fn set_simulation_mode(&mut self, enabled: bool) -> &mut Self {
+        self.simulation_mode = enabled;
+        self
+    }
+    
+    /// Enable or disable verbose storage tracing
+    pub fn set_verbose_storage_trace(&mut self, enabled: bool) -> &mut Self {
+        self.verbose_storage_trace = enabled;
+        self
+    }
+    
+    /// Check if verbose storage tracing is enabled
+    pub fn is_verbose_storage_tracing(&self) -> bool {
+        self.verbose_storage_trace
+    }
+
+    /// Check if tracing is enabled
+    pub fn is_tracing(&self) -> bool {
+        self.trace_enabled
+    }
+    
+    /// Check if explanation is enabled
+    pub fn is_explaining(&self) -> bool {
+        self.explain_enabled
+    }
+    
+    /// Check if simulation mode is enabled
+    pub fn is_simulation_mode(&self) -> bool {
+        self.simulation_mode
+    }
+
+    /// Log a trace message if tracing is enabled
+    fn log_trace(&mut self, op: &Op) {
+        if self.trace_enabled {
+            self.executor.emit(&format!("[TRACE] Op: {}", op));
+            
+            // Only show stack state if there are items on the stack
+            if !self.stack.is_empty() {
+                self.executor.emit(&format!("[TRACE] Stack: {:?}", self.stack.get_stack()));
+            }
+        }
+    }
+
+    /// Log an explanation if explanation is enabled
+    fn log_explanation(&mut self, op: &Op) {
+        if self.explain_enabled {
+            let explanation = self.explain_op(op);
+            self.executor.emit(&format!("[EXPLAIN] {}", explanation));
+        }
+    }
+
+    /// Log storage operation details if verbose storage tracing is enabled
+    fn log_storage_operation(&mut self, operation: &str, key: &str, value: f64) {
+        if self.verbose_storage_trace {
+            self.executor.emit(&format!("[STORAGE] {} key: '{}', value: {}", operation, key, value));
+        }
+    }
+
+    /// Generate an explanation for an operation
+    fn explain_op(&self, op: &Op) -> String {
+        match op {
+            Op::Push(val) => format!("Push the value {:?} onto the stack", val),
+            Op::Add => "Add the top two values on the stack".into(),
+            Op::Sub => "Subtract the top value from the second value on the stack".into(),
+            Op::Mul => "Multiply the top two values on the stack".into(),
+            Op::Div => "Divide the second value by the top value on the stack".into(),
+            Op::Mod => "Compute the remainder when dividing the second value by the top value".into(),
+            Op::Store(name) => format!("Store the top stack value in memory under '{}'", name),
+            Op::Load(name) => format!("Load the value of '{}' from memory and push it onto the stack", name),
+            Op::If { .. } => "Execute code conditionally based on a value".into(),
+            Op::Loop { count, .. } => format!("Execute a block of code {} times", count),
+            Op::While { .. } => "Execute a block of code while a condition is true".into(),
+            Op::Emit(msg) => format!("Output the message: {}", msg),
+            Op::Negate => "Negate the top value on the stack".into(),
+            Op::AssertTop(val) => format!("Assert that the top value equals {:?}", val),
+            Op::DumpStack => "Display the current stack contents".into(),
+            Op::DumpMemory => "Display the current memory contents".into(),
+            Op::AssertMemory { key, expected } => format!("Assert that memory value '{}' equals {:?}", key, expected),
+            Op::Pop => "Remove the top value from the stack".into(),
+            Op::Eq => "Check if the top two values are equal".into(),
+            Op::Gt => "Check if the second value is greater than the top value".into(),
+            Op::Lt => "Check if the second value is less than the top value".into(),
+            Op::Not => "Logical NOT of the top value".into(),
+            Op::And => "Logical AND of the top two values".into(),
+            Op::Or => "Logical OR of the top two values".into(),
+            Op::Dup => "Duplicate the top value on the stack".into(),
+            Op::Swap => "Swap the top two values on the stack".into(),
+            Op::Over => "Copy the second value to the top of the stack".into(),
+            Op::Def { name, .. } => format!("Define a function named '{}'", name),
+            Op::Call(name) => format!("Call the function named '{}'", name),
+            Op::Return => "Return from the current function".into(),
+            Op::Nop => "No operation (do nothing)".into(),
+            Op::Match { .. } => "Match a value against several cases".into(),
+            Op::Break => "Break out of the innermost loop".into(),
+            Op::Continue => "Continue to the next iteration of the innermost loop".into(),
+            Op::EmitEvent { category, message } => format!("Emit an event with category '{}' and message '{}'", category, message),
+            Op::AssertEqualStack { depth } => format!("Assert that the top {} values on the stack are equal", depth),
+            Op::DumpState => "Display the entire VM state".into(),
+            Op::StoreP(key) => format!("Store the top stack value in persistent storage under key '{}'", key),
+            Op::LoadP(key) => format!("Load value from persistent storage with key '{}' and push it onto the stack", key),
+            _ => format!("Execute operation: {}", op),
+        }
     }
 }
 
