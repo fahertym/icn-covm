@@ -48,6 +48,8 @@ use uuid;
 use regex::Regex;
 use icn_ledger;
 use icn_ledger::{DagLedger, DagNode, NodeData};
+use icn_ledger::TypedValue;
+use crate::cli::utils::{f64_to_typed, safe_f64_to_u64, safe_percentage};
 
 /// Extension trait that provides proposal storage operations for VM
 ///
@@ -236,7 +238,9 @@ where
             let node = icn_ledger::DagNode {
                 id: String::new(), // Will be computed by the ledger
                 parent_ids: vec![],
-                timestamp: chrono::Utc::now().timestamp() as u64,
+                timestamp: TypedValue::Number(chrono::Utc::now().timestamp() as f64)
+                    .as_u64_safe("timestamp conversion")
+                    .map_err(|e| format!("Failed to convert timestamp: {}", e))?,
                 namespace: dag_namespace,
                 data: icn_ledger::NodeData::ProposalCreated {
                     proposal_id: proposal_id.clone(),
@@ -348,7 +352,9 @@ where
             let node = icn_ledger::DagNode {
                 id: String::new(), // Will be computed by the ledger
                 parent_ids,
-                timestamp: chrono::Utc::now().timestamp() as u64,
+                timestamp: TypedValue::Number(chrono::Utc::now().timestamp() as f64)
+                    .as_u64_safe("timestamp conversion")
+                    .map_err(|e| format!("Failed to convert timestamp: {}", e))?,
                 namespace: dag_namespace,
                 data: icn_ledger::NodeData::VoteCast {
                     proposal_id: proposal_id.to_string(),
@@ -478,7 +484,9 @@ where
             let node = icn_ledger::DagNode {
                 id: String::new(), // Will be computed by the ledger
                 parent_ids,
-                timestamp: chrono::Utc::now().timestamp() as u64,
+                timestamp: TypedValue::Number(chrono::Utc::now().timestamp() as f64)
+                    .as_u64_safe("timestamp conversion")
+                    .map_err(|e| format!("Failed to convert timestamp: {}", e))?,
                 namespace: dag_namespace,
                 data: icn_ledger::NodeData::ProposalExecuted {
                     proposal_id: proposal_id.to_string(),
@@ -1478,8 +1486,12 @@ where
                 proposal_id.to_string(),
                 creator_identity,
                 title.to_string(),
-                (quorum * 100.0) as u64,    // Stored as percentage (0-100)
-                (threshold * 100.0) as u64, // Stored as percentage (0-100)
+                TypedValue::Number(quorum * 100.0)
+                    .as_u64_safe("quorum percentage conversion")
+                    .map_err(|e| format!("Failed to convert quorum: {}", e))?,
+                TypedValue::Number(threshold * 100.0)
+                    .as_u64_safe("threshold percentage conversion")
+                    .map_err(|e| format!("Failed to convert threshold: {}", e))?,
                 Some(min_delib_duration),
                 required_participants.copied(),
             );
@@ -2235,8 +2247,11 @@ where
     // Calculate participation percentage for quorum
     let quorum_percentage = if let Ok(lifecycle) = load_proposal(vm, &proposal_id_string) {
         if lifecycle.quorum > 0 {
-            let quorum_percentage = (total_votes as f64 / lifecycle.quorum as f64) * 100.0;
-            format!("{:.1}%", quorum_percentage)
+            let quorum_value = TypedValue::Number(total_votes as f64)
+                .div(&TypedValue::Number(lifecycle.quorum as f64))
+                .map(|result| result.as_f64_safe().unwrap_or(0.0) * 100.0)
+                .unwrap_or(0.0);
+            format!("{:.1}%", quorum_value)
         } else {
             "N/A".to_string()
         }
@@ -2247,8 +2262,11 @@ where
     // Calculate threshold percentage
     let threshold_percentage = if let Ok(lifecycle) = load_proposal(vm, &proposal_id_string) {
         if lifecycle.threshold > 0 && total_votes > 0 {
-            let threshold_percentage = (yes_votes as f64 / total_votes as f64) * 100.0;
-            format!("{:.1}%", threshold_percentage)
+            let threshold_value = TypedValue::Number(yes_votes as f64)
+                .div(&TypedValue::Number(total_votes as f64))
+                .map(|result| result.as_f64_safe().unwrap_or(0.0) * 100.0)
+                .unwrap_or(0.0);
+            format!("{:.1}%", threshold_value)
         } else {
             "N/A".to_string()
         }
@@ -2376,7 +2394,9 @@ where
         "Yes:     {} ({:.1}%)",
         yes_votes,
         if total_votes > 0 {
-            (yes_votes as f64 / total_votes as f64) * 100.0
+            let yes_typed = f64_to_typed(yes_votes as f64);
+            let total_typed = f64_to_typed(total_votes as f64);
+            safe_percentage(&yes_typed, &total_typed).unwrap_or(0.0)
         } else {
             0.0
         }
@@ -2385,7 +2405,9 @@ where
         "No:      {} ({:.1}%)",
         no_votes,
         if total_votes > 0 {
-            (no_votes as f64 / total_votes as f64) * 100.0
+            let no_typed = f64_to_typed(no_votes as f64);
+            let total_typed = f64_to_typed(total_votes as f64);
+            safe_percentage(&no_typed, &total_typed).unwrap_or(0.0)
         } else {
             0.0
         }
@@ -2394,7 +2416,9 @@ where
         "Abstain: {} ({:.1}%)",
         abstain_votes,
         if total_votes > 0 {
-            (abstain_votes as f64 / total_votes as f64) * 100.0
+            let abstain_typed = f64_to_typed(abstain_votes as f64);
+            let total_typed = f64_to_typed(total_votes as f64);
+            safe_percentage(&abstain_typed, &total_typed).unwrap_or(0.0)
         } else {
             0.0
         }

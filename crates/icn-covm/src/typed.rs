@@ -251,6 +251,25 @@ impl TypedValue {
             TypedValue::Null => "Null".into(),
         }
     }
+
+    /// Try to convert the value to a u64 safely
+    pub fn as_u64_safe(&self, operation: &str) -> Result<u64, TypedValueError> {
+        let num = self.as_number()?;
+        
+        // Check if the number is non-negative and within u64 range
+        if num.is_sign_negative() || num.is_nan() || num.is_infinite() || num > (u64::MAX as f64) {
+            return Err(TypedValueError::ValueOutOfBounds);
+        }
+        
+        // Round to nearest integer and convert
+        let rounded = num.round();
+        Ok(rounded as u64)
+    }
+
+    /// Get a safe f64 representation of any numeric value
+    pub fn as_f64_safe(&self) -> Result<f64, TypedValueError> {
+        self.as_number()
+    }
 }
 
 impl fmt::Display for TypedValue {

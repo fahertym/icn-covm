@@ -170,6 +170,33 @@ where
     fn rollback_fork_transaction(&mut self) -> Result<(), VMError>;
 }
 
+/// Utility functions for creating typed operations
+pub mod typed_builders {
+    use super::*;
+    use crate::typed::TypedValue;
+    use crate::vm::types::Op;
+
+    /// Create a Push operation with a numeric value
+    pub fn push_number(value: f64) -> Op {
+        Op::Push(TypedValue::Number(value))
+    }
+
+    /// Create a Push operation with a boolean value
+    pub fn push_bool(value: bool) -> Op {
+        Op::Push(TypedValue::Boolean(value))
+    }
+
+    /// Create a Push operation with a string value
+    pub fn push_string(value: impl Into<String>) -> Op {
+        Op::Push(TypedValue::String(value.into()))
+    }
+
+    /// Create a Push operation with a null value
+    pub fn push_null() -> Op {
+        Op::Push(TypedValue::Null)
+    }
+}
+
 // Sub-modules implementing the traits
 pub mod storage;
 pub mod governance;
