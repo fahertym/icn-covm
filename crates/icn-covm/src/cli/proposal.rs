@@ -1486,11 +1486,9 @@ where
                 proposal_id.to_string(),
                 creator_identity,
                 title.to_string(),
-                TypedValue::Number(quorum * 100.0)
-                    .as_u64_safe("quorum percentage conversion")
+                safe_f64_to_u64(quorum * 100.0, "quorum percentage conversion")
                     .map_err(|e| format!("Failed to convert quorum: {}", e))?,
-                TypedValue::Number(threshold * 100.0)
-                    .as_u64_safe("threshold percentage conversion")
+                safe_f64_to_u64(threshold * 100.0, "threshold percentage conversion")
                     .map_err(|e| format!("Failed to convert threshold: {}", e))?,
                 Some(min_delib_duration),
                 required_participants.copied(),
@@ -2247,10 +2245,9 @@ where
     // Calculate participation percentage for quorum
     let quorum_percentage = if let Ok(lifecycle) = load_proposal(vm, &proposal_id_string) {
         if lifecycle.quorum > 0 {
-            let quorum_value = TypedValue::Number(total_votes as f64)
-                .div(&TypedValue::Number(lifecycle.quorum as f64))
-                .map(|result| result.as_f64_safe().unwrap_or(0.0) * 100.0)
-                .unwrap_or(0.0);
+            let total_typed = f64_to_typed(total_votes as f64);
+            let quorum_typed = f64_to_typed(lifecycle.quorum as f64);
+            let quorum_value = safe_percentage(&total_typed, &quorum_typed).unwrap_or(0.0);
             format!("{:.1}%", quorum_value)
         } else {
             "N/A".to_string()
@@ -2262,10 +2259,9 @@ where
     // Calculate threshold percentage
     let threshold_percentage = if let Ok(lifecycle) = load_proposal(vm, &proposal_id_string) {
         if lifecycle.threshold > 0 && total_votes > 0 {
-            let threshold_value = TypedValue::Number(yes_votes as f64)
-                .div(&TypedValue::Number(total_votes as f64))
-                .map(|result| result.as_f64_safe().unwrap_or(0.0) * 100.0)
-                .unwrap_or(0.0);
+            let yes_typed = f64_to_typed(yes_votes as f64);
+            let total_typed = f64_to_typed(total_votes as f64);
+            let threshold_value = safe_percentage(&yes_typed, &total_typed).unwrap_or(0.0);
             format!("{:.1}%", threshold_value)
         } else {
             "N/A".to_string()

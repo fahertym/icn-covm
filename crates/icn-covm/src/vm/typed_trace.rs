@@ -153,7 +153,7 @@ pub struct TypedTraceFrame {
 }
 
 /// Execution tracer that records and displays VM execution
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct VMTracer {
     /// Complete execution trace
     pub frames: Vec<TypedFrameTrace>,
