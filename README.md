@@ -1,3 +1,9 @@
+> [!IMPORTANT]
+> **Historical / superseded repository.** Historical ICN virtual-machine/runtime experiment. Preserve for lineage; it is not the current ICN runtime, protocol surface, or architecture.
+> **Current successor:** [InterCooperative-Network/icn](https://github.com/InterCooperative-Network/icn)
+>
+> Preserved intentionally for lineage and archaeology. Do not infer current ICN state from this repository.
+
 # ICN-COVM
 
 The Intercooperative Network Cooperative Virtual Machine (ICN-COVM) is a toolkit and runtime for democratic governance and interoperation between cooperative organizations.
